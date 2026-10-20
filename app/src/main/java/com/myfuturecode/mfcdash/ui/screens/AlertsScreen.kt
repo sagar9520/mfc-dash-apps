@@ -42,12 +42,13 @@ fun AlertsScreen(vm: DashVm, st: UiState, nav: NavHostController) {
     var appF by rememberSaveable { mutableStateOf("") }
     var kind by rememberSaveable { mutableStateOf("") }         // "" | ads | gads | crash | data | money
     var msg by remember { mutableStateOf<String?>(null) }
+    val box = remember { FilterBox() }
     val al = st.alerts
     LaunchedEffect(Unit) { vm.refreshAlerts() }
 
     Column(Modifier.fillMaxSize()) {
         TopBar("Alerts".t(), vm, st, nav, back = true)
-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 24.dp)) {
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(top = 4.dp, bottom = 24.dp)) {
             if (al == null) {
                 if (st.alertsMissing) Panel {
                     Text("alerts.php is not on the server".t(), style = MaterialTheme.typography.titleMedium)
@@ -97,6 +98,7 @@ fun AlertsScreen(vm: DashVm, st: UiState, nav: NavHostController) {
 
             // ---- filters
             ChipRow {
+                FilterToggle(box)
                 MChip("Open".t(), filter == "open", { filter = "open" })
                 MChip("Urgent".t(), filter == "3", { filter = "3" }, dot = ex.bad)
                 MChip("Watch".t(), filter == "2", { filter = "2" }, dot = ex.warn)
@@ -113,7 +115,10 @@ fun AlertsScreen(vm: DashVm, st: UiState, nav: NavHostController) {
                 }
                 Spacer(Modifier.height(6.dp))
             }
-            FilterChips("Kind".t(), listOf("" to "All".t(), "ads" to "Ads".t(), "gads" to "Google Ads", "crash" to "Crash".t(), "money" to "Money".t(), "data" to "Data".t()), kind) { kind = it }
+            CompositionLocalProvider(LocalFilterBox provides box) {
+                FilterChips("Kind".t(), listOf("" to "All".t(), "ads" to "Ads".t(), "gads" to "Google Ads", "crash" to "Crash".t(), "money" to "Money".t(), "data" to "Data".t()), kind) { kind = it }
+            }
+            FilterSummary(box)
 
             val list = al.alerts.filter { a ->
                 (when (filter) { "open" -> a.open; "all" -> true; else -> a.level == filter.toInt() && a.open }) &&
@@ -144,6 +149,7 @@ fun AlertsScreen(vm: DashVm, st: UiState, nav: NavHostController) {
             TextButton(onClick = { nav.navigate("settings") }) { Text("Notification / Claude AI settings →".t()) }
         }
     }
+    FilterSheet(box)
 }
 
 /** Group rule names into kinds for the Kind filter. */

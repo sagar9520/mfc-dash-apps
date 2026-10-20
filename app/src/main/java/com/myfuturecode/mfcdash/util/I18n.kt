@@ -21,6 +21,7 @@ fun tf(s: String, vararg a: Any?): String = try { s.t().format(*a) } catch (e: E
 /** English → Hinglish. Missing key = English shown. */
 val HI: Map<String, String> = mapOf(
     // ---- common / periods
+    "Filter" to "Filter", "Filters" to "Filters", "Reset" to "Reset", "Done" to "Ho gaya", "Clear" to "Hatao",
     "Today" to "Aaj", "Yesterday" to "Kal", "7 days" to "7 din", "30 days" to "30 din", "Custom" to "Custom", "Apply" to "Lagao", "Cancel" to "Cancel",
     "Pick a period" to "Period chuno", "All" to "Sab", "All apps" to "Sab apps", "Home" to "Home", "Money" to "Paisa", "Users" to "Users", "Ads" to "Ads", "Live" to "Live",
     "No data received" to "Data nahi aaya", "Try again" to "Dobara try karo", "No data" to "Data nahi", "No data for the chart" to "Graph ke liye data nahi",

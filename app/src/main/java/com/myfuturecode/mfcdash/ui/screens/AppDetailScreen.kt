@@ -30,15 +30,18 @@ fun AppDetailScreen(vm: DashVm, st: UiState, nav: NavHostController, pkg: String
     val ex = MaterialTheme.extra
     var section by rememberSaveable { mutableStateOf("") }   // "" | users | money | ads | promo | more
     var med by rememberSaveable { mutableStateOf("") }
+    val box = remember { FilterBox() }
     Column(Modifier.fillMaxSize()) {
         TopBar(name, vm, st, nav, back = true)
-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 24.dp)) {
-            RangeBar(vm, st); Spacer(Modifier.height(8.dp))
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(top = 4.dp, bottom = 24.dp)) {
+            RangeBar(vm, st) { FilterToggle(box) }; Spacer(Modifier.height(8.dp))
             if (d == null) { Box(Modifier.fillMaxWidth().padding(top = 60.dp), contentAlignment = Alignment.Center) { if (st.appLoading == pkg || st.loading) CircularProgressIndicator() else Text(st.error ?: "No data received".t()) }; return@Column }
-            FilterChips("Show".t(), listOf("" to "All".t(), "users" to "Users".t(), "money" to "Money".t(), "ads" to "Ads".t(), "promo" to "Cross promo".t(), "more" to "More".t()), section) { section = it }
             val meds = optionsOf(d.byFormat.map { it.med } + d.byNetwork.map { it.med })
-            if ((section == "" || section == "ads") && meds.size > 2) FilterChips("Via".t(), meds, med) { med = it }
-            Spacer(Modifier.height(4.dp))
+            CompositionLocalProvider(LocalFilterBox provides box) {
+                FilterChips("Show".t(), listOf("" to "All".t(), "users" to "Users".t(), "money" to "Money".t(), "ads" to "Ads".t(), "promo" to "Cross promo".t(), "more" to "More".t()), section) { section = it }
+                if ((section == "" || section == "ads") && meds.size > 2) FilterChips("Via".t(), meds, med) { med = it }
+            }
+            FilterSummary(box)
             fun show(s: String) = section.isBlank() || section == s
 
             val k = d.kpi; val r = d.r
@@ -164,4 +167,5 @@ fun AppDetailScreen(vm: DashVm, st: UiState, nav: NavHostController, pkg: String
             if (summary != null) Spacer(Modifier.height(4.dp))
         }
     }
+    FilterSheet(box)
 }

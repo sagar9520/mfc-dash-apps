@@ -1,12 +1,23 @@
 package com.myfuturecode.mfcdash.ui.screens
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import com.myfuturecode.mfcdash.data.CpData
@@ -76,25 +87,45 @@ fun AppChips(vm: DashVm, st: UiState, lead: (@Composable () -> Unit)? = null) {
 }
 
 /**
- * Screen ke filters ek "Filter" chip ke peeche band rehte hain (upar sirf 2 chip lines: period + app).
- * Band hone par bhi har FilterChips apni value yahan likhta hai, taaki Filter chip par jo filter
- * default se alag hai woh dikh jaye (jaise "Filter · Revenue · In loss").
+ * Screen ke filters ek "Filter" chip ke peeche rehte hain, taaki upar sirf 2 chip lines dikhen (period + apps).
+ * Tap = neeche se sheet (Material bottom sheet) jisme har filter ki chips hain; chunne ke baad chip par ginti
+ * aur chips ke neeche ek line "Sort: Revenue · Show: In loss · Clear". FilterChips apni poori jankari
+ * (label, options, selected, onSelect) FilterBox mein register karta hai aur inline kuch nahi banata.
  */
+class FilterRow(val label: String, val options: List<Pair<String, String>>, val selected: String) {
+    val default get() = options.firstOrNull()?.first ?: ""
+    val active get() = selected != default
+    val selectedText get() = options.firstOrNull { it.first == selected }?.second ?: selected
+}
+
 class FilterBox {
     var open by mutableStateOf(false)
-    val rows = mutableStateMapOf<String, String>()   // label -> selected text ("" = default)
+    val rows = mutableStateMapOf<String, FilterRow>()
+    val order = mutableStateListOf<String>()
+    private val handlers = HashMap<String, (String) -> Unit>()
+    val list get() = order.mapNotNull { rows[it] }
+    val active get() = list.filter { it.active }
+    fun select(label: String, key: String) { handlers[label]?.invoke(key) }
+    fun reset() = list.forEach { if (it.active) select(it.label, it.default) }
+    /** State sirf badalne par likho, warna recomposition loop ban jata hai. */
+    fun register(label: String, options: List<Pair<String, String>>, selected: String, onSelect: (String) -> Unit) {
+        handlers[label] = onSelect
+        if (label !in order) order.add(label)
+        val cur = rows[label]
+        if (cur == null || cur.options != options || cur.selected != selected) rows[label] = FilterRow(label, options, selected)
+    }
+    fun unregister(label: String) { handlers.remove(label); rows.remove(label); order.remove(label) }
 }
 val LocalFilterBox = staticCompositionLocalOf<FilterBox?> { null }
 
-/** Ek screen ke apne filter chips (label + options). */
+/** Ek screen ka ek filter (label + options). FilterBox ke andar: sirf register; bahar: inline chips. */
 @Composable
 fun FilterChips(label: String, options: List<Pair<String, String>>, selected: String, onSelect: (String) -> Unit) {
     val box = LocalFilterBox.current
     if (box != null) {
-        val txt = if (selected == options.firstOrNull()?.first) "" else (options.firstOrNull { it.first == selected }?.second ?: selected)
-        SideEffect { box.rows[label] = txt }
-        DisposableEffect(box, label) { onDispose { box.rows.remove(label) } }
-        if (!box.open) return
+        SideEffect { box.register(label, options, selected, onSelect) }
+        DisposableEffect(box, label) { onDispose { box.unregister(label) } }
+        return
     }
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(end = 8.dp))
@@ -103,16 +134,79 @@ fun FilterChips(label: String, options: List<Pair<String, String>>, selected: St
     Spacer(Modifier.height(6.dp))
 }
 
-/** "Filter ▾" chip: tap = screen ke filters khulte/band hote hain. */
+/** "Filter" chip (ginti ke saath jab kuch chuna ho): tap = sheet. */
 @Composable
 fun FilterToggle(box: FilterBox) {
     if (box.rows.isEmpty()) return
-    val active = box.rows.values.filter { it.isNotBlank() }
-    val text = "Filter".t() + (if (active.isNotEmpty()) " · " + active.joinToString(" · ") else "") + if (box.open) "  ▴" else "  ▾"
-    MChip(text, on = box.open || active.isNotEmpty(), onClick = { box.open = !box.open })
+    val n = box.active.size
+    val on = n > 0
+    val bg = if (on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.primaryContainer
+    val fg = if (on) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.primary
+    Row(
+        Modifier.clip(RoundedCornerShape(18.dp)).background(bg).clickable { box.open = true }.height(34.dp).padding(start = 10.dp, end = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(Icons.Filled.Tune, null, Modifier.size(16.dp), tint = fg)
+        Spacer(Modifier.width(5.dp))
+        Text("Filter".t(), style = MaterialTheme.typography.labelLarge, color = fg)
+        if (on) {
+            Spacer(Modifier.width(6.dp))
+            Text(n.toString(), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.clip(RoundedCornerShape(9.dp)).background(MaterialTheme.colorScheme.onPrimary).padding(horizontal = 6.dp, vertical = 1.dp))
+        }
+    }
 }
 
-/** Tab screen ka dhaancha: top bar, period chips, app chips, screen ke filters (Filter chip ke peeche), phir content. */
+/** Chips ke neeche ek line: kaunse filter lage hain + Clear. Kuch na laga ho to kuch nahi. */
+@Composable
+fun FilterSummary(box: FilterBox) {
+    val act = box.active
+    if (act.isEmpty()) return
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val prim = MaterialTheme.colorScheme.primary
+    Row(Modifier.fillMaxWidth().padding(start = 2.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(buildAnnotatedString {
+            act.forEachIndexed { i, r ->
+                if (i > 0) withStyle(SpanStyle(color = muted)) { append(" · ") }
+                withStyle(SpanStyle(color = muted)) { append(r.label + ": ") }
+                withStyle(SpanStyle(color = prim, fontWeight = FontWeight.SemiBold)) { append(r.selectedText) }
+            }
+        }, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Text("Clear".t() + " ✕", style = MaterialTheme.typography.bodySmall, color = prim, fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(start = 8.dp).clip(RoundedCornerShape(8.dp)).clickable { box.reset() }.padding(horizontal = 4.dp, vertical = 2.dp))
+    }
+}
+
+/** Neeche se khulne wali sheet: har filter ka label + chips, upar Reset, neeche Done. */
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@Composable
+fun FilterSheet(box: FilterBox) {
+    if (!box.open) return
+    val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(onDismissRequest = { box.open = false }, sheetState = state, containerColor = MaterialTheme.colorScheme.surface) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Filters".t(), style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                TextButton(onClick = { box.reset() }, enabled = box.active.isNotEmpty()) { Text("Reset".t()) }
+            }
+            box.list.forEach { r ->
+                Spacer(Modifier.height(8.dp))
+                Text(r.label.uppercase(), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(6.dp))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    r.options.forEach { (k, l) -> MChip(l, on = r.selected == k, onClick = { box.select(r.label, k) }) }
+                }
+                Spacer(Modifier.height(6.dp))
+            }
+            Spacer(Modifier.height(12.dp))
+            Button(onClick = { box.open = false }, modifier = Modifier.fillMaxWidth().height(46.dp)) { Text("Done".t()) }
+            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.navigationBarsPadding())
+        }
+    }
+}
+
+/** Tab screen ka dhaancha: top bar, [Filter] + period chips, app chips, filter summary line, phir content (data aane par). */
 @Composable
 fun TabScreen(title: String, vm: DashVm, st: UiState, nav: NavHostController, showRange: Boolean = true, back: Boolean = false, showApps: Boolean = true,
               filters: (@Composable ColumnScope.(View) -> Unit)? = null, content: @Composable ColumnScope.(View) -> Unit) {
@@ -132,7 +226,7 @@ fun TabScreen(title: String, vm: DashVm, st: UiState, nav: NavHostController, sh
             when {
                 v != null -> {
                     if (filters != null) CompositionLocalProvider(LocalFilterBox provides box) { filters(v) }
-                    if (box.open && box.rows.isNotEmpty()) Spacer(Modifier.height(4.dp))
+                    FilterSummary(box)
                     content(v)
                 }
                 st.loading || st.appLoading == pkg -> Box(Modifier.fillMaxWidth().padding(top = 80.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
@@ -144,6 +238,7 @@ fun TabScreen(title: String, vm: DashVm, st: UiState, nav: NavHostController, sh
             }
         }
     }
+    FilterSheet(box)
 }
 
 fun periodText(d: DashData) = if (d.single) fmtDay(d.from) else fmtDay(d.from) + " – " + fmtDay(d.to)
