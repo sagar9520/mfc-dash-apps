@@ -1,0 +1,8 @@
+<resources>
+    <!-- MFC brand (site ke CSS se): magenta -> violet -> blue -->
+    <color name="brand1">#9C02BA</color>
+    <color name="brand2">#4A1FC4</color>
+    <color name="brand3">#0B1F9E</color>
+    <color name="icon_bg">#FFFFFF</color>
+    <color name="splash_bg">#140F33</color>
+</resources>
