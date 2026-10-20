@@ -21,6 +21,8 @@ jobs:
         with:
           php-version: '8.2'
           extensions: pdo_mysql, mbstring, curl, iconv
+          coverage: none
+          ini-values: opcache.jit=disable
       - name: PHP syntax
         run: for f in server/lib/gads_*.php server/api/gads_*.php server/tests/*.php; do php -l "$f"; done
       - name: Read-only guard

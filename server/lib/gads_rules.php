@@ -313,8 +313,8 @@ function gr_campaign(array $c, array $th): array
         $cpi = $s3['cost'] / $s3['conversions'];
         $over = gr_pct($cpi, (float)$cpiT);
         $lim = (float)gr_th($th, 'cpi_over_pct');
-        $checks['cpi'] = [$over > $lim ? 'WARN' : 'OK', 'CPI ' . gr_money($cpi, $cur) . ' vs target ' . gr_money((float)$cpiT, $cur)];
-        if ($over > $lim) {
+        $checks['cpi'] = [$over >= $lim ? 'WARN' : 'OK', 'CPI ' . gr_money($cpi, $cur) . ' vs target ' . gr_money((float)$cpiT, $cur)];
+        if ($over >= $lim) {
             $F[] = gr_f("cpi|$kb", 'cpi_high', $learning ? 'INFO' : 'WARNING', 'CONFIRMED', [
                 'title' => "\"$name\" CPI is " . gr_pcts($over) . ' above target', 'title_hi' => "\"$name\" ka CPI target se " . gr_pcts($over) . ' upar',
                 'what' => 'Actual CPI ' . gr_money($cpi, $cur) . ' (last 3 complete days, ' . number_format($s3['conversions'], 0) . ' installs) vs target ' . gr_money((float)$cpiT, $cur) . " (" . ($c['cpi_target_src'] ?? 'configured') . "). Threshold: +$lim%.",

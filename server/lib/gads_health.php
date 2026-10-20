@@ -150,7 +150,7 @@ function ga_run_end(PDO $pdo, array $run, string $status, array $f = []): void
     foreach ($f as $k => $v) { $sets[] = "`$k` = ?"; $p[] = is_array($v) ? h_json($v) : $v; }
     $p[] = $run['id'];
     h_x($pdo, 'UPDATE ga_runs SET ' . implode(', ', $sets) . ', finished_at = UTC_TIMESTAMP(3) WHERE id = ?', $p);
-    ga_log($pdo, "{$run['uid']} finished · $status" . (isset($f['accounts_checked']) ? " · {$f['accounts_checked']} accounts · {$f['campaigns_checked']} campaigns · {$f['issues']} issues · {$f['failed_checks']} failed checks" : ''),
+    ga_log($pdo, "{$run['uid']} finished · $status" . (isset($f['campaigns_checked']) ? ' · ' . ($f['accounts_checked'] ?? 0) . ' accounts · ' . $f['campaigns_checked'] . ' campaigns · ' . ($f['issues'] ?? 0) . ' issues · ' . ($f['failed_checks'] ?? 0) . ' failed checks' : (isset($f['accounts_checked']) ? " · {$f['accounts_checked']} accounts" : '')),
         in_array($status, ['FAILED'], true) ? 'error' : ($status === 'PARTIAL' ? 'warn' : 'info'), ['run' => $run['id']]);
 }
 
@@ -778,7 +778,7 @@ function ga_mail_ingest(PDO $pdo, string $raw, ?int $runId = null, bool $sim = f
     $reason = preg_match('/(?:reason|policy|violation)\s*[:\-]\s*([^\n\r]{3,160})/i', $text, $m) ? trim($m[1]) : '';
     // CID: sirf registered account; ek se zyada registered CID = attribute nahi (kabhi guess nahi)
     preg_match_all('/\b(\d{3}-\d{3}-\d{4})\b/', $subject . "\n" . $text, $mm);
-    $regs = array_keys(ga_accounts($pdo));
+    $regs = array_map('strval', array_keys(ga_accounts($pdo)));
     $hits = array_values(array_unique(array_filter(array_map('ga_cid', $mm[1] ?? []), fn($c) => in_array($c, $regs, true))));
     $cid = count($hits) === 1 ? $hits[0] : '';
     if (count($hits) > 1) $note .= ' · several registered CIDs mentioned, not attributed';

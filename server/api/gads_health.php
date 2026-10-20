@@ -299,7 +299,7 @@ function gv_overview(PDO $pdo, array $f): array
     }
     $cur = [];
     foreach ($byCur as $k => $v) $cur[] = ['currency' => $k, 'spend_today' => round($v['spend_today'], 2), 'accounts' => $v['accounts']];
-    $reg = array_keys(ga_accounts($pdo));
+    $reg = array_map('strval', array_keys(ga_accounts($pdo)));
     $disc = [];
     foreach (h_q($pdo, 'SELECT customer_id, name, currency, tz, updated_at FROM gads_account ORDER BY updated_at DESC') as $g) if (!in_array((string)$g['customer_id'], $reg, true)) $disc[] = $g + ['cid_fmt' => ga_fmt_cid((string)$g['customer_id'])];
     $last = $pdo->query("SELECT * FROM ga_runs WHERE type = 'scan' ORDER BY id DESC LIMIT 1")->fetch() ?: null;

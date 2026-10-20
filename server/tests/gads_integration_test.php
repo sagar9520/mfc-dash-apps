@@ -135,7 +135,7 @@ $mail = function (string $from, string $auth, string $subj, string $body, string
 };
 $r = ga_mail_ingest($pdo, $mail('ads-account-noreply@google.com', 'dkim=pass header.d=google.com; dmarc=pass header.from=google.com',
     'Your Google Ads account has been suspended', "SIMULATED TEST\r\nYour Google Ads account 111-222-3333 has been suspended.\r\nReason: Unpaid balance (simulated)", 'm1'));
-ok($r === 'matched', 'verified suspension email matched to account A');
+ok($r === 'matched', 'verified suspension email matched to account A (' . $r . ')');
 $sa = $al($A, 'suspended');
 ok(count($sa) === 1 && $sa[0]['level'] === 'CRITICAL' && $sa[0]['klass'] === 'CONFIRMED' && str_contains($sa[0]['what'], 'Unpaid balance'), 'suspension email -> CRITICAL CONFIRMED with official reason');
 ok((int)q1("SELECT COUNT(*) FROM app_alerts WHERE rule = 'gah_suspended'") === 1, 'suspension notified immediately (no scan wait)');
