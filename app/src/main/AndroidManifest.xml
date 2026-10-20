@@ -36,6 +36,7 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="mfcdash" android:host="health" />
+                <data android:scheme="mfcdash" android:host="gads" />
             </intent-filter>
         </activity>
 
