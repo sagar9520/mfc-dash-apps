@@ -64,7 +64,7 @@ object Notify {
         val prefix = when (a.level) { 3 -> "🔴 URGENT · "; 2 -> "🟠 "; else -> "" }
         val intent = Intent(ctx, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            putExtra("route", "alerts"); putExtra("alert_id", a.id)
+            putExtra("route", a.route); putExtra("alert_id", a.id)
         }
         val pi = PendingIntent.getActivity(ctx, (a.id % Int.MAX_VALUE).toInt(), intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val big = buildString {

@@ -31,10 +31,23 @@ class MainActivity : ComponentActivity() {
         handleIntent(intent)
     }
 
-    /** Notification se khula ho to Alerts screen. */
+    /** Notification (extra "route") ya email link (mfcdash://health/...) se khula ho to wahi screen. */
     private fun handleIntent(i: Intent?) {
-        val route = i?.getStringExtra("route") ?: return
+        val route = i?.getStringExtra("route")?.also { i.removeExtra("route") }
+            ?: i?.data?.takeIf { it.scheme == "mfcdash" && it.host == "health" }?.let { u -> healthRoute(u.pathSegments).also { i.data = null } }
+            ?: return
         (application as App).pendingRoute.value = route
-        i.removeExtra("route")
+    }
+
+    private fun healthRoute(seg: List<String>): String {
+        val id = seg.getOrNull(1)
+        return when (seg.firstOrNull()) {
+            "issue" -> if (id?.toLongOrNull() != null) "health/issue/$id" else "health/t/issues"
+            "run" -> if (id?.toLongOrNull() != null) "health/run/$id" else "health/t/live"
+            "app" -> if (!id.isNullOrBlank() && id.matches(Regex("[A-Za-z0-9._]+"))) "health/app/$id" else "health/t/consoles"
+            "aab", "builds" -> "health/t/builds"
+            null, "", "overview" -> "health"
+            else -> seg[0].let { t -> if (t.matches(Regex("[a-z]+"))) "health/t/$t" else "health" }
+        }
     }
 }

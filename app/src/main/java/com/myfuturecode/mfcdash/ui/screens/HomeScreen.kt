@@ -74,6 +74,13 @@ fun HomeScreen(vm: DashVm, st: UiState, nav: NavHostController) {
         }
         Spacer(Modifier.height(12.dp))
 
+        // ---- AI App Health & Auto Fix (alag module)
+        val hOpen = st.alerts?.alerts?.count { it.open && it.rule.startsWith("health") } ?: 0
+        AlertRow("AI", "AI App Health & Auto Fix".t(),
+            if (hOpen > 0) tf("%s open health alerts · consoles, apps, crashes, fixes, AAB", hOpen) else "Consoles, apps, crashes, AI fixes, AAB releases, new tasks".t(),
+            if (hOpen > 0) ex.bad else MaterialTheme.colorScheme.primary) { nav.navigate("health") }
+        Spacer(Modifier.height(12.dp))
+
         // ---- Active now
         SectionTitle("Active now".t(), if (v.allApps) "live, all apps".t() else d.appName(v.pkg!!))
         val ax = v.extra?.active

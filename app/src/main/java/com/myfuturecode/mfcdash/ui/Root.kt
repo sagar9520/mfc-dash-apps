@@ -31,6 +31,9 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.myfuturecode.mfcdash.notify.Notify
 import com.myfuturecode.mfcdash.ui.screens.*
+import com.myfuturecode.mfcdash.ui.screens.health.*
+import com.myfuturecode.mfcdash.App
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.myfuturecode.mfcdash.util.t
 
 data class Tab(val route: String, val label: String, val icon: ImageVector)
@@ -52,6 +55,9 @@ fun Root(vm: DashVm) {
     val isTab = TABS.any { it.route == route }
     val snack = remember { SnackbarHostState() }
     LaunchedEffect(st.error) { st.error?.let { snack.showSnackbar(it) } }
+    val ctx0 = LocalContext.current
+    val hvm: HealthVm = viewModel(factory = HealthVm.factory(ctx0.applicationContext as App))
+    LaunchedEffect(hvm) { hvm.msg.collect { snack.showSnackbar(it) } }
 
     // Android 13+: notification ki permission (ek baar poochho)
     val ctx = LocalContext.current
@@ -81,12 +87,12 @@ fun Root(vm: DashVm) {
             }
         },
     ) { pad ->
-        Box(Modifier.padding(pad)) { AppNav(nav, vm, st) }
+        Box(Modifier.padding(pad)) { AppNav(nav, vm, st, hvm) }
     }
 }
 
 @Composable
-private fun AppNav(nav: NavHostController, vm: DashVm, st: UiState) {
+private fun AppNav(nav: NavHostController, vm: DashVm, st: UiState, hvm: HealthVm) {
     NavHost(nav, startDestination = "home") {
         composable("home") { HomeScreen(vm, st, nav) }
         composable("money") { MoneyScreen(vm, st, nav) }
@@ -98,6 +104,20 @@ private fun AppNav(nav: NavHostController, vm: DashVm, st: UiState) {
         composable("alerts") { AlertsScreen(vm, st, nav) }
         composable("app/{pkg}", arguments = listOf(navArgument("pkg") { type = NavType.StringType })) {
             AppDetailScreen(vm, st, nav, it.arguments?.getString("pkg") ?: "")
+        }
+        // AI App Health & Auto Fix
+        composable("health") { HealthScreen(hvm, nav, "overview") }
+        composable("health/t/{tab}", arguments = listOf(navArgument("tab") { type = NavType.StringType })) {
+            HealthScreen(hvm, nav, it.arguments?.getString("tab") ?: "overview")
+        }
+        composable("health/issue/{id}", arguments = listOf(navArgument("id") { type = NavType.LongType })) {
+            HealthIssueScreen(hvm, nav, it.arguments?.getLong("id") ?: 0L)
+        }
+        composable("health/app/{pkg}", arguments = listOf(navArgument("pkg") { type = NavType.StringType })) {
+            HealthAppScreen(hvm, nav, it.arguments?.getString("pkg") ?: "")
+        }
+        composable("health/run/{id}", arguments = listOf(navArgument("id") { type = NavType.LongType })) {
+            HealthRunScreen(hvm, nav, it.arguments?.getLong("id") ?: 0L)
         }
         composable("campaign/{idx}", arguments = listOf(navArgument("idx") { type = NavType.IntType })) {
             CampaignScreen(vm, st, nav, it.arguments?.getInt("idx") ?: 0)

@@ -296,7 +296,11 @@ data class AlertItem(
     val id: Long, val level: Int, val rule: String, val pkg: String, val appName: String, val account: String, val campaign: String,
     val title: String, val body: String, val ai: String, val fired: Int, val createdAt: String, val updatedAt: String,
     val resolvedAt: String?, val readAt: String?, val titleHi: String = "", val bodyHi: String = "",
+    val issueId: Long? = null,   // AI App Health alerts: metrics.issue_id
 ) {
+    val isHealth get() = rule.startsWith("health")
+    /** Notification / card tap: health alert -> us issue ki screen. */
+    val route get() = if (isHealth) issueId?.let { "health/issue/$it" } ?: "health" else "alerts"
     val open get() = resolvedAt == null
     val unread get() = readAt == null
     val levelText get() = when (level) { 3 -> "URGENT".t(); 2 -> "Watch".t(); else -> "Info".t() }
@@ -308,6 +312,7 @@ data class AlertItem(
             j.l("id"), j.d("level").toInt(), j.s("rule"), j.s("pkg"), j.s("app_name"), j.s("account"), j.s("campaign"),
             j.s("title"), j.s("body"), j.s("ai"), j.d("fired", 1.0).toInt(), j.s("created_at"), j.s("updated_at"),
             j.sn("resolved_at"), j.sn("read_at"), j.s("title_hi"), j.s("body_hi"),
+            j.optJSONObject("metrics")?.dn("issue_id")?.toLong(),
         )
     }
 }

@@ -12,8 +12,8 @@ android {
         applicationId = "com.myfuturecode.mfcdash"
         minSdk = 24
         targetSdk = 35
-        versionCode = 4
-        versionName = "1.2.1"
+        versionCode = 5
+        versionName = "1.3.0"
         // Dashboard ka address (aakhri slash ke saath). App ke andar Settings se bhi badal sakte ho.
         buildConfigField("String", "DEFAULT_BASE_URL", "\"https://tirangae-online.live/mfc_dash/\"")
     }

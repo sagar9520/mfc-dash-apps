@@ -144,5 +144,36 @@ class Api(private val prefs: Prefs) {
     /** key khali = AI band. Return: server ka ai status + test_ok. */
     suspend fun aiKey(key: String, model: String): JSONObject = postForm("api/alerts.php?action=ai_key", mapOf("key" to key, "model" to model))
 
+    // ---- api/health.php (AI App Health & Auto Fix)
+    private fun hq(params: Map<String, String>) = params.filterValues { it.isNotBlank() }.entries
+        .joinToString("&") { it.key + "=" + java.net.URLEncoder.encode(it.value, "UTF-8") }
+    private suspend fun hget(view: String, params: Map<String, String> = emptyMap()): JSONObject =
+        getJson("api/health.php?view=$view" + hq(params).let { if (it.isEmpty()) "" else "&$it" })
+    private suspend fun hpost(action: String, fields: Map<String, String>): JSONObject = postForm("api/health.php?action=$action", fields)
+
+    suspend fun hOverview() = HOverview.parse(hget("overview"))
+    suspend fun hConsoles() = HConsolesData.parse(hget("consoles"))
+    suspend fun hRuns(f: Map<String, String> = emptyMap()) = HRunsData.parse(hget("runs", f))
+    suspend fun hRun(id: Long): Pair<HRun, List<HEvent>> = hget("run", mapOf("id" to id.toString())).let { j ->
+        HRun.of(j.optJSONObject("run") ?: JSONObject()) to (j.optJSONArray("events")?.let { a -> (0 until a.length()).mapNotNull { a.optJSONObject(it)?.let(HEvent::of) } } ?: emptyList())
+    }
+    suspend fun hIssues(f: Map<String, String>) = HIssuesData.parse(hget("issues", f))
+    suspend fun hIssue(id: Long) = HIssueDetail.parse(hget("issue", mapOf("id" to id.toString())))
+    suspend fun hFixes(f: Map<String, String> = emptyMap()): List<HFix> = hget("fixes", f).optJSONArray("fixes").let { a ->
+        if (a == null) emptyList() else (0 until a.length()).mapNotNull { a.optJSONObject(it)?.let(HFix::of) }
+    }
+    suspend fun hBuilds(pkg: String = ""): List<HBuild> = hget("builds", mapOf("pkg" to pkg)).optJSONArray("builds").let { a ->
+        if (a == null) emptyList() else (0 until a.length()).mapNotNull { a.optJSONObject(it)?.let(HBuild::of) }
+    }
+    suspend fun hLogs(f: Map<String, String> = emptyMap()): List<HEvent> = hget("logs", f).optJSONArray("logs").let { a ->
+        if (a == null) emptyList() else (0 until a.length()).mapNotNull { a.optJSONObject(it)?.let(HEvent::of) }
+    }
+    suspend fun hSettings() = HSettings.parse(hget("settings"))
+    suspend fun hApp(pkg: String, days: Int) = HAppDetail.parse(hget("app", mapOf("pkg" to pkg, "days" to days.toString())))
+    /** CSV ka 15 min wala signed link (browser me khulta hai). */
+    suspend fun hExport(f: Map<String, String>): String = hget("export", f).optString("url")
+
+    suspend fun hAction(action: String, fields: Map<String, String> = emptyMap()): JSONObject = hpost(action, fields)
+
     fun logout() { jar.clear() }
 }
