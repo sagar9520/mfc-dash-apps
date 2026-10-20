@@ -116,7 +116,7 @@ fun AlertsScreen(vm: DashVm, st: UiState, nav: NavHostController) {
                 Spacer(Modifier.height(6.dp))
             }
             CompositionLocalProvider(LocalFilterBox provides box) {
-                FilterChips("Kind".t(), listOf("" to "All".t(), "ads" to "Ads".t(), "gads" to "Google Ads", "crash" to "Crash".t(), "money" to "Money".t(), "health" to "AI Health".t(), "gah" to "Ads Monitor".t(), "cost" to "AI Cost".t(), "data" to "Data".t()), kind) { kind = it }
+                FilterChips("Kind".t(), listOf("" to "All".t(), "ads" to "Ads".t(), "gads" to "Google Ads", "crash" to "Crash".t(), "money" to "Money".t(), "health" to "AI Health".t(), "gah" to "Ads Monitor".t(), "studio" to "Studio".t(), "cost" to "AI Cost".t(), "data" to "Data".t()), kind) { kind = it }
             }
             FilterSummary(box)
 
@@ -156,6 +156,7 @@ fun AlertsScreen(vm: DashVm, st: UiState, nav: NavHostController) {
 fun alertKind(rule: String): String = when {
     rule.startsWith("health") -> "health"
     rule.startsWith("gah_") -> "gah"
+    rule.startsWith("studio_") -> "studio"
     rule.startsWith("cost_") -> "cost"
     rule.startsWith("adunit") || rule.startsWith("fill") || rule.startsWith("ecpm") || rule.startsWith("ads_") || rule == "imps_low" || rule == "imps_zero" || rule.startsWith("network") -> "ads"
     rule.startsWith("camp") || rule.startsWith("cpi") || rule.startsWith("spend") || rule.startsWith("gads") || rule.startsWith("roas") -> "gads"
@@ -200,6 +201,7 @@ private fun AlertCard(a: AlertItem, nav: NavHostController, onResolve: () -> Uni
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     if (a.isHealth) TextButton(onClick = { nav.navigate(a.route) }, contentPadding = PaddingValues(horizontal = 10.dp)) { Text(if (a.issueId != null) "Open issue".t() else "AI Health".t()) }
                     else if (a.isGads) TextButton(onClick = { nav.navigate(a.route) }, contentPadding = PaddingValues(horizontal = 10.dp)) { Text(if (a.gaAlertId != null) "Open alert".t() else "Ads Monitor".t()) }
+                    else if (a.isStudio) TextButton(onClick = { nav.navigate(a.route) }, contentPadding = PaddingValues(horizontal = 10.dp)) { Text("Open in Studio".t()) }
                     else if (a.isCost) TextButton(onClick = { nav.navigate(a.route) }, contentPadding = PaddingValues(horizontal = 10.dp)) { Text("AI Cost & Usage".t()) }
                     else if (a.pkg.isNotBlank()) TextButton(onClick = { nav.navigate("app/${a.pkg}") }, contentPadding = PaddingValues(horizontal = 10.dp)) { Text("Open app".t()) }
                     if (a.campaign.isNotBlank() || a.account.isNotBlank()) TextButton(onClick = { nav.navigate("money") }, contentPadding = PaddingValues(horizontal = 10.dp)) { Text("Campaigns".t()) }

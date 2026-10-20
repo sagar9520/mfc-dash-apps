@@ -89,6 +89,12 @@ fun HomeScreen(vm: DashVm, st: UiState, nav: NavHostController, cvm: CostVm? = n
             if (gOpen.isNotEmpty()) tf("%s open Google Ads alerts · accounts, spend, CPI, policy", gOpen.size) else "Accounts, suspensions, spend, CPI, ROAS, creatives · read-only".t(),
             if (gCrit > 0) ex.bad else if (gOpen.isNotEmpty()) ex.warn else MaterialTheme.colorScheme.primary) { nav.navigate("gads") }
         Spacer(Modifier.height(8.dp))
+        // ---- AI App Research Studio (alag module: research, ranking, approvals; kabhi khud publish nahi)
+        val sOpen = st.alerts?.alerts?.filter { it.open && it.isStudio } ?: emptyList()
+        AlertRow("R", "AI App Research Studio".t(),
+            if (sOpen.isNotEmpty()) tf("%s Studio updates waiting for you", sOpen.size) else "App ideas, competitors, profit, approvals · never auto-publish".t(),
+            if (sOpen.isNotEmpty()) ex.warn else MaterialTheme.colorScheme.primary) { nav.navigate("studio") }
+        Spacer(Modifier.height(8.dp))
         // ---- AI Cost & Usage (alag module): mahine ka kharcha / budget, forecast
         if (cvm != null) {
             val cs by cvm.s.collectAsStateWithLifecycle()

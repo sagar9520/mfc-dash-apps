@@ -37,6 +37,7 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="mfcdash" android:host="health" />
                 <data android:scheme="mfcdash" android:host="gads" />
+                <data android:scheme="mfcdash" android:host="studio" />
                 <data android:scheme="mfcdash" android:host="cost" />
             </intent-filter>
         </activity>

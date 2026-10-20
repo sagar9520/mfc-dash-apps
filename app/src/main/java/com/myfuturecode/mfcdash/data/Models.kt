@@ -298,14 +298,17 @@ data class AlertItem(
     val resolvedAt: String?, val readAt: String?, val titleHi: String = "", val bodyHi: String = "",
     val issueId: Long? = null,   // AI App Health alerts: metrics.issue_id
     val gaAlertId: Long? = null, // Google Ads monitor alerts ("gah_*"): metrics.ga_alert_id
+    val stRoute: String? = null, // Research Studio alerts ("studio_*"): metrics.route, e.g. studio/project/3
 ) {
     val isHealth get() = rule.startsWith("health")
     val isGads get() = rule.startsWith("gah_")
+    val isStudio get() = rule.startsWith("studio_")
     val isCost get() = rule.startsWith("cost_")
     /** Notification / card tap: health alert -> us issue ki screen; Google Ads monitor alert -> us alert ki screen. */
     val route get() = when {
         isHealth -> issueId?.let { "health/issue/$it" } ?: "health"
         isGads -> gaAlertId?.let { "gads/alert/$it" } ?: "gads"
+        isStudio -> stRoute?.takeIf { it.matches(Regex("studio(/[a-z]+(/\\d+)?)?")) } ?: "studio"
         isCost -> "cost"
         else -> "alerts"
     }
@@ -322,6 +325,7 @@ data class AlertItem(
             j.sn("resolved_at"), j.sn("read_at"), j.s("title_hi"), j.s("body_hi"),
             j.optJSONObject("metrics")?.dn("issue_id")?.toLong(),
             j.optJSONObject("metrics")?.dn("ga_alert_id")?.toLong(),
+            j.optJSONObject("metrics")?.sn("route"),
         )
     }
 }
