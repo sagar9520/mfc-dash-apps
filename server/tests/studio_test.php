@@ -96,7 +96,7 @@ $pdo->exec("CREATE TABLE gads_campaign_day (customer_id VARCHAR(20) NOT NULL, da
   conversions DECIMAL(14,2) NOT NULL DEFAULT 0, conv_value DECIMAL(16,4) NOT NULL DEFAULT 0, updated_at DATETIME NOT NULL, PRIMARY KEY (customer_id, day, campaign_id))");
 kv_set('h_schema_v', '1');
 st_schema($pdo);
-ok((int)q1("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name LIKE 'st\\_%'") === 12, 'schema: 12 studio tables created');
+ok((int)q1("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name LIKE 'st\\_%'") === 13, 'schema: 13 studio tables created');
 
 // SIMULATED dashboard data: 2 Tools apps, IN organic + paid installs 10..20 days ago, retention, D7 ad revenue, Google Ads CPI
 $pdo->beginTransaction();

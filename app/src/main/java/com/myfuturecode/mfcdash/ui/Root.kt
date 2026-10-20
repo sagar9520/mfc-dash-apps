@@ -33,6 +33,7 @@ import com.myfuturecode.mfcdash.notify.Notify
 import com.myfuturecode.mfcdash.ui.screens.*
 import com.myfuturecode.mfcdash.ui.screens.health.*
 import com.myfuturecode.mfcdash.ui.screens.gads.*
+import com.myfuturecode.mfcdash.ui.screens.studio.*
 import com.myfuturecode.mfcdash.App
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.myfuturecode.mfcdash.util.t
@@ -61,6 +62,8 @@ fun Root(vm: DashVm) {
     LaunchedEffect(hvm) { hvm.msg.collect { snack.showSnackbar(it) } }
     val gvm: GadsVm = viewModel(factory = GadsVm.factory(ctx0.applicationContext as App))
     LaunchedEffect(gvm) { gvm.msg.collect { snack.showSnackbar(it) } }
+    val svm: StudioVm = viewModel(factory = StudioVm.factory(ctx0.applicationContext as App))
+    LaunchedEffect(svm) { svm.msg.collect { snack.showSnackbar(it) } }
 
     // Android 13+: notification ki permission (ek baar poochho)
     val ctx = LocalContext.current
@@ -90,12 +93,12 @@ fun Root(vm: DashVm) {
             }
         },
     ) { pad ->
-        Box(Modifier.padding(pad)) { AppNav(nav, vm, st, hvm, gvm) }
+        Box(Modifier.padding(pad)) { AppNav(nav, vm, st, hvm, gvm, svm) }
     }
 }
 
 @Composable
-private fun AppNav(nav: NavHostController, vm: DashVm, st: UiState, hvm: HealthVm, gvm: GadsVm) {
+private fun AppNav(nav: NavHostController, vm: DashVm, st: UiState, hvm: HealthVm, gvm: GadsVm, svm: StudioVm) {
     NavHost(nav, startDestination = "home") {
         composable("home") { HomeScreen(vm, st, nav) }
         composable("money") { MoneyScreen(vm, st, nav) }
@@ -138,6 +141,23 @@ private fun AppNav(nav: NavHostController, vm: DashVm, st: UiState, hvm: HealthV
         }
         composable("gads/run/{id}", arguments = listOf(navArgument("id") { type = NavType.LongType })) {
             GadsRunScreen(gvm, nav, it.arguments?.getLong("id") ?: 0L)
+        }
+        // AI App Research Studio (research, ranking, approvals; kabhi khud publish nahi)
+        composable("studio") { StudioScreen(svm, nav, "overview") }
+        composable("studio/{tab}", arguments = listOf(navArgument("tab") { type = NavType.StringType })) {
+            StudioScreen(svm, nav, it.arguments?.getString("tab") ?: "overview")
+        }
+        composable("studio/opp/{id}", arguments = listOf(navArgument("id") { type = NavType.LongType })) {
+            StudioOppScreen(svm, nav, it.arguments?.getLong("id") ?: 0L)
+        }
+        composable("studio/project/{id}", arguments = listOf(navArgument("id") { type = NavType.LongType })) {
+            StudioProjectScreen(svm, nav, it.arguments?.getLong("id") ?: 0L)
+        }
+        composable("studio/run/{id}", arguments = listOf(navArgument("id") { type = NavType.LongType })) {
+            StudioRunScreen(svm, nav, it.arguments?.getLong("id") ?: 0L)
+        }
+        composable("studio/compare/{ids}", arguments = listOf(navArgument("ids") { type = NavType.StringType })) {
+            StudioCompareScreen(svm, nav, it.arguments?.getString("ids") ?: "")
         }
         composable("campaign/{idx}", arguments = listOf(navArgument("idx") { type = NavType.IntType })) {
             CampaignScreen(vm, st, nav, it.arguments?.getInt("idx") ?: 0)

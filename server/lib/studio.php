@@ -938,7 +938,7 @@ function st_store_opps(PDO $pdo, StRun $run, array $list, array $evMap, string $
         $ruleRec = st_rule_rec($org['score'], $paid['score'], $conf, $factors, $cov);
         $aiRec = in_array($o['recommendation'] ?? '', ST_RECS, true) ? (string)$o['recommendation'] : 'WATCH MARKET';
         $final = st_cautious($aiRec, $ruleRec);
-        $ccs = array_values(array_filter(array_map(fn($c) => strtoupper(substr((string)$c, 0, 2)), (array)($o['countries'] ?? [])), fn($c) => preg_match('/^[A-Z]{2}$/', $c)));
+        $ccs = array_values(array_unique(array_filter(array_map(fn($c) => strtoupper(trim((string)$c)), (array)($o['countries'] ?? [])), fn($c) => preg_match('/^[A-Z]{2}$/', $c))));
         $okey = sha1(strtolower(preg_replace('/[^a-z0-9]+/i', ' ', $title)) . '|' . strtolower((string)($o['category'] ?? '')));
         $combined = $org['score'] === null && $paid['score'] === null ? null : round(((float)$org['score'] + (float)$paid['score']) / (($org['score'] !== null) + ($paid['score'] !== null)), 1);
         h_x($pdo, 'INSERT INTO st_opps (run_id, origin, okey, title, concept, category, countries, competitors, monetization, risks, why_build, why_avoid, decision_card, complexity,

@@ -37,6 +37,7 @@ class MainActivity : ComponentActivity() {
         val route = i.getStringExtra("route")?.also { i.removeExtra("route") }
             ?: i.data?.takeIf { it.scheme == "mfcdash" && it.host == "health" }?.let { u -> healthRoute(u.pathSegments).also { i.data = null } }
             ?: i.data?.takeIf { it.scheme == "mfcdash" && it.host == "gads" }?.let { u -> gadsRoute(u.pathSegments).also { i.data = null } }
+            ?: i.data?.takeIf { it.scheme == "mfcdash" && it.host == "studio" }?.let { u -> studioRoute(u.pathSegments).also { i.data = null } }
             ?: return
         (application as App).pendingRoute.value = route
     }
@@ -52,6 +53,16 @@ class MainActivity : ComponentActivity() {
             "campaign" -> seg.getOrNull(2).let { c -> if (id != null && c != null && id.matches(digits) && c.matches(digits)) "gads/campaign/$id/$c" else "gads" }
             null, "" -> "gads"
             else -> seg[0].let { t -> if (t.matches(Regex("[a-z]+"))) "gads/t/$t" else "gads" }
+        }
+    }
+
+    /** Research Studio email link: mfcdash://studio/project/3, /opp/12, /run/5, /<tab>. */
+    private fun studioRoute(seg: List<String>): String {
+        val id = seg.getOrNull(1)?.toLongOrNull()
+        return when (seg.firstOrNull()) {
+            "project", "opp", "run" -> if (id != null) "studio/${seg[0]}/$id" else "studio"
+            null, "" -> "studio"
+            else -> seg[0].let { t -> if (t.matches(Regex("[a-z]+"))) "studio/$t" else "studio" }
         }
     }
 
