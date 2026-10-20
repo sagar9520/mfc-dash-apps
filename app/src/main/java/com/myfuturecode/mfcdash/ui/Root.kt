@@ -139,5 +139,8 @@ fun TopBar(title: String, vm: DashVm, st: UiState, nav: NavHostController, back:
                 IconButton(onClick = { nav.navigate("settings") }) { Icon(Icons.Filled.Settings, "Settings") }
             }
         },
+        // Scaffold already pads the status bar; without this the bar added it a second time (big empty gap on top).
+        windowInsets = WindowInsets(0, 0, 0, 0),
+        colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background, scrolledContainerColor = MaterialTheme.colorScheme.background),
     )
 }
