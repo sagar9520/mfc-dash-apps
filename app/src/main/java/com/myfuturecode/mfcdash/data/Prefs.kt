@@ -36,8 +36,24 @@ class Prefs(ctx: Context) {
         get() = sp.getFloat("roas_target", 1.5f).toDouble()
         set(v) { sp.edit().putFloat("roas_target", v.toFloat()).apply() }
 
+    var lastAlertId: Long
+        get() = sp.getLong("last_alert_id", 0L)
+        set(v) { sp.edit().putLong("last_alert_id", v).apply() }
+    var notifyUrgent: Boolean
+        get() = sp.getBoolean("n_urgent", true)
+        set(v) { sp.edit().putBoolean("n_urgent", v).apply() }
+    var notifyWarn: Boolean
+        get() = sp.getBoolean("n_warn", true)
+        set(v) { sp.edit().putBoolean("n_warn", v).apply() }
+    var notifyInfo: Boolean
+        get() = sp.getBoolean("n_info", true)
+        set(v) { sp.edit().putBoolean("n_info", v).apply() }
+    var checkMinutes: Int
+        get() = sp.getInt("check_min", 15)
+        set(v) { sp.edit().putInt("check_min", v).apply() }
+
     val hasLogin get() = username.isNotBlank() && password.isNotBlank()
-    fun clearLogin() { sp.edit().remove("user").remove("pass").remove("cookies").apply() }
+    fun clearLogin() { sp.edit().remove("user").remove("pass").remove("cookies").remove("last_alert_id").apply() }
 
     companion object {
         fun normalizeUrl(u: String): String {

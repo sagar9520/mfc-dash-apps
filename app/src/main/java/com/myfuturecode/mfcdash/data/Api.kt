@@ -118,5 +118,31 @@ class Api(private val prefs: Prefs) {
         client.newCall(req).execute().use { if (it.code != 200) throw ApiException("Delete nahi hua (${it.code})") }
     }
 
+    /** Form POST (login expire ho to ek baar dobara login karke retry). */
+    private suspend fun postForm(path: String, fields: Map<String, String>, retry: Boolean = true): JSONObject = withContext(Dispatchers.IO) {
+        val fb = FormBody.Builder()
+        fields.forEach { (k, v) -> fb.add(k, v) }
+        val req = Request.Builder().url(url(path)).post(fb.build()).header("Accept", "application/json").build()
+        val (code, text) = client.newCall(req).execute().use { it.code to (it.body?.string() ?: "") }
+        if (code == 401 || code in 300..399) {
+            if (retry && prefs.hasLogin) { login(prefs.username, prefs.password); return@withContext postForm(path, fields, retry = false) }
+            throw ApiException("Login expire ho gaya", unauthorized = true)
+        }
+        val j = runCatching { JSONObject(text) }.getOrNull() ?: throw ApiException("Server error $code")
+        if (code != 200 || !j.optBoolean("ok", false)) throw ApiException(j.optString("error", "Server error $code"))
+        j
+    }
+
+    // ---- api/alerts.php (smart alerts). Upload na ho (404) to null.
+    suspend fun alerts(limit: Int = 150, open: Boolean = false): AlertsData? =
+        try { AlertsData.parse(getJson("api/alerts.php?since=0&limit=$limit" + (if (open) "&open=1" else ""))) }
+        catch (e: ApiException) { if (e.unauthorized) throw e else null }
+    suspend fun alertsRead(ids: List<Long>? = null) { postForm("api/alerts.php?action=read", if (ids == null) mapOf("all" to "1") else mapOf("ids" to ids.joinToString(","))) }
+    suspend fun alertResolve(id: Long) { postForm("api/alerts.php?action=resolve", mapOf("id" to id.toString())) }
+    suspend fun alertTest() { postForm("api/alerts.php?action=test", emptyMap()) }
+    suspend fun alertsCompute(): JSONObject = postForm("api/alerts.php?action=compute", emptyMap())
+    /** key khali = AI band. Return: server ka ai status + test_ok. */
+    suspend fun aiKey(key: String, model: String): JSONObject = postForm("api/alerts.php?action=ai_key", mapOf("key" to key, "model" to model))
+
     fun logout() { jar.clear() }
 }

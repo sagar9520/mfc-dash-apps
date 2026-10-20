@@ -1,5 +1,6 @@
 package com.myfuturecode.mfcdash
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -16,11 +17,24 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         val app = application as App
+        handleIntent(intent)
         setContent {
             MfcTheme {
-                val vm: DashVm = viewModel(factory = DashVm.factory(app.api, app.prefs))
+                val vm: DashVm = viewModel(factory = DashVm.factory(app))
                 Root(vm)
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleIntent(intent)
+    }
+
+    /** Notification se khula ho to Alerts screen. */
+    private fun handleIntent(i: Intent?) {
+        val route = i?.getStringExtra("route") ?: return
+        (application as App).pendingRoute.value = route
+        i.removeExtra("route")
     }
 }

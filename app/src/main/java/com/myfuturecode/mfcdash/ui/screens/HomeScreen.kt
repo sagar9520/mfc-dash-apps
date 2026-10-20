@@ -81,7 +81,25 @@ fun HomeScreen(vm: DashVm, st: UiState, nav: NavHostController) {
             Triple("Uninstalls", num(k.uninstalls), "FCM check"),
         ), colors = mapOf(0 to ex.good))
 
-        // ---- Alerts
+        // ---- Server alerts (api/alerts.php rule engine + Claude AI)
+        val sa = st.alerts?.alerts?.filter { it.open && it.level >= 2 } ?: emptyList()
+        if (sa.isNotEmpty()) {
+            SectionTitle("Alerts", "${sa.size} khule · tap = detail")
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                sa.take(5).forEach { a ->
+                    AlertRow(if (a.level == 3) "!!" else "!", a.title, (a.ai.ifBlank { a.body }).lineSequence().firstOrNull()?.take(110) ?: "",
+                        if (a.level == 3) ex.bad else ex.warn) { nav.navigate("alerts") }
+                }
+            }
+            if (sa.size > 5) TextButton(onClick = { nav.navigate("alerts") }) { Text("Sab ${sa.size} alerts dekho") }
+            Spacer(Modifier.height(14.dp))
+        } else if (st.alerts != null) {
+            SectionTitle("Alerts", "server check " + (st.alerts.computedAt.takeIf { it > 0 }?.let { agoText(it * 1000) } ?: ""))
+            AlertRow("✓", "Sab theek: koi urgent / dhyan-do alert nahi", "Data, ads, Google Ads, crash, revenue — sab normal", ex.good) { nav.navigate("alerts") }
+            Spacer(Modifier.height(14.dp))
+        }
+
+        // ---- App ke apne (period ke data se) alerts
         val alerts = buildAlerts(d, st.roasTarget)
         SectionTitle("Dhyaan do", if (alerts.isEmpty()) "sab theek" else "${alerts.size} baat")
         if (alerts.isEmpty()) Panel { Text("Koi alert nahi: crash, loss campaign ya kam fill nahi mila.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }

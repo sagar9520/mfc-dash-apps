@@ -25,6 +25,7 @@ fun JSONObject.dn(key: String): Double? {
 }
 
 fun JSONObject.l(key: String): Long = d(key).toLong()
+fun JSONObject.sn(key: String): String? = if (has(key) && !isNull(key)) optString(key).takeIf { it.isNotEmpty() } else null
 fun JSONObject.s(key: String, def: String = ""): String = if (has(key) && !isNull(key)) optString(key, def) else def
 fun JSONObject.b(key: String): Boolean = when (val v = opt(key)) {
     is Boolean -> v

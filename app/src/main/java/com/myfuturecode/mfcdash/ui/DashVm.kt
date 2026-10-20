@@ -3,12 +3,15 @@ package com.myfuturecode.mfcdash.ui
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.myfuturecode.mfcdash.App
+import com.myfuturecode.mfcdash.data.AlertsData
 import com.myfuturecode.mfcdash.data.Api
 import com.myfuturecode.mfcdash.data.ApiException
 import com.myfuturecode.mfcdash.data.CpData
 import com.myfuturecode.mfcdash.data.DashData
 import com.myfuturecode.mfcdash.data.ExtraData
 import com.myfuturecode.mfcdash.data.Prefs
+import com.myfuturecode.mfcdash.notify.AlertsSync
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -26,17 +29,27 @@ data class UiState(
     val cp: CpData? = null,
     val extra: ExtraData? = null,          // api/app.php (server par ho to)
     val extraMissing: Boolean = false,     // 404 = abhi upload nahi hua
+    val alerts: AlertsData? = null,        // api/alerts.php (smart alerts)
+    val alertsMissing: Boolean = false,
+    val alertsBusy: Boolean = false,
     val appExtra: Map<String, ExtraData> = emptyMap(),
     val appData: Map<String, DashData> = emptyMap(),   // App detail: pkg → us app ka data
     val appCp: Map<String, CpData> = emptyMap(),
     val appLoading: String? = null,
     val lastOk: Long = 0L,
     val roasTarget: Double = 1.5,
+    val notifyUrgent: Boolean = true, val notifyWarn: Boolean = true, val notifyInfo: Boolean = true, val checkMinutes: Int = 15,
 )
 
-class DashVm(private val api: Api, private val prefs: Prefs) : ViewModel() {
-    private val _s = MutableStateFlow(UiState(loggedIn = prefs.hasLogin, range = prefs.range, roasTarget = prefs.roasTarget))
+class DashVm(private val app: App) : ViewModel() {
+    private val api: Api = app.api
+    private val prefs: Prefs = app.prefs
+    private val _s = MutableStateFlow(UiState(loggedIn = prefs.hasLogin, range = prefs.range, roasTarget = prefs.roasTarget,
+        notifyUrgent = prefs.notifyUrgent, notifyWarn = prefs.notifyWarn, notifyInfo = prefs.notifyInfo, checkMinutes = prefs.checkMinutes))
     val s: StateFlow<UiState> = _s
+    /** Notification tap se aayi screen ("alerts"); Root consume karke null kar deta hai. */
+    val pendingRoute: StateFlow<String?> = app.pendingRoute
+    fun consumeRoute() { app.pendingRoute.value = null }
     private var autoJob: Job? = null
 
     init { if (prefs.hasLogin) { refresh(); startAuto() } }
@@ -53,6 +66,7 @@ class DashVm(private val api: Api, private val prefs: Prefs) : ViewModel() {
                 prefs.username = user; prefs.password = pass
                 _s.update { it.copy(loggedIn = true, loading = false) }
                 onDone(null)
+                AlertsSync.schedule(app, prefs.checkMinutes)
                 refresh(); startAuto()
             } catch (e: Exception) {
                 _s.update { it.copy(loading = false) }
@@ -63,8 +77,10 @@ class DashVm(private val api: Api, private val prefs: Prefs) : ViewModel() {
 
     fun logout() {
         autoJob?.cancel()
+        AlertsSync.cancel(app)
         api.logout(); prefs.clearLogin()
-        _s.value = UiState(loggedIn = false, range = prefs.range, roasTarget = prefs.roasTarget)
+        _s.value = UiState(loggedIn = false, range = prefs.range, roasTarget = prefs.roasTarget,
+            notifyUrgent = prefs.notifyUrgent, notifyWarn = prefs.notifyWarn, notifyInfo = prefs.notifyInfo, checkMinutes = prefs.checkMinutes)
     }
 
     fun setRange(r: String, from: String? = null, to: String? = null) {
@@ -85,13 +101,82 @@ class DashVm(private val api: Api, private val prefs: Prefs) : ViewModel() {
                 _s.update { it.copy(data = d, loading = false, error = null, lastOk = System.currentTimeMillis()) }
                 runCatching { api.crossPromo("all", st.range, st.from, st.to) }.onSuccess { cp -> _s.update { it.copy(cp = cp) } }
                 runCatching { api.extra("all", st.range, st.from, st.to) }.onSuccess { ex -> _s.update { it.copy(extra = ex ?: it.extra, extraMissing = ex == null) } }
+                refreshAlerts()
             } catch (e: Exception) {
                 val unauthorized = (e as? ApiException)?.unauthorized == true
                 // unauthorized = dobara login bhi fail (password badla?) -> login screen
-                if (unauthorized) { prefs.clearLogin(); api.logout() }
+                if (unauthorized) { prefs.clearLogin(); api.logout(); AlertsSync.cancel(app) }
                 _s.update { it.copy(loading = false, error = e.message ?: "Data nahi aaya", loggedIn = !unauthorized) }
             }
         }
+    }
+
+    /** Alerts lao + naye ki notification (AlertsSync). alerts.php na ho to alertsMissing. */
+    fun refreshAlerts() {
+        viewModelScope.launch {
+            runCatching { AlertsSync.check(app) }
+                .onSuccess { al -> _s.update { it.copy(alerts = al ?: it.alerts, alertsMissing = al == null) } }
+        }
+    }
+
+    fun markAllRead() {
+        viewModelScope.launch {
+            runCatching { api.alertsRead(null) }
+            refreshAlerts()
+        }
+    }
+
+    fun resolveAlert(id: Long) {
+        // turant UI se hatao, phir server
+        _s.update { st -> st.copy(alerts = st.alerts?.let { al -> al.copy(alerts = al.alerts.map { if (it.id == id) it.copy(resolvedAt = "now") else it }) }) }
+        viewModelScope.launch { runCatching { api.alertResolve(id) }; refreshAlerts() }
+    }
+
+    fun testNotification(onDone: (String?) -> Unit) {
+        viewModelScope.launch {
+            try { api.alertTest(); refreshAlerts(); onDone(null) } catch (e: Exception) { onDone(e.message ?: "Test nahi hua") }
+        }
+    }
+
+    /** Server par rules abhi chalao (warna har 4 min / app ke poll par). */
+    fun computeAlerts(onDone: (String?) -> Unit) {
+        viewModelScope.launch {
+            _s.update { it.copy(alertsBusy = true) }
+            try {
+                val r = api.alertsCompute().optJSONObject("result")
+                refreshAlerts()
+                val n = r?.optInt("new", 0) ?: 0
+                onDone(if (n > 0) "$n naye alert" else "Koi naya alert nahi — sab theek")
+            } catch (e: Exception) { onDone(e.message ?: "Check nahi hua") }
+            _s.update { it.copy(alertsBusy = false) }
+        }
+    }
+
+    fun setAiKey(key: String, model: String, onDone: (String?) -> Unit) {
+        viewModelScope.launch {
+            _s.update { it.copy(alertsBusy = true) }
+            try {
+                val j = api.aiKey(key.trim(), model)
+                refreshAlerts()
+                onDone(when {
+                    key.isBlank() -> "Claude AI band kar diya"
+                    j.optBoolean("test_ok") -> "Key sahi hai, Claude AI chalu ✅"
+                    else -> "Key save hui par test call fail: " + (j.optJSONObject("ai")?.optString("last_error") ?: "?")
+                })
+            } catch (e: Exception) { onDone(e.message ?: "Save nahi hua") }
+            _s.update { it.copy(alertsBusy = false) }
+        }
+    }
+
+    fun setNotify(level: Int, on: Boolean) {
+        when (level) { 3 -> prefs.notifyUrgent = on; 2 -> prefs.notifyWarn = on; else -> prefs.notifyInfo = on }
+        _s.update { it.copy(notifyUrgent = prefs.notifyUrgent, notifyWarn = prefs.notifyWarn, notifyInfo = prefs.notifyInfo) }
+    }
+
+    fun setCheckMinutes(m: Int) {
+        prefs.checkMinutes = m
+        _s.update { it.copy(checkMinutes = m) }
+        if (prefs.hasLogin) AlertsSync.schedule(app, m)
     }
 
     /** App detail screen: us app ka data.php (app=<pkg>) alag se. */
@@ -124,22 +209,26 @@ class DashVm(private val api: Api, private val prefs: Prefs) : ViewModel() {
         viewModelScope.launch { runCatching { api.extra("all", st.range, st.from, st.to) }.onSuccess { ex -> if (ex != null) _s.update { it.copy(extra = ex) } } }
     }
 
-    /** Site jaisa: aaj ka data ho to har 20 sec refresh. */
+    /** Site jaisa: aaj ka data ho to har 20 sec refresh (alerts bhi saath me). */
     private fun startAuto() {
         autoJob?.cancel()
         autoJob = viewModelScope.launch {
+            var tick = 0
             while (true) {
                 delay(20_000)
+                tick++
                 val st = _s.value
-                if (st.loggedIn && (st.data == null || st.data.today)) refresh()
+                if (!st.loggedIn) continue
+                if (st.data == null || st.data.today) refresh()
+                else if (tick % 3 == 0) refreshAlerts()   // purana period dekh rahe ho to bhi har minute alerts
             }
         }
     }
 
     companion object {
-        fun factory(api: Api, prefs: Prefs) = object : ViewModelProvider.Factory {
+        fun factory(app: App) = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
-            override fun <T : ViewModel> create(modelClass: Class<T>): T = DashVm(api, prefs) as T
+            override fun <T : ViewModel> create(modelClass: Class<T>): T = DashVm(app) as T
         }
     }
 }

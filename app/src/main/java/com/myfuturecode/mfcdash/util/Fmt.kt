@@ -51,6 +51,7 @@ private val dayOutY = SimpleDateFormat("dd MMM yyyy", Locale.US)
 
 /** Server UTC timestamp ("2026-10-20 08:15:00") → phone ke time mein HH:mm. ISO bhi chalega. */
 fun tOnly(ts: String?): String = parseTs(ts)?.let { tOnlyF.format(it) } ?: (ts ?: "–").takeLast(8).take(5)
+fun tsMs(ts: String?): Long? = parseTs(ts)?.time
 fun tFull(ts: String?): String = parseTs(ts)?.let { tFullF.format(it) } ?: (ts ?: "–")
 private fun parseTs(ts: String?): java.util.Date? {
     if (ts.isNullOrBlank()) return null

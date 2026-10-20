@@ -285,3 +285,41 @@ data class ExtraData(
 
 /** UA research: ROAS target curve (D0 30%, D1 50%, D3 75%, D7 110%) jo D30 par ~150% deta hai. */
 val ROAS_TARGET_CURVE = linkedMapOf("D0" to 0.30, "D1" to 0.50, "D3" to 0.75, "D7" to 1.10)
+
+// ---------------------------------------------------------------- api/alerts.php (smart alerts)
+data class AlertItem(
+    val id: Long, val level: Int, val rule: String, val pkg: String, val appName: String, val account: String, val campaign: String,
+    val title: String, val body: String, val ai: String, val fired: Int, val createdAt: String, val updatedAt: String,
+    val resolvedAt: String?, val readAt: String?,
+) {
+    val open get() = resolvedAt == null
+    val unread get() = readAt == null
+    val levelText get() = when (level) { 3 -> "URGENT"; 2 -> "Dhyan do"; else -> "Info" }
+    companion object {
+        fun of(j: JSONObject) = AlertItem(
+            j.l("id"), j.d("level").toInt(), j.s("rule"), j.s("pkg"), j.s("app_name"), j.s("account"), j.s("campaign"),
+            j.s("title"), j.s("body"), j.s("ai"), j.d("fired", 1.0).toInt(), j.s("created_at"), j.s("updated_at"),
+            j.sn("resolved_at"), j.sn("read_at"),
+        )
+    }
+}
+
+data class AiStatus(val enabled: Boolean, val keyHint: String, val model: String, val lastError: String?, val lastOk: Long) {
+    companion object { fun of(j: JSONObject) = AiStatus(j.b("enabled"), j.s("key_hint"), j.s("model"), j.sn("last_error"), j.l("last_ok")) }
+}
+
+data class Brief(val day: String, val text: String, val at: Long)
+
+data class AlertsData(
+    val alerts: List<AlertItem>, val openCount: Int, val urgentOpen: Int, val warnOpen: Int, val unread: Int,
+    val computedAt: Long, val aiPending: Int, val ai: AiStatus, val brief: Brief?,
+) {
+    val open get() = alerts.filter { it.open }
+    companion object {
+        fun parse(j: JSONObject) = AlertsData(
+            j.arr("alerts").mapObj(AlertItem::of), j.d("open_count").toInt(), j.d("urgent_open").toInt(), j.d("warn_open").toInt(), j.d("unread").toInt(),
+            j.l("computed_at"), j.d("ai_pending").toInt(), AiStatus.of(j.obj("ai")),
+            j.optJSONObject("brief")?.let { Brief(it.s("day"), it.s("text"), it.l("at")) },
+        )
+    }
+}

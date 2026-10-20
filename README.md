@@ -26,6 +26,34 @@ Is file ke bina app chalegi (site wala saara data aayega), par yeh 5 cheezein "a
 
 Check: browser mein site par login karke `https://tirangae-online.live/mfc_dash/api/app.php?range=7d` kholo, `{"ok":true,...}` dikhna chahiye.
 
+## 2b. Smart alerts + notifications (naya)
+`server/api/alerts.php` ko server par **`mfc_dash/api/alerts.php`** upload karo (app.php ke bagal mein). Table `app_alerts` khud ban jaati hai.
+
+Yeh file poore dashboard par nazar rakhti hai aur 3 level ke alerts banati hai:
+- **🔴 Urgent** (awaaz + vibration): kisi app se data aana band / server se sab apps ka data band, ads band (users hain par 0 impressions), Google Ads script ne data bhejna band kiya (account-wise), campaign 0 impressions, paisa ja raha par 0 install, CPI 2.5x, 3 din ka ROAS 60% se neeche (loss), campaign cohort D3 ROAS 40% se neeche, crash spike, revenue 85%+ neeche, dashboard cron band.
+- **🟠 Dhyan do** (issue hai, abhi fix zaroori nahi): data/impressions kam, CPI +50%, ROAS <85%, spend 2x tez, naya version crash kar raha, ad fill gira, revenue/installs 60%+ neeche, eCPM aadha, uninstall zyada, payments fail, D1 retention giri.
+- **🔵 Info**: roz subah 9 baje kal ka hisaab (+ AI brief), nayi/paused campaign, revenue/installs upar, naya record, "urgent theek ho gaya".
+
+Har alert me likha hota hai **kis app / kis Google Ads account / kis campaign** me kya issue hai. Theek hone par urgent alerts apne aap band ho jaate hain.
+
+Kaise chalta hai:
+- App khuli ho: har 20 sec. App band ho: har 15 min (Android ki minimum) — phone Settings > Battery me app ko **No restrictions** do (Xiaomi/Oppo/Vivo zaroor).
+- Rules server par app ke har poll par chalte hain (4 min se purane ho to). **Zyada turant** chahiye to Plesk me ek aur cron: `https://tirangae-online.live/mfc_dash/api/alerts.php?cron=1&key=CRON_KEY` har 5 min (`CRON_KEY` = config.php ka `cron_key`).
+- Pehli baar app sirf abhi ke urgent alerts ki notification degi, purani history nahi.
+- App > Settings > Notifications: teeno level on/off, check interval, **Test notification** button.
+- Thresholds badalne hon to `alerts.php` ke upar `AL_*` constants.
+
+Check: browser mein login karke `https://tirangae-online.live/mfc_dash/api/alerts.php` kholo, `{"ok":true,"alerts":[...]}` dikhna chahiye.
+
+## 2c. Claude AI (optional, par recommended)
+Rules AI ke bina poore chalte hain. Claude AI upar se do kaam karta hai:
+1. Har naye Urgent / Dhyan-do alert par 3 line Hinglish me: **kya hua, sabse likely wajah, abhi kya karo** (alert ke neeche "CLAUDE AI" box me, notification me bhi).
+2. Roz subah 9 baje **AI brief**: kal ka poora hisaab (sab apps + campaigns + khule alerts) padh kar verdict + 4-6 observations + aaj ke action items (Alerts screen ke upar).
+
+Setup: [console.anthropic.com](https://console.anthropic.com) > API Keys > key banao → App > Settings > Claude AI me paste → **Save + test**. Key server ke DB (`kv` table) me rehti hai; chaaho to `config.php` me `'anthropic_api_key' => 'sk-ant-…'` bhi daal sakte ho.
+Model: default `claude-opus-5-5` (sabse accha). Kharcha chhota hai: ek alert ≈ ₹1, roz ka brief ≈ ₹4; mahine ka ₹100-300. Sasta chahiye to Settings me Haiku 5.5 chuno.
+Server se `api.anthropic.com` tak cURL jaana chahiye (shared hosting par normally jaata hai); error Settings > Claude AI me dikhega.
+
 ## 3. Campaign-wise ROAS sahi aane ke liye (ek baar)
 ROAS cohort tab banta hai jab pata ho kaunsa install kis campaign se aaya. Yeh Play Install Referrer ke `utm_campaign` se aata hai.
 - Google Ads mein har campaign ke **Final URL** mein lagao: `&referrer=utm_source%3Dgoogle_ads%26utm_medium%3Dcpc%26utm_campaign%3D<CAMPAIGN_NAME>`
@@ -55,3 +83,5 @@ Period chips (Aaj / Kal / 7 din / 30 din / Custom) site jaise hi hain; "Aaj" par
 - "Jawab JSON nahi tha": URL galat hai ya server login page de raha hai; Settings mein URL `https://.../mfc_dash/` (aakhri slash ke saath) rakho.
 - Retention/ROAS khali: `api/app.php` upload hua? Browser mein `api/app.php?range=7d` kholke dekho. Campaign ROAS ke liye step 3.
 - Google Ads data nahi: Google Ads script (setup/gads_script.js) account mein chal rahi hai? Site par bhi nahi dikhega to app mein bhi nahi.
+- Notification nahi aa rahi: (1) Settings > Notifications > Test notification se check karo, (2) phone ki app notification permission on hai?, (3) Battery > No restrictions, (4) app band hone par 15 min tak lag sakta hai.
+- "alerts.php server par nahi hai": step 2b. Claude AI error: Settings > Claude AI me error line dekho (galat key = 401, balance khatam = 400/429).

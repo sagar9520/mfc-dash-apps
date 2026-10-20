@@ -1,5 +1,9 @@
 package com.myfuturecode.mfcdash.ui
 
+import android.Manifest
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -8,11 +12,13 @@ import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.CurrencyRupee
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -23,6 +29,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.myfuturecode.mfcdash.notify.Notify
 import com.myfuturecode.mfcdash.ui.screens.*
 
 data class Tab(val route: String, val label: String, val icon: ImageVector)
@@ -44,6 +51,20 @@ fun Root(vm: DashVm) {
     val isTab = TABS.any { it.route == route }
     val snack = remember { SnackbarHostState() }
     LaunchedEffect(st.error) { st.error?.let { snack.showSnackbar(it) } }
+
+    // Android 13+: notification ki permission (ek baar poochho)
+    val ctx = LocalContext.current
+    val permLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= 33 && !Notify.allowed(ctx)) permLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
+    // Notification tap -> Alerts screen
+    val pending by vm.pendingRoute.collectAsStateWithLifecycle()
+    LaunchedEffect(pending) {
+        val r = pending ?: return@LaunchedEffect
+        nav.navigate(r) { launchSingleTop = true }
+        vm.consumeRoute()
+    }
 
     Scaffold(
         snackbarHost = { SnackbarHost(snack) },
@@ -73,6 +94,7 @@ private fun AppNav(nav: NavHostController, vm: DashVm, st: UiState) {
         composable("live") { LiveScreen(vm, st, nav) }
         composable("promo") { CrossPromoScreen(vm, st, nav) }
         composable("settings") { SettingsScreen(vm, nav) }
+        composable("alerts") { AlertsScreen(vm, st, nav) }
         composable("app/{pkg}", arguments = listOf(navArgument("pkg") { type = NavType.StringType })) {
             AppDetailScreen(vm, st, nav, it.arguments?.getString("pkg") ?: "")
         }
@@ -104,7 +126,17 @@ fun TopBar(title: String, vm: DashVm, st: UiState, nav: NavHostController, back:
         actions = {
             if (st.loading) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
             IconButton(onClick = { vm.refresh() }) { Icon(Icons.Filled.Refresh, "Refresh") }
-            if (!back) IconButton(onClick = { nav.navigate("settings") }) { Icon(Icons.Filled.Settings, "Settings") }
+            if (!back) {
+                val al = st.alerts
+                val n = al?.unread ?: 0
+                val urgent = (al?.urgentOpen ?: 0) > 0
+                IconButton(onClick = { nav.navigate("alerts") }) {
+                    BadgedBox(badge = {
+                        if (n > 0) Badge(containerColor = if (urgent) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary) { Text(if (n > 99) "99+" else n.toString()) }
+                    }) { Icon(Icons.Filled.Notifications, "Alerts") }
+                }
+                IconButton(onClick = { nav.navigate("settings") }) { Icon(Icons.Filled.Settings, "Settings") }
+            }
         },
     )
 }
