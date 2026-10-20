@@ -1,4 +1,4 @@
-# Google Ads AI Health Monitor: server tests (rules, read-only guard, MySQL integration with SIMULATED dev data)
+# Server tests: Google Ads AI Health Monitor (rules, read-only guard, MySQL integration) + AI Cost & Usage Manager (budget gate, caps, warnings). SIMULATED dev data only.
 name: Server tests
 on:
   push:
@@ -24,7 +24,7 @@ jobs:
           coverage: none
           ini-values: opcache.jit=disable
       - name: PHP syntax
-        run: for f in server/lib/gads_*.php server/api/gads_*.php server/tests/*.php; do php -l "$f"; done
+        run: for f in server/lib/*.php server/api/*.php server/tests/*.php; do php -l "$f"; done
       - name: Read-only guard
         run: php server/tests/gads_readonly_check.php
       - name: Rule engine
@@ -36,3 +36,10 @@ jobs:
           TEST_DB_USER: root
           TEST_DB_PASS: testpass
         run: php server/tests/gads_integration_test.php
+      - name: AI Cost & Usage (MySQL, simulated data)
+        env:
+          TEST_DB_HOST: 127.0.0.1
+          TEST_DB_NAME: mfc_test
+          TEST_DB_USER: root
+          TEST_DB_PASS: testpass
+        run: php server/tests/cost_test.php

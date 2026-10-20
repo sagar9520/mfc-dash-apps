@@ -301,10 +301,12 @@ data class AlertItem(
 ) {
     val isHealth get() = rule.startsWith("health")
     val isGads get() = rule.startsWith("gah_")
+    val isCost get() = rule.startsWith("cost_")
     /** Notification / card tap: health alert -> us issue ki screen; Google Ads monitor alert -> us alert ki screen. */
     val route get() = when {
         isHealth -> issueId?.let { "health/issue/$it" } ?: "health"
         isGads -> gaAlertId?.let { "gads/alert/$it" } ?: "gads"
+        isCost -> "cost"
         else -> "alerts"
     }
     val open get() = resolvedAt == null

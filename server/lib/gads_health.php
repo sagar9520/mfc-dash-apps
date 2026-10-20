@@ -573,7 +573,18 @@ function ga_ai(string $system, string $user, int $maxTokens = 1500): ?string
     $used = kv_get('ga_ai_day') === $day ? (int)(kv_get('ga_ai_used') ?? 0) : 0;
     if ($used >= max(1, (int)ga_set('ga_ai_cap'))) { kv_set('ga_ai_last_error', gmdate('Y-m-d H:i') . ' daily AI cap reached'); return null; }
     kv_set('ga_ai_day', $day); kv_set('ga_ai_used', (string)($used + 1));
-    return h_ai_call($system, $user, $maxTokens);
+    // AI Cost & Usage: ga_ai_ctx() se module 'gads' + alert ref; critical alert ka pehla AI = critical (reserve)
+    $prev = cost_ctx(array_merge(['module' => 'gads', 'task' => 'ads_ai'], ga_ai_ctx()));
+    try { return h_ai_call($system, $user, $maxTokens); } finally { cost_ctx($prev); ga_ai_ctx([]); }
+}
+
+/** Agle ga_ai() call ka hisaab kis kaam me jaaye (task, ref, critical). */
+function ga_ai_ctx(?array $set = null): array
+{
+    static $c = [];
+    $prev = $c;
+    if ($set !== null) $c = $set;
+    return $prev;
 }
 
 const GA_AI_SYSTEM = "You are a read-only Google Ads performance analyst for a mobile app publisher. You only explain and recommend; you cannot and must not change anything.\n"
@@ -612,6 +623,7 @@ function ga_ai_investigate(PDO $pdo, int $id, ?int $runId = null): bool
         $ev['note'] = 'Asset rows have Google performance labels only; Google does not report independent asset-level CPI.';
     }
     $ev['recent_account_emails'] = h_q($pdo, 'SELECT kind, verified, LEFT(subject, 150) subject, received_at FROM ga_emails WHERE customer_id = ? ORDER BY received_at DESC LIMIT 5', [$al['customer_id']]);
+    ga_ai_ctx(['task' => 'alert_ai', 'ref' => 'GA-' . $id, 'critical' => ($al['level'] ?? '') === 'CRITICAL']);
     $txt = ga_ai(GA_AI_SYSTEM, "Investigate this alert. Evidence JSON:\n" . h_json($ev));
     if ($txt === null) {
         h_x($pdo, 'UPDATE ga_alerts SET ai_err = ? WHERE id = ?', [h_cut((string)(kv_get('ga_ai_last_error') ?? kv_get('ai_last_error') ?? 'AI call failed'), 300), $id]);
@@ -667,6 +679,7 @@ function ga_daily_review(PDO $pdo, string $trigger = 'scheduled', string $by = '
     }
     $ai = null;
     if ($acc && ga_ai_on()) {
+        ga_ai_ctx(['task' => 'daily_review', 'ref' => 'review ' . gmdate('Y-m-d')]);
         $r = ga_ai(GA_AI_SYSTEM . "\nFor this portfolio review reply JSON: {\"accounts\":[{\"cid\":\"...\",\"recommendations\":[\"manual step\"],\"recommendations_hi\":[\"...\"]}],\"overall\":\"2 sentences, no cross-currency totals\"}",
             "Daily portfolio review. Each account is a separate company and currency. Data:\n" . h_json($acc), 2000);
         if ($r !== null) $ai = json_decode(trim(preg_replace('/^```(json)?|```$/m', '', $r)), true) ?: ['overall' => h_cut($r, 2000)];

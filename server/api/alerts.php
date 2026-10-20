@@ -26,6 +26,7 @@
 declare(strict_types=1);
 require_once __DIR__ . '/../lib/common.php';
 @require_once __DIR__ . '/../lib/agg.php';
+if (is_file(__DIR__ . '/../lib/cost.php')) require_once __DIR__ . '/../lib/cost.php';   // AI Cost & Usage (budget + hisaab)
 
 // ---------------------------------------------------------------- thresholds (yahan badal sakte ho)
 const AL_RECOMPUTE_SEC   = 120;   // app ke request par itna purana ho to dobara compute (live monitor har minute poochta hai)
@@ -934,6 +935,7 @@ function al_ai_call(string $system, string $user, int $maxTokens, string $effort
 {
     $key = al_ai_key();
     if ($key === '') return null;
+    if (function_exists('cost_gate') && !cost_gate()) { kv_set('ai_last_error', gmdate('Y-m-d H:i') . ' paused by AI Cost & Usage: ' . cost_last_block()); return null; }
     $model = al_ai_model();
     $body = ['model' => $model, 'max_tokens' => $maxTokens, 'system' => $system, 'messages' => [['role' => 'user', 'content' => $user]], 'output_config' => ['effort' => $effort]];
     $headers = ['Content-Type: application/json', 'x-api-key: ' . $key, 'anthropic-version: 2023-06-01'];
@@ -942,11 +944,13 @@ function al_ai_call(string $system, string $user, int $maxTokens, string $effort
     [$code, $resp, $err] = http_json('POST', 'https://api.anthropic.com/v1/messages', json_encode($body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), $headers, 90);
     if ($code !== 200) {
         $j = json_decode($resp, true);
+        if (function_exists('cost_claude')) cost_claude(null, false);
         kv_set('ai_last_error', gmdate('Y-m-d H:i') . " HTTP $code: " . mb_substr((string)($j['error']['message'] ?? ($err ?: $resp)), 0, 300));
         return null;
     }
     $j = json_decode($resp, true);
     if (!is_array($j)) return null;
+    if (function_exists('cost_claude')) cost_claude($j, ($j['stop_reason'] ?? '') !== 'refusal', $model);
     if (($j['stop_reason'] ?? '') === 'refusal') { kv_set('ai_last_error', gmdate('Y-m-d H:i') . ' refusal'); return null; }
     $text = '';
     foreach ((array)($j['content'] ?? []) as $b) if (($b['type'] ?? '') === 'text') $text .= (string)$b['text'];
@@ -980,6 +984,9 @@ function al_ai_process(PDO $pdo, array $pending): int
         if (!$row || $row['ai'] !== '') continue;
         $row['metrics'] = json_decode((string)$row['metrics'], true) ?: [];
         $row['level'] = (int)$row['level'];
+        // urgent alert ka AI = critical (reserve se chalta hai); brief aur baaki = non-critical (budget / daily cap)
+        if (function_exists('cost_ctx')) cost_ctx(['module' => 'analytics', 'pkg' => (string)$row['pkg'], 'task' => ($p['kind'] ?? '') === 'brief' ? 'brief' : 'alert_explain',
+            'ref' => ($p['kind'] ?? '') === 'brief' ? 'brief ' . $ctx['today'] : 'AL-' . (int)$row['id'] . ' ' . $row['rule'], 'critical' => ($p['kind'] ?? '') !== 'brief' && $row['level'] >= 3]);
         $txt = ($p['kind'] ?? '') === 'brief' ? al_ai_brief($row['metrics']) : al_ai_explain($row, $ctx);
         if ($txt === null) continue;
         $pdo->prepare('UPDATE app_alerts SET ai = ? WHERE id = ?')->execute([mb_substr($txt, 0, 3000), (int)$row['id']]);

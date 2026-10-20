@@ -14,7 +14,7 @@ $T = sys_get_temp_dir() . '/mfc_gads_test_' . getmypid();
 $M = "$T/mfc_dash";
 foreach (['lib', 'api', 'setup'] as $d) @mkdir("$M/$d", 0777, true);
 copy("$src/tests/stub_common.php", "$M/lib/common.php");
-foreach (['lib/health.php', 'lib/gads_rules.php', 'lib/gads_health.php', 'api/gads_health.php', 'api/gads_ingest.php', 'setup/gads_health_script.js'] as $f) copy("$src/$f", "$M/$f");
+foreach (['lib/cost.php', 'lib/health.php', 'lib/gads_rules.php', 'lib/gads_health.php', 'api/gads_health.php', 'api/gads_ingest.php', 'setup/gads_health_script.js'] as $f) copy("$src/$f", "$M/$f");
 require "$M/lib/gads_health.php";
 
 $fail = 0; $n = 0;

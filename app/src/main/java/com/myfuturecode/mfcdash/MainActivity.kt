@@ -37,6 +37,8 @@ class MainActivity : ComponentActivity() {
         val route = i.getStringExtra("route")?.also { i.removeExtra("route") }
             ?: i.data?.takeIf { it.scheme == "mfcdash" && it.host == "health" }?.let { u -> healthRoute(u.pathSegments).also { i.data = null } }
             ?: i.data?.takeIf { it.scheme == "mfcdash" && it.host == "gads" }?.let { u -> gadsRoute(u.pathSegments).also { i.data = null } }
+            ?: i.data?.takeIf { it.scheme == "mfcdash" && it.host == "cost" }?.let { u ->
+                u.pathSegments.firstOrNull()?.takeIf { it.matches(Regex("[a-z]+")) }?.let { "cost/t/$it" } ?: "cost" }.also { i.data = null }
             ?: return
         (application as App).pendingRoute.value = route
     }

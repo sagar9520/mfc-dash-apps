@@ -15,6 +15,7 @@
  */
 declare(strict_types=1);
 require_once __DIR__ . '/common.php';
+require_once __DIR__ . '/cost.php';     // AI Cost & Usage Manager: har paid call ka hisaab + budget
 
 const H_EVERY_CRITICAL = 900;      // 15 min
 const H_EVERY_ERRORS   = 3600;     // har ghante
@@ -292,6 +293,7 @@ function h_schedule(PDO $pdo, callable $log): array
         $q[] = h_run_new($pdo, $type);
     }
     h_fix_watchdog($pdo);
+    try { cost_tick($pdo); } catch (Throwable $e) { $log('cost ERROR: ' . $e->getMessage()); }
     if ((int)$loc->format('G') >= H_SUMMARY_HOUR && kv_get('h_summary_day') !== $today) {
         kv_set('h_summary_day', $today);
         try { h_daily_summary($pdo); } catch (Throwable $e) { $log('summary ERROR: ' . $e->getMessage()); }
@@ -916,16 +918,19 @@ function h_ai_call(string $system, string $user, int $maxTokens = 3000): ?string
 {
     $key = h_ai_key();
     if ($key === '') return null;
+    // budget / daily cap / circuit breaker (module + task cost_ctx() se: health, gads, research)
+    if (!cost_gate()) { kv_set('ai_last_error', gmdate('Y-m-d H:i') . ' paused by AI Cost & Usage: ' . cost_last_block()); return null; }
     $model = h_ai_model();
     $body = ['model' => $model, 'max_tokens' => $maxTokens, 'system' => $system, 'messages' => [['role' => 'user', 'content' => $user]], 'output_config' => ['effort' => 'medium']];
     $headers = ['Content-Type: application/json', 'x-api-key: ' . $key, 'anthropic-version: 2023-06-01'];
     if (preg_match('/^claude-(opus-5|fable|sonnet-5-5)/', $model)) { $body['fallbacks'] = 'default'; $headers[] = 'anthropic-beta: server-side-fallback-2026-07-01'; }
     [$code, $resp, $err] = http_json('POST', 'https://api.anthropic.com/v1/messages', h_json($body), $headers, 120);
-    if ($code !== 200) { kv_set('ai_last_error', gmdate('Y-m-d H:i') . " HTTP $code (health)"); return null; }
-    $j = json_decode($resp, true);
-    if (!is_array($j) || ($j['stop_reason'] ?? '') === 'refusal') return null;
+    $j = json_decode((string)$resp, true);
+    if ($code !== 200) { cost_claude(null, false); kv_set('ai_last_error', gmdate('Y-m-d H:i') . " HTTP $code (health)"); return null; }
+    if (!is_array($j) || ($j['stop_reason'] ?? '') === 'refusal') { cost_claude(is_array($j) ? $j : null, false, $model); return null; }
     $t = '';
     foreach ((array)($j['content'] ?? []) as $b) if (($b['type'] ?? '') === 'text') $t .= (string)$b['text'];
+    cost_claude($j, trim($t) !== '', $model);
     return trim($t) ?: null;
 }
 
@@ -947,6 +952,9 @@ function h_job_investigate(PDO $pdo, HRun $run, int $issueId): void
         'metrics' => json_decode((string)$i['metrics'], true), 'stack_trace' => h_cut((string)$i['stack'], 12000), 'other_recent_tracker_crashes' => $related,
         'has_source_repo' => (bool)h_q1($pdo, 'SELECT repo_verified FROM health_apps WHERE pkg = ?', [$i['pkg']])];
     $run->stage('Claude root-cause analysis');
+    // naya P0/P1 crash ka pehla auto analysis = critical (sasta, zaroori); manual "Investigate" button = non-critical (budget / daily cap)
+    cost_ctx(['module' => 'health', 'pkg' => (string)$i['pkg'], 'task' => 'investigate', 'ref' => 'ISS-' . $issueId,
+        'critical' => ($run->row['trigger_type'] ?? '') !== 'manual' && in_array($i['severity'] ?? '', ['P0', 'P1'], true)]);
     $sys = 'You are a senior Android engineer doing crash triage for a small Android app company. You only see production evidence (no source code). '
         . 'Be precise and honest: state what is proven by the evidence and what is a hypothesis. Reply with ONE JSON object only, no markdown.';
     $user = "Analyse this production issue and return JSON with keys: root_cause (2-4 sentences), confidence (0..1, how sure you are of the root cause from evidence alone), "
@@ -1014,6 +1022,9 @@ function h_fix_start(PDO $pdo, int $issueId, string $by): int
     if ((int)h_q1($pdo, "SELECT COUNT(*) FROM health_fixes WHERE issue_id = ? AND finished_at IS NULL", [$issueId]) > 0) throw new RuntimeException('a fix is already running');
     $rc = h_repo_cfg($i['pkg']);
     if (!$rc) throw new RuntimeException('repo not set in health_config.php');
+    // AI fix / Naya kaam = non-critical: module budget ya daily fix cap khatam to dispatch nahi (attempt bhi nahi khata)
+    if (!cost_gate('health', false, $i['type'] === 'TASK' ? 'task' : 'ai_fix')) throw new RuntimeException('paused by AI Cost & Usage: ' . cost_last_block());
+    cost_fix_count(true);
     $attempt = (int)$i['attempts'] + 1;
     $branch = 'ai-fix/ISS-' . $issueId . '-a' . $attempt;
     h_x($pdo, 'INSERT INTO health_fixes (issue_id, attempt, status, repo, branch, started_at, updated_at) VALUES (?,?,?,?,?,UTC_TIMESTAMP(),UTC_TIMESTAMP())',
@@ -1063,6 +1074,10 @@ function h_fix_finish(PDO $pdo, int $fixId, bool $success, string $reason, bool 
     $iid = (int)$f['issue_id'];
     $i = $pdo->query('SELECT * FROM health_issues WHERE id = ' . $iid)->fetch();
     $name = h_app_name($pdo, (string)$i['pkg']);
+    // GitHub Actions minutes ka andaza (fix job ka chalna); public repo par rate 0 rakho (AI Cost settings)
+    $mins = max(1, (int)ceil((time() - strtotime($f['started_at'] . ' UTC')) / 60));
+    cost_log('health', 'github_actions', $mins * (float)cost_settings()['actions_usd_min'], ['pkg' => (string)$i['pkg'], 'task' => $i['type'] === 'TASK' ? 'task' : 'ai_fix',
+        'ref' => 'FIX-' . $fixId, 'units' => $mins, 'note' => "$mins min worker (estimate)", 'ukey' => 'actions|fix|' . $fixId]);
     if ($success) {
         h_issue_status($pdo, $iid, 'READY_FOR_REVIEW', "fix #{$f['attempt']} verified");
         return;

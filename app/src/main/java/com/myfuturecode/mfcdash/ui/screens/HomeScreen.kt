@@ -16,7 +16,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import com.myfuturecode.mfcdash.data.*
+import com.myfuturecode.mfcdash.ui.CostVm
 import com.myfuturecode.mfcdash.ui.DashVm
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.myfuturecode.mfcdash.ui.UiState
 import com.myfuturecode.mfcdash.ui.components.*
 import com.myfuturecode.mfcdash.ui.theme.extra
@@ -29,7 +31,7 @@ import com.myfuturecode.mfcdash.util.*
  * Filters: period, app, aur app cards ka sort / show.
  */
 @Composable
-fun HomeScreen(vm: DashVm, st: UiState, nav: NavHostController) {
+fun HomeScreen(vm: DashVm, st: UiState, nav: NavHostController, cvm: CostVm? = null) {
     var sort by remember { mutableStateOf("profit") }
     var show by remember { mutableStateOf("") }
     TabScreen("MFC Dashboard", vm, st, nav, filters = { v ->
@@ -86,6 +88,21 @@ fun HomeScreen(vm: DashVm, st: UiState, nav: NavHostController) {
         AlertRow("G", "Google Ads AI Health Monitor".t(),
             if (gOpen.isNotEmpty()) tf("%s open Google Ads alerts · accounts, spend, CPI, policy", gOpen.size) else "Accounts, suspensions, spend, CPI, ROAS, creatives · read-only".t(),
             if (gCrit > 0) ex.bad else if (gOpen.isNotEmpty()) ex.warn else MaterialTheme.colorScheme.primary) { nav.navigate("gads") }
+        Spacer(Modifier.height(8.dp))
+        // ---- AI Cost & Usage (alag module): mahine ka kharcha / budget, forecast
+        if (cvm != null) {
+            val cs by cvm.s.collectAsStateWithLifecycle()
+            LaunchedEffect(Unit) { if (cs.view("month") == null) cvm.load("month") }
+            val c = cs.view("month")
+            val cp = c?.dn("pct")
+            val r = c?.d("inr_per_usd", 95.0) ?: 95.0
+            val pausedN = c?.arr("modules")?.let { a -> (0 until a.length()).count { a.optJSONObject(it)?.b("paused") == true } } ?: 0
+            AlertRow("₹", "AI Cost & Usage".t(),
+                if (c == null) "Monthly AI cost per module, app and task · budgets and limits".t()
+                else tf("This month %s of %s (%s) · forecast %s", inr(c.d("month_usd") * r), inr(c.d("budget_usd") * r), if (cp == null) "–" else pct(cp, 0), inr(c.d("forecast_usd") * r)) +
+                    (if (pausedN > 0) " · " + tf("%s module(s) paused", pausedN) else ""),
+                when { cp == null -> MaterialTheme.colorScheme.primary; cp >= 0.9 || pausedN > 0 -> ex.bad; cp >= 0.7 -> ex.warn; else -> MaterialTheme.colorScheme.primary }) { nav.navigate("cost") }
+        }
         Spacer(Modifier.height(12.dp))
 
         // ---- Active now

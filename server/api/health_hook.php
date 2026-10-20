@@ -65,6 +65,13 @@ if ($action === 'step') {
     $status = in_array($in['status'] ?? '', ['running', 'ok', 'fail'], true) ? $in['status'] : 'running';
     $d = (array)($in['data'] ?? []);
     $detail = h_cut((string)($in['detail'] ?? ''), 2000);
+    // Claude Code ka apna hisaab (stream-json "result" event: total_cost_usd) -> AI Cost & Usage (worker alag repo-secret key use karta hai)
+    if (isset($d['claude_cost_usd']) && is_numeric($d['claude_cost_usd'])) {
+        cost_log('health', 'claude_code', (float)$d['claude_cost_usd'], ['pkg' => (string)$i['pkg'], 'task' => $i['type'] === 'TASK' ? 'task' : 'ai_fix', 'ref' => 'FIX-' . $fixId,
+            'model' => h_cut((string)($d['claude_model'] ?? ''), 60), 'in' => (int)($d['claude_in_tokens'] ?? 0), 'out' => (int)($d['claude_out_tokens'] ?? 0),
+            'cache_r' => (int)($d['claude_cache_read'] ?? 0), 'cache_w' => (int)($d['claude_cache_write'] ?? 0), 'units' => (int)($d['claude_turns'] ?? 0),
+            'ok' => $status !== 'fail', 'note' => (int)($d['claude_turns'] ?? 0) . ' turns (Claude Code estimate)', 'ukey' => 'cc|fix|' . $fixId]);
+    }
     $set = ['updated_at = UTC_TIMESTAMP()']; $p = [];
     $add = function (string $col, $v) use (&$set, &$p) { $set[] = "$col = ?"; $p[] = $v; };
     switch ($step) {

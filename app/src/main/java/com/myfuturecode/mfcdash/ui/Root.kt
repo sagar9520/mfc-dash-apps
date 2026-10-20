@@ -33,6 +33,7 @@ import com.myfuturecode.mfcdash.notify.Notify
 import com.myfuturecode.mfcdash.ui.screens.*
 import com.myfuturecode.mfcdash.ui.screens.health.*
 import com.myfuturecode.mfcdash.ui.screens.gads.*
+import com.myfuturecode.mfcdash.ui.screens.cost.*
 import com.myfuturecode.mfcdash.App
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.myfuturecode.mfcdash.util.t
@@ -61,6 +62,8 @@ fun Root(vm: DashVm) {
     LaunchedEffect(hvm) { hvm.msg.collect { snack.showSnackbar(it) } }
     val gvm: GadsVm = viewModel(factory = GadsVm.factory(ctx0.applicationContext as App))
     LaunchedEffect(gvm) { gvm.msg.collect { snack.showSnackbar(it) } }
+    val cvm: CostVm = viewModel(factory = CostVm.factory(ctx0.applicationContext as App))
+    LaunchedEffect(cvm) { cvm.msg.collect { snack.showSnackbar(it) } }
 
     // Android 13+: notification ki permission (ek baar poochho)
     val ctx = LocalContext.current
@@ -90,14 +93,14 @@ fun Root(vm: DashVm) {
             }
         },
     ) { pad ->
-        Box(Modifier.padding(pad)) { AppNav(nav, vm, st, hvm, gvm) }
+        Box(Modifier.padding(pad)) { AppNav(nav, vm, st, hvm, gvm, cvm) }
     }
 }
 
 @Composable
-private fun AppNav(nav: NavHostController, vm: DashVm, st: UiState, hvm: HealthVm, gvm: GadsVm) {
+private fun AppNav(nav: NavHostController, vm: DashVm, st: UiState, hvm: HealthVm, gvm: GadsVm, cvm: CostVm) {
     NavHost(nav, startDestination = "home") {
-        composable("home") { HomeScreen(vm, st, nav) }
+        composable("home") { HomeScreen(vm, st, nav, cvm) }
         composable("money") { MoneyScreen(vm, st, nav) }
         composable("users") { UsersScreen(vm, st, nav) }
         composable("ads") { AdsScreen(vm, st, nav) }
@@ -138,6 +141,11 @@ private fun AppNav(nav: NavHostController, vm: DashVm, st: UiState, hvm: HealthV
         }
         composable("gads/run/{id}", arguments = listOf(navArgument("id") { type = NavType.LongType })) {
             GadsRunScreen(gvm, nav, it.arguments?.getLong("id") ?: 0L)
+        }
+        // AI Cost & Usage Manager (kharcha, budget, limits)
+        composable("cost") { CostScreen(cvm, nav, "overview") }
+        composable("cost/t/{tab}", arguments = listOf(navArgument("tab") { type = NavType.StringType })) {
+            CostScreen(cvm, nav, it.arguments?.getString("tab") ?: "overview")
         }
         composable("campaign/{idx}", arguments = listOf(navArgument("idx") { type = NavType.IntType })) {
             CampaignScreen(vm, st, nav, it.arguments?.getInt("idx") ?: 0)

@@ -180,5 +180,9 @@ class Api(private val prefs: Prefs) {
         getJson("api/gads_health.php?view=$view" + hq(params).let { if (it.isEmpty()) "" else "&$it" })
     suspend fun gAction(action: String, fields: Map<String, String> = emptyMap()): JSONObject = postForm("api/gads_health.php?action=$action", fields)
 
+    // ---- api/cost.php (AI Cost & Usage Manager: kharcha, budget, limits)
+    suspend fun cGet(range: String): JSONObject = getJson("api/cost.php?range=$range")
+    suspend fun cAction(action: String, fields: Map<String, String> = emptyMap()): JSONObject = postForm("api/cost.php?action=$action", fields)
+
     fun logout() { jar.clear() }
 }
