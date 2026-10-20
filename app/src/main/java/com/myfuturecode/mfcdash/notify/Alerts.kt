@@ -38,7 +38,7 @@ object Notify {
     const val CH_URGENT = "alerts_urgent"
     const val CH_WARN = "alerts_warn"
     const val CH_INFO = "alerts_info"
-    private const val BRAND = 0xFF4A1FC4.toInt()
+    private val BRAND = 0xFF4A1FC4.toInt()
 
     fun channels(ctx: Context) {
         if (Build.VERSION.SDK_INT < 26) return
@@ -83,7 +83,7 @@ object Notify {
             .setPriority(when (a.level) { 3 -> NotificationCompat.PRIORITY_MAX; 2 -> NotificationCompat.PRIORITY_DEFAULT; else -> NotificationCompat.PRIORITY_LOW })
         if (a.level == 3) b.setDefaults(NotificationCompat.DEFAULT_ALL).setCategory(NotificationCompat.CATEGORY_ALARM)
         if (a.appName.isNotBlank()) b.setSubText(a.appName)
-        try { NotificationManagerCompat.from(ctx).notify((a.id % Int.MAX_VALUE).toInt(), b.build()) } catch (_: SecurityException) {}
+        try { NotificationManagerCompat.from(ctx).notify((a.id % Int.MAX_VALUE).toInt(), b.build()) } catch (e: SecurityException) { }
     }
 }
 
