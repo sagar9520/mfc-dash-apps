@@ -29,6 +29,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.myfuturecode.mfcdash.data.Health
+import com.myfuturecode.mfcdash.util.t
 import com.myfuturecode.mfcdash.ui.theme.BrandGradient
 import com.myfuturecode.mfcdash.ui.theme.extra
 import com.myfuturecode.mfcdash.util.num
@@ -134,7 +135,7 @@ fun Hairline() { HorizontalDivider(color = MaterialTheme.colorScheme.outline, th
 
 /** Simple table: header + rows; pehla column text (weight 1.4), baaki right-aligned. Horizontal scroll agar zyada columns. */
 @Composable
-fun Table(headers: List<String>, rows: List<List<String>>, empty: String = "Koi data nahi", firstWeight: Float = 1.6f, onRow: ((Int) -> Unit)? = null, minColWidth: Dp = 64.dp) {
+fun Table(headers: List<String>, rows: List<List<String>>, empty: String = "No data".t(), firstWeight: Float = 1.6f, onRow: ((Int) -> Unit)? = null, minColWidth: Dp = 64.dp) {
     if (rows.isEmpty()) { Text(empty, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 8.dp)); return }
     val wide = headers.size > 4
     val scroll = rememberScrollState()
@@ -186,7 +187,7 @@ fun BarLineChart(
 ) {
     val grid = MaterialTheme.colorScheme.outline
     val n = bars.size
-    if (n == 0) { Text("Graph ke liye data nahi", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant); return }
+    if (n == 0) { Text("No data for the chart".t(), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant); return }
     val maxV = max(bars.maxOrNull() ?: 0.0, line?.maxOrNull() ?: 0.0).takeIf { it > 0 } ?: 1.0
     val max2 = (line2?.maxOrNull() ?: 0.0).takeIf { it > 0 } ?: 1.0
     Column(modifier.fillMaxWidth()) {

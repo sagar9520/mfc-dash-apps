@@ -135,7 +135,7 @@ class Api(private val prefs: Prefs) {
 
     // ---- api/alerts.php (smart alerts). Upload na ho (404) to null.
     suspend fun alerts(limit: Int = 150, open: Boolean = false): AlertsData? =
-        try { AlertsData.parse(getJson("api/alerts.php?since=0&limit=$limit" + (if (open) "&open=1" else ""))) }
+        try { AlertsData.parse(getJson("api/alerts.php?since=0&limit=$limit&lang=" + prefs.lang + (if (open) "&open=1" else ""))) }
         catch (e: ApiException) { if (e.unauthorized) throw e else null }
     suspend fun alertsRead(ids: List<Long>? = null) { postForm("api/alerts.php?action=read", if (ids == null) mapOf("all" to "1") else mapOf("ids" to ids.joinToString(","))) }
     suspend fun alertResolve(id: Long) { postForm("api/alerts.php?action=resolve", mapOf("id" to id.toString())) }

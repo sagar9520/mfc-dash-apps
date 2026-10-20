@@ -31,11 +31,12 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.myfuturecode.mfcdash.notify.Notify
 import com.myfuturecode.mfcdash.ui.screens.*
+import com.myfuturecode.mfcdash.util.t
 
 data class Tab(val route: String, val label: String, val icon: ImageVector)
 val TABS = listOf(
     Tab("home", "Home", Icons.Filled.Home),
-    Tab("money", "Paisa", Icons.Filled.CurrencyRupee),
+    Tab("money", "Money", Icons.Filled.CurrencyRupee),
     Tab("users", "Users", Icons.Filled.Group),
     Tab("ads", "Ads", Icons.Filled.Campaign),
     Tab("live", "Live", Icons.Filled.Bolt),
@@ -74,7 +75,7 @@ fun Root(vm: DashVm) {
                     NavigationBarItem(
                         selected = route == t.route,
                         onClick = { nav.navigate(t.route) { popUpTo("home") { saveState = true }; launchSingleTop = true; restoreState = true } },
-                        icon = { Icon(t.icon, t.label) }, label = { Text(t.label) },
+                        icon = { Icon(t.icon, t.label.t()) }, label = { Text(t.label.t()) },
                     )
                 }
             }
@@ -114,10 +115,10 @@ fun TopBar(title: String, vm: DashVm, st: UiState, nav: NavHostController, back:
                 Text(title, style = MaterialTheme.typography.titleLarge)
                 val d = st.data
                 val sub = when {
-                    st.loading && d == null -> "Load ho raha hai…"
-                    d == null -> "Data nahi"
-                    else -> "Updated " + com.myfuturecode.mfcdash.util.agoText(st.lastOk) + (if (d.today) " · auto 20 sec" else "") +
-                        (if (d.aggLagSec > 300) " · data ${(d.aggLagSec / 60).toInt()} min purana" else "")
+                    st.loading && d == null -> "Loading…".t()
+                    d == null -> "No data".t()
+                    else -> "Updated".t() + " " + com.myfuturecode.mfcdash.util.agoText(st.lastOk) + (if (d.today) " · auto 20 sec" else "") +
+                        (if (d.aggLagSec > 300) " · " + com.myfuturecode.mfcdash.util.tf("data %s min old", (d.aggLagSec / 60).toInt()) else "")
                 }
                 Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }

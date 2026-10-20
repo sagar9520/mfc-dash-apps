@@ -44,14 +44,14 @@ object Notify {
         if (Build.VERSION.SDK_INT < 26) return
         val nm = ctx.getSystemService(NotificationManager::class.java) ?: return
         nm.createNotificationChannel(NotificationChannel(CH_URGENT, "Urgent alerts", NotificationManager.IMPORTANCE_HIGH).apply {
-            description = "Data band, crash, campaign loss — turant dekhna"
+            description = "Data stopped, crash, campaign loss: look right away"
             enableVibration(true); vibrationPattern = longArrayOf(0, 400, 200, 400, 200, 600); enableLights(true); lightColor = BRAND
         })
-        nm.createNotificationChannel(NotificationChannel(CH_WARN, "Dhyan do", NotificationManager.IMPORTANCE_DEFAULT).apply {
-            description = "Issue hai par abhi fix zaroori nahi"
+        nm.createNotificationChannel(NotificationChannel(CH_WARN, "Watch", NotificationManager.IMPORTANCE_DEFAULT).apply {
+            description = "There is an issue, no fix needed right now"
         })
         nm.createNotificationChannel(NotificationChannel(CH_INFO, "Info", NotificationManager.IMPORTANCE_LOW).apply {
-            description = "Roz ka brief, records, nayi campaign"
+            description = "Daily brief, records, new campaign"
         })
     }
 
@@ -68,14 +68,14 @@ object Notify {
         }
         val pi = PendingIntent.getActivity(ctx, (a.id % Int.MAX_VALUE).toInt(), intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val big = buildString {
-            append(a.body)
+            append(a.bodyL)
             if (a.ai.isNotBlank()) append("\n\nClaude: ").append(a.ai)
         }
         val b = NotificationCompat.Builder(ctx, ch)
             .setSmallIcon(R.drawable.ic_stat_alert)
             .setColor(BRAND)
-            .setContentTitle(prefix + a.title)
-            .setContentText(a.body.lineSequence().firstOrNull() ?: "")
+            .setContentTitle(prefix + a.titleL)
+            .setContentText(a.bodyL.lineSequence().firstOrNull() ?: "")
             .setStyle(NotificationCompat.BigTextStyle().bigText(big))
             .setContentIntent(pi)
             .setAutoCancel(true)

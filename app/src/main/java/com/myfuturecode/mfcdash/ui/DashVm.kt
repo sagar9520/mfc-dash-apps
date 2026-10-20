@@ -12,6 +12,10 @@ import com.myfuturecode.mfcdash.data.DashData
 import com.myfuturecode.mfcdash.data.ExtraData
 import com.myfuturecode.mfcdash.data.Prefs
 import com.myfuturecode.mfcdash.notify.AlertsSync
+import com.myfuturecode.mfcdash.notify.MonitorService
+import com.myfuturecode.mfcdash.util.t
+import com.myfuturecode.mfcdash.util.tf
+import com.myfuturecode.mfcdash.util.Lang
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -39,13 +43,16 @@ data class UiState(
     val lastOk: Long = 0L,
     val roasTarget: Double = 1.5,
     val notifyUrgent: Boolean = true, val notifyWarn: Boolean = true, val notifyInfo: Boolean = true, val checkMinutes: Int = 15,
+    val appFilter: String? = null,        // null = sab apps; pkg = sirf us app ka data (har tab par)
+    val lang: String = "en",
+    val liveMonitor: Boolean = true,
 )
 
 class DashVm(private val app: App) : ViewModel() {
     private val api: Api = app.api
     private val prefs: Prefs = app.prefs
     private val _s = MutableStateFlow(UiState(loggedIn = prefs.hasLogin, range = prefs.range, roasTarget = prefs.roasTarget,
-        notifyUrgent = prefs.notifyUrgent, notifyWarn = prefs.notifyWarn, notifyInfo = prefs.notifyInfo, checkMinutes = prefs.checkMinutes))
+        notifyUrgent = prefs.notifyUrgent, notifyWarn = prefs.notifyWarn, notifyInfo = prefs.notifyInfo, checkMinutes = prefs.checkMinutes, lang = prefs.lang, liveMonitor = prefs.liveMonitor))
     val s: StateFlow<UiState> = _s
     /** Notification tap se aayi screen ("alerts"); Root consume karke null kar deta hai. */
     val pendingRoute: StateFlow<String?> = app.pendingRoute
@@ -67,10 +74,11 @@ class DashVm(private val app: App) : ViewModel() {
                 _s.update { it.copy(loggedIn = true, loading = false) }
                 onDone(null)
                 AlertsSync.schedule(app, prefs.checkMinutes)
+                MonitorService.sync(app)
                 refresh(); startAuto()
             } catch (e: Exception) {
                 _s.update { it.copy(loading = false) }
-                onDone(e.message ?: "Login nahi hua")
+                onDone(e.message ?: "Login failed".t())
             }
         }
     }
@@ -78,9 +86,10 @@ class DashVm(private val app: App) : ViewModel() {
     fun logout() {
         autoJob?.cancel()
         AlertsSync.cancel(app)
+        MonitorService.stop(app)
         api.logout(); prefs.clearLogin()
         _s.value = UiState(loggedIn = false, range = prefs.range, roasTarget = prefs.roasTarget,
-            notifyUrgent = prefs.notifyUrgent, notifyWarn = prefs.notifyWarn, notifyInfo = prefs.notifyInfo, checkMinutes = prefs.checkMinutes)
+            notifyUrgent = prefs.notifyUrgent, notifyWarn = prefs.notifyWarn, notifyInfo = prefs.notifyInfo, checkMinutes = prefs.checkMinutes, lang = prefs.lang, liveMonitor = prefs.liveMonitor)
     }
 
     fun setRange(r: String, from: String? = null, to: String? = null) {
@@ -90,6 +99,19 @@ class DashVm(private val app: App) : ViewModel() {
     }
 
     fun setRoasTarget(v: Double) { prefs.roasTarget = v; _s.update { it.copy(roasTarget = v) } }
+
+    /** Har tab ka app filter (All apps / ek app). Ek app = data.php?app=<pkg> (loadApp). */
+    fun setAppFilter(pkg: String?) {
+        _s.update { it.copy(appFilter = pkg) }
+        if (pkg != null) loadApp(pkg, force = true)
+    }
+
+    fun setLang(code: String) {
+        prefs.lang = code
+        Lang.code = code
+        _s.update { it.copy(lang = code) }
+        refreshAlerts()   // server ko nayi bhasha batao (AI explanations isi me aayengi)
+    }
 
     fun refresh() {
         val st = _s.value
@@ -105,8 +127,8 @@ class DashVm(private val app: App) : ViewModel() {
             } catch (e: Exception) {
                 val unauthorized = (e as? ApiException)?.unauthorized == true
                 // unauthorized = dobara login bhi fail (password badla?) -> login screen
-                if (unauthorized) { prefs.clearLogin(); api.logout(); AlertsSync.cancel(app) }
-                _s.update { it.copy(loading = false, error = e.message ?: "Data nahi aaya", loggedIn = !unauthorized) }
+                if (unauthorized) { prefs.clearLogin(); api.logout(); AlertsSync.cancel(app); MonitorService.stop(app) }
+                _s.update { it.copy(loading = false, error = e.message ?: "No data received".t(), loggedIn = !unauthorized) }
             }
         }
     }
@@ -134,7 +156,7 @@ class DashVm(private val app: App) : ViewModel() {
 
     fun testNotification(onDone: (String?) -> Unit) {
         viewModelScope.launch {
-            try { api.alertTest(); refreshAlerts(); onDone(null) } catch (e: Exception) { onDone(e.message ?: "Test nahi hua") }
+            try { api.alertTest(); refreshAlerts(); onDone(null) } catch (e: Exception) { onDone(e.message ?: "Test failed".t()) }
         }
     }
 
@@ -146,26 +168,34 @@ class DashVm(private val app: App) : ViewModel() {
                 val r = api.alertsCompute().optJSONObject("result")
                 refreshAlerts()
                 val n = r?.optInt("new", 0) ?: 0
-                onDone(if (n > 0) "$n naye alert" else "Koi naya alert nahi — sab theek")
-            } catch (e: Exception) { onDone(e.message ?: "Check nahi hua") }
+                onDone(if (n > 0) tf("%s new alerts", n) else "No new alert — all good".t())
+            } catch (e: Exception) { onDone(e.message ?: "Check failed".t()) }
             _s.update { it.copy(alertsBusy = false) }
         }
     }
 
-    fun setAiKey(key: String, model: String, onDone: (String?) -> Unit) {
+    fun setAiKey(key: String, model: String, onDone: (Boolean, String?) -> Unit) {
         viewModelScope.launch {
             _s.update { it.copy(alertsBusy = true) }
             try {
                 val j = api.aiKey(key.trim(), model)
                 refreshAlerts()
-                onDone(when {
-                    key.isBlank() -> "Claude AI band kar diya"
-                    j.optBoolean("test_ok") -> "Key sahi hai, Claude AI chalu ✅"
-                    else -> "Key save hui par test call fail: " + (j.optJSONObject("ai")?.optString("last_error") ?: "?")
-                })
-            } catch (e: Exception) { onDone(e.message ?: "Save nahi hua") }
+                when {
+                    key.isBlank() -> onDone(true, "Claude AI turned off".t())
+                    j.optBoolean("test_ok") -> onDone(true, "Key works, Claude AI is on ✅".t())
+                    else -> onDone(false, "Key saved but the test call failed: ".t() + (j.optJSONObject("ai")?.optString("last_error") ?: "?"))
+                }
+            } catch (e: Exception) { onDone(false, e.message ?: "Save failed".t()) }
             _s.update { it.copy(alertsBusy = false) }
         }
+    }
+
+    /** 24x7 monitor (foreground service, every minute). Also asks Android to exclude the app from battery optimisation. */
+    fun setLiveMonitor(on: Boolean) {
+        prefs.liveMonitor = on
+        _s.update { it.copy(liveMonitor = on) }
+        MonitorService.sync(app)
+        if (on) MonitorService.requestBatteryExempt(app)
     }
 
     fun setNotify(level: Int, on: Boolean) {
@@ -183,7 +213,7 @@ class DashVm(private val app: App) : ViewModel() {
     fun loadApp(pkg: String, force: Boolean = false) {
         val st = _s.value
         if (!force && st.appData.containsKey(pkg)) return
-        if (st.appLoading == pkg) return
+        if (st.appLoading != null) return
         viewModelScope.launch {
             _s.update { it.copy(appLoading = pkg) }
             try {

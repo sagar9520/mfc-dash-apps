@@ -1,5 +1,7 @@
 package com.myfuturecode.mfcdash.data
 
+import com.myfuturecode.mfcdash.util.Lang
+import com.myfuturecode.mfcdash.util.t
 import com.myfuturecode.mfcdash.util.*
 import org.json.JSONObject
 
@@ -129,6 +131,8 @@ data class CrashRow(val pkg: String, val ver: String, val error: String, val whe
 }
 data class PurchaseRow(val pkg: String, val ev: String, val plan: String, val n: Double, val amt: Double?) {
     val status get() = when (ev) { "purchase_start" -> "started"; "purchase_done" -> "paid"; "purchase_failed" -> "failed"; else -> ev }
+    /** Localized status (Started / Paid / Failed). */
+    val statusL get() = when (ev) { "purchase_start" -> "Started".t(); "purchase_done" -> "Paid".t(); "purchase_failed" -> "Failed".t(); else -> ev }
     companion object { fun of(j: JSONObject) = PurchaseRow(j.s("pkg"), j.s("ev"), j.s("plan"), j.d("n"), j.dn("amt")) }
 }
 data class VersionRow(val pkg: String, val ver: String, val users: Double) {
@@ -221,11 +225,12 @@ data class CpData(val from: String, val to: String, val rows: List<CpRow>, val d
 }
 
 fun cpFmtName(f: String) = when (f.uppercase()) {
-    "APP_OPEN" -> "App open"; "INTER_IMAGE" -> "Inter image"; "INTER_VIDEO" -> "Inter video"; "REWARDED" -> "Rewarded"; else -> f.ifBlank { "–" }
+    "APP_OPEN" -> "App open".t(); "INTER_IMAGE" -> "Inter image".t(); "INTER_VIDEO" -> "Inter video".t(); "REWARDED" -> "Rewarded".t(); else -> f.ifBlank { "–" }
 }
 
 /** App ka status label (research: har app ko ek nazar mein Profit / Theek / Loss). */
-enum class Health(val label: String) { PROFIT("Profit"), OK("Theek"), LOSS("Loss"), NONE("No spend") }
+enum class Health(private val en: String) { PROFIT("Profit"), OK("OK"), LOSS("Loss"), NONE("No spend");
+    val label get() = en.t() }
 fun healthOf(roas: Double?, profit: Double): Health = when {
     roas == null -> if (profit > 0) Health.PROFIT else Health.NONE
     roas >= 1.2 -> Health.PROFIT
@@ -290,16 +295,19 @@ val ROAS_TARGET_CURVE = linkedMapOf("D0" to 0.30, "D1" to 0.50, "D3" to 0.75, "D
 data class AlertItem(
     val id: Long, val level: Int, val rule: String, val pkg: String, val appName: String, val account: String, val campaign: String,
     val title: String, val body: String, val ai: String, val fired: Int, val createdAt: String, val updatedAt: String,
-    val resolvedAt: String?, val readAt: String?,
+    val resolvedAt: String?, val readAt: String?, val titleHi: String = "", val bodyHi: String = "",
 ) {
     val open get() = resolvedAt == null
     val unread get() = readAt == null
-    val levelText get() = when (level) { 3 -> "URGENT"; 2 -> "Dhyan do"; else -> "Info" }
+    val levelText get() = when (level) { 3 -> "URGENT".t(); 2 -> "Watch".t(); else -> "Info".t() }
+    /** Title/body in the chosen language (server sends English + Hinglish; old alerts.php sends one text only). */
+    val titleL get() = if (Lang.hi && titleHi.isNotBlank()) titleHi else title
+    val bodyL get() = if (Lang.hi && bodyHi.isNotBlank()) bodyHi else body
     companion object {
         fun of(j: JSONObject) = AlertItem(
             j.l("id"), j.d("level").toInt(), j.s("rule"), j.s("pkg"), j.s("app_name"), j.s("account"), j.s("campaign"),
             j.s("title"), j.s("body"), j.s("ai"), j.d("fired", 1.0).toInt(), j.s("created_at"), j.s("updated_at"),
-            j.sn("resolved_at"), j.sn("read_at"),
+            j.sn("resolved_at"), j.sn("read_at"), j.s("title_hi"), j.s("body_hi"),
         )
     }
 }

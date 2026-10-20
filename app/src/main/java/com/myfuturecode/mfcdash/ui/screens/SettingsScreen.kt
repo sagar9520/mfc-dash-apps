@@ -22,10 +22,13 @@ import com.myfuturecode.mfcdash.ui.components.KV
 import com.myfuturecode.mfcdash.ui.components.MChip
 import com.myfuturecode.mfcdash.ui.components.Panel
 import com.myfuturecode.mfcdash.ui.components.SectionTitle
+import com.myfuturecode.mfcdash.util.LANGS
+import com.myfuturecode.mfcdash.util.Lang
 import com.myfuturecode.mfcdash.util.agoText
 import com.myfuturecode.mfcdash.util.num
+import com.myfuturecode.mfcdash.util.t
 
-val AI_MODELS = listOf("claude-opus-5-5" to "Opus 5.5 (best)", "claude-sonnet-5-5" to "Sonnet 5.5", "claude-haiku-5-5" to "Haiku 5.5 (sasta)")
+val AI_MODELS = listOf("claude-opus-5-5" to "Opus 5.5 (best)", "claude-sonnet-5-5" to "Sonnet 5.5", "claude-haiku-5-5" to "Haiku 5.5 (cheap)")
 
 @Composable
 fun SettingsScreen(vm: DashVm, nav: NavHostController) {
@@ -40,71 +43,89 @@ fun SettingsScreen(vm: DashVm, nav: NavHostController) {
     var model by remember(ai?.model) { mutableStateOf(ai?.model ?: AI_MODELS[0].first) }
 
     Column(Modifier.fillMaxSize()) {
-        TopBar("Settings", vm, st, nav, back = true)
+        TopBar("Settings".t(), vm, st, nav, back = true)
         Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp)) {
-            SectionTitle("Account")
+            // ---------------------------------------------------------------- language
+            SectionTitle("Language".t())
+            Panel {
+                ChipRow { LANGS.forEach { (code, label) -> MChip(label, Lang.code == code, { vm.setLang(code) }) } }
+                Text("Applies to the whole app, alert texts and Claude AI explanations. Default: English.".t(),
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 6.dp))
+            }
+            Spacer(Modifier.height(16.dp))
+
+            SectionTitle("Account".t())
             Panel {
                 KV("Dashboard", vm.baseUrl)
-                KV("Username", vm.username)
+                KV("Username".t(), vm.username)
                 Spacer(Modifier.height(8.dp))
-                OutlinedButton(onClick = { vm.logout() }, modifier = Modifier.fillMaxWidth()) { Text("Logout") }
+                OutlinedButton(onClick = { vm.logout() }, modifier = Modifier.fillMaxWidth()) { Text("Logout".t()) }
+            }
+            Spacer(Modifier.height(16.dp))
+
+            // ---------------------------------------------------------------- live monitoring
+            SectionTitle("24x7 live monitoring".t(), if (st.liveMonitor) "on".t() else "off".t())
+            Panel {
+                ToggleRow("⚡ " + "Always-on monitor".t(), "checks the server every minute, even with the app closed; a small fixed notification stays visible".t(), st.liveMonitor) { vm.setLiveMonitor(it) }
+                Text("Off = check every 15–60 min via Android background work (see below). On = issue → notification within about a minute: which app, which account, which ad unit, what happened, loss estimate and fix.".t(),
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 6.dp))
             }
             Spacer(Modifier.height(16.dp))
 
             // ---------------------------------------------------------------- notifications
-            SectionTitle("Notifications", if (st.alertsMissing) "alerts.php chahiye" else null)
+            SectionTitle("Notifications".t(), if (st.alertsMissing) "needs alerts.php".t() else null)
             Panel {
-                if (!Notify.allowed(ctx)) Text("⚠ Notification permission nahi hai — phone Settings > Apps > MFC Dashboard > Notifications on karo.",
+                if (!Notify.allowed(ctx)) Text("⚠ No notification permission — turn it on in phone Settings > Apps > MFC Dashboard > Notifications.".t(),
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(bottom = 8.dp))
-                ToggleRow("🔴 Urgent", "awaaz + vibration: data band, crash, loss", st.notifyUrgent) { vm.setNotify(3, it) }
-                ToggleRow("🟠 Dhyan do", "issue hai, abhi fix zaroori nahi", st.notifyWarn) { vm.setNotify(2, it) }
-                ToggleRow("🔵 Info", "subah ka brief, records, nayi campaign", st.notifyInfo) { vm.setNotify(1, it) }
+                ToggleRow("🔴 " + "Urgent".t(), "sound + vibration: data stopped, crash, loss".t(), st.notifyUrgent) { vm.setNotify(3, it) }
+                ToggleRow("🟠 " + "Watch".t(), "there is an issue, no fix needed right now".t(), st.notifyWarn) { vm.setNotify(2, it) }
+                ToggleRow("🔵 " + "Info".t(), "morning brief, records, new campaign".t(), st.notifyInfo) { vm.setNotify(1, it) }
                 Spacer(Modifier.height(8.dp))
-                Text("App band ho tab kitni der me check", style = MaterialTheme.typography.bodyMedium)
+                Text("Background check interval when the monitor is off".t(), style = MaterialTheme.typography.bodyMedium)
                 Spacer(Modifier.height(6.dp))
                 ChipRow {
                     listOf(15, 30, 60).forEach { m -> MChip("$m min", st.checkMinutes == m, { vm.setCheckMinutes(m) }) }
                 }
-                Text("App khuli ho to har 20 sec. 15 min Android ki minimum hai; Xiaomi/Oppo/Vivo par phone Settings > Battery me is app ko \"No restrictions\" do, warna background check ruk jaata hai.",
+                Text("With the app open: every 20 sec. 15 min is Android's minimum; on Xiaomi/Oppo/Vivo set this app to \"No restrictions\" in phone Settings > Battery, otherwise background checks stop.".t(),
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 6.dp))
                 Spacer(Modifier.height(10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { vm.testNotification { msg = it ?: "Test alert bheja — notification aani chahiye" } }, modifier = Modifier.weight(1f), enabled = !st.alertsMissing) { Text("Test notification") }
-                    OutlinedButton(onClick = { nav.navigate("alerts") }, modifier = Modifier.weight(1f)) { Text("Alerts dekho") }
+                    OutlinedButton(onClick = { vm.testNotification { msg = it ?: "Test alert sent — a notification should arrive".t() } }, modifier = Modifier.weight(1f), enabled = !st.alertsMissing) { Text("Test notification".t()) }
+                    OutlinedButton(onClick = { nav.navigate("alerts") }, modifier = Modifier.weight(1f)) { Text("View alerts".t()) }
                 }
             }
             Spacer(Modifier.height(16.dp))
 
             // ---------------------------------------------------------------- Claude AI
-            SectionTitle("Claude AI", if (ai != null && ai.enabled) "chalu · " + ai.model else "band")
+            SectionTitle("Claude AI", if (ai != null && ai.enabled) "on".t() + " · " + ai.model else "off".t())
             Panel {
-                Text("Rules khud sab data check karte hain. Claude AI upar se: har Urgent/Dhyan-do alert par 3 line (kya hua, wajah, abhi kya karo) aur roz subah 9 baje kal ka AI brief.",
+                Text("The rules check all data by themselves. Claude AI adds: for every Urgent/Watch alert, what happened, the cause, the loss/benefit and what to do now, plus a daily 9 AM AI brief.".t(),
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(8.dp))
                 if (ai != null && ai.enabled) {
-                    KV("Key", ai.keyHint)
-                    KV("Aakhri AI jawab", if (ai.lastOk > 0) agoText(ai.lastOk * 1000) else "abhi nahi")
+                    KV("Key".t(), ai.keyHint)
+                    KV("Last AI reply".t(), if (ai.lastOk > 0) agoText(ai.lastOk * 1000) else "not yet".t())
                     if (ai.lastError != null) Text("Error: " + ai.lastError, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                 }
                 OutlinedTextField(
                     value = key, onValueChange = { key = it }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
-                    label = { Text(if (aiOn) "Nayi key (badalni ho to)" else "Anthropic API key (sk-ant-…)") },
+                    label = { Text(if (aiOn) "New key (to replace)".t() else "Anthropic API key (sk-ant-…)") },
                     visualTransformation = if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
-                    trailingIcon = { TextButton(onClick = { showKey = !showKey }) { Text(if (showKey) "Chhupao" else "Dikhao") } },
+                    trailingIcon = { TextButton(onClick = { showKey = !showKey }) { Text(if (showKey) "Hide".t() else "Show".t()) } },
                 )
                 Spacer(Modifier.height(8.dp))
-                Text("Model", style = MaterialTheme.typography.bodyMedium)
+                Text("Model".t(), style = MaterialTheme.typography.bodyMedium)
                 Spacer(Modifier.height(6.dp))
-                ChipRow { AI_MODELS.forEach { (id, l) -> MChip(l, model == id, { model = id }) } }
+                ChipRow { AI_MODELS.forEach { (id, l) -> MChip(l.t(), model == id, { model = id }) } }
                 Spacer(Modifier.height(10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { vm.setAiKey(key, model) { msg = it; if (it?.contains("chalu") == true) key = "" } }, modifier = Modifier.weight(1f),
+                    Button(onClick = { vm.setAiKey(key, model) { ok, m -> msg = m; if (ok) key = "" } }, modifier = Modifier.weight(1f),
                         enabled = !st.alertsBusy && !st.alertsMissing && (key.isNotBlank() || aiOn)) {
-                        if (st.alertsBusy) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp) else Text(if (key.isBlank()) "Model save" else "Save + test")
+                        if (st.alertsBusy) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp) else Text(if (key.isBlank()) "Save model".t() else "Save + test".t())
                     }
-                    if (aiOn) OutlinedButton(onClick = { vm.setAiKey("", model) { msg = it } }, enabled = !st.alertsBusy) { Text("AI band") }
+                    if (aiOn) OutlinedButton(onClick = { vm.setAiKey("", model) { _, m -> msg = m } }, enabled = !st.alertsBusy) { Text("Turn AI off".t()) }
                 }
-                Text("Key: console.anthropic.com > API Keys. Kharcha chhota hai: ek alert ≈ ₹1, roz ka brief ≈ ₹4 (Opus 5.5). Key server ke DB (kv table) me rehti hai, phone me nahi.",
+                Text("Key: console.anthropic.com > API Keys. Cost is small: one alert ≈ ₹1, the daily brief ≈ ₹4 (Opus 5.5). The key stays in the server DB (kv table), not on the phone.".t(),
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
             }
             msg?.let {
@@ -113,19 +134,19 @@ fun SettingsScreen(vm: DashVm, nav: NavHostController) {
             }
             Spacer(Modifier.height(16.dp))
 
-            SectionTitle("ROAS target", "Home ke profit bar ka nishaan")
+            SectionTitle("ROAS target".t(), "marker on the Home profit bar".t())
             Panel {
-                Text("Target: " + num(target * 100.0, 0) + "%", style = MaterialTheme.typography.titleMedium)
+                Text("Target".t() + ": " + num(target * 100.0, 0) + "%", style = MaterialTheme.typography.titleMedium)
                 Slider(value = target, onValueChange = { target = it }, onValueChangeFinished = { vm.setRoasTarget(target.toDouble()) }, valueRange = 1f..4f, steps = 11)
-                Text("100% = break-even (ad revenue + payments = ad spend). Research ke hisaab se 150% se upar hi campaign scale karo.",
+                Text("100% = break-even (ad revenue + payments = ad spend). Per research, scale a campaign only above 150%.".t(),
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Spacer(Modifier.height(16.dp))
-            SectionTitle("App")
+            SectionTitle("App".t())
             Panel {
-                KV("Version", BuildConfig.VERSION_NAME)
-                KV("Data source", "api/data.php · crosspromo.php · app.php · alerts.php")
-                KV("Auto refresh", "Har 20 sec (jab period mein aaj ho)")
+                KV("Version".t(), BuildConfig.VERSION_NAME)
+                KV("Data source".t(), "api/data.php · crosspromo.php · app.php · alerts.php")
+                KV("Auto refresh".t(), "Every 20 sec (when the period includes today)".t())
             }
         }
     }

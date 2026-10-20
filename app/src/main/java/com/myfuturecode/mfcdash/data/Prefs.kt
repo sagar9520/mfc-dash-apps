@@ -48,6 +48,13 @@ class Prefs(ctx: Context) {
     var notifyInfo: Boolean
         get() = sp.getBoolean("n_info", true)
         set(v) { sp.edit().putBoolean("n_info", v).apply() }
+    var lang: String
+        get() = sp.getString("lang", "en") ?: "en"
+        set(v) { sp.edit().putString("lang", v).apply() }
+    /** 24x7 foreground monitor (every minute). Default on: the user asked for instant alerts. */
+    var liveMonitor: Boolean
+        get() = sp.getBoolean("live_monitor", true)
+        set(v) { sp.edit().putBoolean("live_monitor", v).apply() }
     var checkMinutes: Int
         get() = sp.getInt("check_min", 15)
         set(v) { sp.edit().putInt("check_min", v).apply() }

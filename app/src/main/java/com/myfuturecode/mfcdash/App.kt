@@ -4,6 +4,7 @@ import android.app.Application
 import com.myfuturecode.mfcdash.data.Api
 import com.myfuturecode.mfcdash.data.Prefs
 import com.myfuturecode.mfcdash.notify.AlertsSync
+import com.myfuturecode.mfcdash.notify.MonitorService
 import com.myfuturecode.mfcdash.notify.Notify
 import kotlinx.coroutines.flow.MutableStateFlow
 
@@ -16,9 +17,11 @@ class App : Application() {
     override fun onCreate() {
         super.onCreate()
         prefs = Prefs(this)
+        com.myfuturecode.mfcdash.util.Lang.code = prefs.lang
         api = Api(prefs)
         Notify.channels(this)
-        // Login hai to background check chalu rakho (app update ke baad bhi)
-        if (prefs.hasLogin) AlertsSync.schedule(this, prefs.checkMinutes)
+        MonitorService.channel(this)
+        // Login hai to background check chalu rakho (app update ke baad bhi) + 24x7 monitor
+        if (prefs.hasLogin) { AlertsSync.schedule(this, prefs.checkMinutes); MonitorService.sync(this) }
     }
 }

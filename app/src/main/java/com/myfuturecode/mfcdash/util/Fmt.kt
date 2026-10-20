@@ -66,9 +66,9 @@ fun fmtDay(d: String?, year: Boolean = false): String {
 fun agoText(ms: Long): String {
     val s = (System.currentTimeMillis() - ms) / 1000
     return when {
-        s < 5 -> "abhi"
-        s < 60 -> "$s sec pehle"
-        s < 3600 -> "${s / 60} min pehle"
-        else -> "${s / 3600} ghante pehle"
+        s < 5 -> "just now".t()
+        s < 60 -> tf("%s sec ago", s)
+        s < 3600 -> tf("%s min ago", s / 60)
+        else -> tf("%s hours ago", s / 3600)
     }
 }
