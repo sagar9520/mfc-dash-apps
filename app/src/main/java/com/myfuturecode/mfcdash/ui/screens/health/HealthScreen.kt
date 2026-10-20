@@ -116,7 +116,7 @@ private fun OverviewTab(h: HState, vm: HealthVm, nav: NavHostController, reload:
         Triple("AAB ready".t(), num(o.aabReady.toDouble()), "for your review".t()),
         Triple("Scans 24h".t(), num(o.runsTotal24.toDouble()), tf("%s clean · %s failed", o.runsClean24, o.runsFailed24)),
         Triple("Running".t(), num(o.runsActive.toDouble()), "now".t()),
-    ), colors = buildMap {
+    ), colors = buildMap<Int, androidx.compose.ui.graphics.Color> {
         if (o.needsHuman > 0) put(3, ex.warn); put(4, ex.good); if (o.fixesFailed30 > 0) put(5, ex.bad); if (o.aabReady > 0) put(6, Info)
     })
 

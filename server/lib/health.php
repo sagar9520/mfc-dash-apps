@@ -361,7 +361,14 @@ function h_icon(PDO $pdo, string $pkg): void
 // ================================================================ Google Play Developer Reporting API (har console alag token)
 function h_b64url(string $s): string { return rtrim(strtr(base64_encode($s), '+/', '-_'), '='); }
 
-function h_sa_path(string $f): string { return ($f !== '' && $f[0] === '/') ? $f : MFC_ROOT . '/secrets/' . $f; }
+function h_sa_path(string $f): string
+{
+    if ($f !== '' && $f[0] === '/') return $f;
+    $d = MFC_ROOT . '/secrets';
+    // service account JSON URL se kabhi na khule
+    if (is_dir($d) && !is_file($d . '/.htaccess')) @file_put_contents($d . '/.htaccess', "Require all denied\nDeny from all\n");
+    return $d . '/' . $f;
+}
 
 function h_play_token(string $consoleId, string $scope = 'playdeveloperreporting'): string
 {

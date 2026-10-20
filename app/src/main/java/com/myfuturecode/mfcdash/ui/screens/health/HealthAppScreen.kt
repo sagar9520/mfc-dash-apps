@@ -68,7 +68,7 @@ fun HealthAppScreen(vm: HealthVm, nav: NavHostController, pkg: String) {
                 Triple("DAU avg".t(), num(d.dauAvg.toDouble()), null),
                 Triple("Revenue".t(), inr(d.revUsd * d.inrPerUsd), null),
                 Triple("Open issues".t(), d.counts.optInt("open").toString(), null),
-            ), colors = buildMap { if (d.crashes > 0) put(2, ex.bad) })
+            ), colors = buildMap<Int, androidx.compose.ui.graphics.Color> { if (d.crashes > 0) put(2, ex.bad) })
             Panel {
                 Text(tf("Last %s days", d.days), style = MaterialTheme.typography.titleSmall)
                 Spacer(Modifier.height(6.dp))

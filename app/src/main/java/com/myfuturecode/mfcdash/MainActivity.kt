@@ -33,8 +33,9 @@ class MainActivity : ComponentActivity() {
 
     /** Notification (extra "route") ya email link (mfcdash://health/...) se khula ho to wahi screen. */
     private fun handleIntent(i: Intent?) {
-        val route = i?.getStringExtra("route")?.also { i.removeExtra("route") }
-            ?: i?.data?.takeIf { it.scheme == "mfcdash" && it.host == "health" }?.let { u -> healthRoute(u.pathSegments).also { i.data = null } }
+        if (i == null) return
+        val route = i.getStringExtra("route")?.also { i.removeExtra("route") }
+            ?: i.data?.takeIf { it.scheme == "mfcdash" && it.host == "health" }?.let { u -> healthRoute(u.pathSegments).also { i.data = null } }
             ?: return
         (application as App).pendingRoute.value = route
     }
