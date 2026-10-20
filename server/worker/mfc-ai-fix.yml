@@ -1,0 +1,245 @@
+# MFC Dash · AI App Health worker
+# Copy this file into EACH app repo as .github/workflows/mfc-ai-fix.yml (public repo, ya private jisme Actions billing chalu ho).
+# Server (api/health.php) isse repository_dispatch se chalata hai:
+#   mfc-verify : repo me sahi applicationId hai? signing key secrets theek hain? (auto-fix sirf verify ke baad)
+#   mfc-ai-fix : Claude Code fix / aapka task -> unit tests -> signed release build -> emulator test -> AAB + test APK server par
+# Har step ka result server ko jaata hai (api/health_hook.php). Kuch bhi Play Store par publish NAHI hota yahan se.
+#
+# Repo Secrets (Settings > Secrets and variables > Actions):
+#   ANTHROPIC_API_KEY   Claude API key
+#   KEYSTORE_BASE64     upload keystore (.jks) ka base64  (base64 -w0 upload.jks)
+#   KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD
+name: MFC AI fix
+on:
+  repository_dispatch:
+    types: [mfc-ai-fix, mfc-verify]
+permissions:
+  contents: write
+concurrency:
+  group: mfc-ai-${{ github.event.client_payload.fix_id || github.event.client_payload.pkg }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    if: github.event.action == 'mfc-verify'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      HOOK: ${{ github.event.client_payload.hook }}
+      TOKEN: ${{ github.event.client_payload.token }}
+      PKG: ${{ github.event.client_payload.pkg }}
+      APP_DIR: ${{ github.event.client_payload.app_dir || 'app' }}
+    steps:
+      - run: echo "::add-mask::$TOKEN"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.client_payload.base || 'main' }}
+      - uses: actions/setup-java@v5
+        with: { distribution: temurin, java-version: 17 }
+      - name: Check applicationId and signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          set +e
+          G=$(ls "$APP_DIR"/build.gradle.kts "$APP_DIR"/build.gradle 2>/dev/null | head -1)
+          PKG_OK=false; DETAIL=""
+          if [ -n "$G" ] && grep -Eq "applicationId[[:space:]]*=?[[:space:]]*[\"']$PKG[\"']" "$G"; then PKG_OK=true; else DETAIL="applicationId $PKG not found in $APP_DIR/build.gradle(.kts)"; fi
+          SIGN_OK=false; CERT=""
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > /tmp/up.jks
+            CERT=$(keytool -list -v -keystore /tmp/up.jks -storepass "$KEYSTORE_PASSWORD" -alias "$KEY_ALIAS" 2>/dev/null | grep -m1 'SHA256:' | sed 's/.*SHA256: *//')
+            [ -n "$CERT" ] && SIGN_OK=true || DETAIL="$DETAIL; keystore password/alias wrong"
+          else DETAIL="$DETAIL; KEYSTORE_BASE64 secret missing"; fi
+          python3 - <<EOF > /tmp/v.json
+          import json; print(json.dumps({"package_ok": "$PKG_OK"=="true", "signing_ok": "$SIGN_OK"=="true", "cert_sha256": "$CERT", "detail": "$DETAIL".strip("; "), "repo": "${{ github.repository }}"}))
+          EOF
+          curl -sS -X POST "$HOOK?action=verify&pkg=$PKG&token=$TOKEN" -H 'Content-Type: application/json' --data @/tmp/v.json
+          rm -f /tmp/up.jks
+
+  fix:
+    if: github.event.action == 'mfc-ai-fix'
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      HOOK: ${{ github.event.client_payload.hook }}
+      TOKEN: ${{ github.event.client_payload.token }}
+      FIX: ${{ github.event.client_payload.fix_id }}
+      BRANCH: ${{ github.event.client_payload.branch }}
+      APP_DIR: ${{ github.event.client_payload.app_dir || 'app' }}
+    steps:
+      - name: Mask token + helper
+        run: |
+          echo "::add-mask::$TOKEN"
+          cat > /tmp/report.sh <<'EOS'
+          # report <step> <running|ok|fail> <detail> [data-json-file] [retryable 0|1]
+          step="$1"; st="$2"; detail="$3"; data="${4:-}"; retry="${5:-0}"
+          python3 - "$step" "$st" "$detail" "$data" "$retry" > /tmp/body.json <<'PY'
+          import json, sys
+          step, st, detail, data, retry = sys.argv[1:6]
+          d = json.load(open(data)) if data else {}
+          print(json.dumps({"step": step, "status": st, "detail": detail[:1900], "data": d, "retryable": retry == "1"}))
+          PY
+          curl -sS -m 60 -X POST "$HOOK?action=step&fix=$FIX&token=$TOKEN" -H 'Content-Type: application/json' --data @/tmp/body.json || true
+          [ "$st" = "fail" ] && touch /tmp/reported_fail
+          true
+          EOS
+          chmod +x /tmp/report.sh
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.client_payload.base || 'main' }}
+          fetch-depth: 0
+      - name: Start
+        run: |
+          echo "{\"gh_run_url\": \"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\", \"base_sha\": \"$(git rev-parse HEAD)\"}" > /tmp/d.json
+          /tmp/report.sh started ok "worker running on ${{ github.repository }}" /tmp/d.json
+          curl -sS -f -m 60 "$HOOK?action=context&fix=$FIX&token=$TOKEN" -o /tmp/ctx.json
+          python3 -c "import json;c=json.load(open('/tmp/ctx.json'));open('/tmp/prompt.txt','w').write(c['prompt']);open('/tmp/minvc','w').write(str(c['min_version_code']))"
+          git checkout -b "$BRANCH"
+      - uses: actions/setup-java@v5
+        with: { distribution: temurin, java-version: 17 }
+      - uses: gradle/actions/setup-gradle@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Claude Code makes the change
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set -o pipefail
+          /tmp/report.sh claude running "Claude Code is reading the code"
+          npm install -g @anthropic-ai/claude-code >/dev/null 2>&1
+          if ! claude -p "$(cat /tmp/prompt.txt)" --permission-mode acceptEdits \
+                --allowedTools "Read,Edit,Write,Glob,Grep,Bash(./gradlew:*),Bash(ls:*),Bash(cat:*),Bash(grep:*)" \
+                --max-turns 60 --output-format stream-json --verbose > /tmp/claude.jsonl 2>/tmp/claude.err; then
+            /tmp/report.sh claude fail "Claude Code run failed: $(tail -c 500 /tmp/claude.err)" "" 1; exit 1
+          fi
+          python3 - <<'PY' > /tmp/d.json
+          import json, subprocess
+          seen = []
+          for line in open('/tmp/claude.jsonl'):
+              try: ev = json.loads(line)
+              except Exception: continue
+              for b in (ev.get('message') or {}).get('content') or []:
+                  if isinstance(b, dict) and b.get('type') == 'tool_use':
+                      i = b.get('input') or {}
+                      p = i.get('file_path') or i.get('path') or i.get('pattern')
+                      if p and p not in seen: seen.append(p)
+          mod = [f for f in subprocess.run(['git','status','--porcelain'],capture_output=True,text=True).stdout.splitlines()]
+          mod = [m[3:] for m in mod if m[3:] != 'MFC_FIX_NOTES.md']
+          notes = open('MFC_FIX_NOTES.md').read() if __import__('os').path.exists('MFC_FIX_NOTES.md') else ''
+          subprocess.run(['git','add','-A'])
+          subprocess.run(['git','reset','-q','MFC_FIX_NOTES.md'])
+          diff = subprocess.run(['git','diff','--cached'],capture_output=True,text=True).stdout
+          print(json.dumps({"files_inspected": seen[:200], "files_modified": mod, "diff": diff[:390000], "explanation": notes[:19000]}))
+          PY
+          if git diff --cached --quiet; then /tmp/report.sh claude fail "Claude made no code change" /tmp/d.json 0; exit 1; fi
+          cp MFC_FIX_NOTES.md /tmp/notes.md 2>/dev/null || echo "Bug fixes and stability improvements." > /tmp/notes.md
+          rm -f MFC_FIX_NOTES.md
+          /tmp/report.sh claude ok "$(git diff --cached --name-only | wc -l) file(s) changed" /tmp/d.json
+      - name: Bump version (package + signing untouched)
+        run: |
+          G=$(ls "$APP_DIR"/build.gradle.kts "$APP_DIR"/build.gradle 2>/dev/null | head -1)
+          python3 - "$G" "$(cat /tmp/minvc)" <<'PY'
+          import re, sys
+          path, minvc = sys.argv[1], int(sys.argv[2])
+          s = open(path).read()
+          m = re.search(r'versionCode\s*=?\s*(\d+)', s)
+          if not m: sys.exit('versionCode not found in ' + path)
+          vc = max(int(m.group(1)) + 1, minvc)
+          s = s[:m.start(1)] + str(vc) + s[m.end(1):]
+          n = re.search(r'versionName\s*=?\s*"([^"]+)"', s)
+          vn = n.group(1) if n else ''
+          if n:
+              parts = vn.split('.')
+              vn = '.'.join(parts[:-1] + [str(int(parts[-1]) + 1)]) if parts[-1].isdigit() else vn + '.1'
+              s = s[:n.start(1)] + vn + s[n.end(1):]
+          open(path, 'w').write(s)
+          open('/tmp/vc', 'w').write(str(vc)); open('/tmp/vn', 'w').write(vn)
+          PY
+          git config user.name "mfc-ai-fix"; git config user.email "mfc-ai-fix@users.noreply.github.com"
+          git add -A && git commit -qm "AI fix: $(python3 -c "import json;print(json.load(open('/tmp/ctx.json'))['title'][:60])") (fix $FIX)"
+          git push -q origin "$BRANCH"
+          echo "{\"commit_sha\": \"$(git rev-parse HEAD)\"}" > /tmp/d.json
+          /tmp/report.sh commit ok "branch $BRANCH · $(git rev-parse --short HEAD) · versionCode $(cat /tmp/vc)" /tmp/d.json
+      - name: Unit tests
+        run: |
+          chmod +x gradlew
+          /tmp/report.sh unit_tests running "./gradlew testReleaseUnitTest"
+          set +e
+          ./gradlew testReleaseUnitTest --no-daemon --stacktrace > /tmp/unit.log 2>&1; RC=$?
+          python3 - $RC <<'PY' > /tmp/d.json
+          import glob, json, sys, xml.etree.ElementTree as ET
+          t = f = 0
+          for x in glob.glob('**/build/test-results/**/*.xml', recursive=True):
+              r = ET.parse(x).getroot()
+              t += int(r.get('tests', 0)); f += int(r.get('failures', 0)) + int(r.get('errors', 0))
+          print(json.dumps({"total": t, "failed": f, "passed": t - f, "log": open('/tmp/unit.log', errors='ignore').read()[-6000:]}))
+          PY
+          if [ $RC -ne 0 ]; then /tmp/report.sh unit_tests fail "unit tests failed" /tmp/d.json 1; exit 1; fi
+          /tmp/report.sh unit_tests ok "$(python3 -c "import json;d=json.load(open('/tmp/d.json'));print(f\"{d['passed']}/{d['total']} passed\")")" /tmp/d.json
+      - name: Signed release build (AAB + APK)
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          /tmp/report.sh build running "./gradlew bundleRelease assembleRelease"
+          echo "$KEYSTORE_BASE64" | base64 -d > /tmp/up.jks
+          set +e
+          ./gradlew bundleRelease assembleRelease --no-daemon --stacktrace \
+            -Pandroid.injected.signing.store.file=/tmp/up.jks -Pandroid.injected.signing.store.password="$KEYSTORE_PASSWORD" \
+            -Pandroid.injected.signing.key.alias="$KEY_ALIAS" -Pandroid.injected.signing.key.password="$KEY_PASSWORD" > /tmp/build.log 2>&1; RC=$?
+          rm -f /tmp/up.jks
+          python3 -c "import json;print(json.dumps({'log': open('/tmp/build.log', errors='ignore').read()[-8000:]}))" > /tmp/d.json
+          AAB=$(find "$APP_DIR/build/outputs/bundle" -name '*release*.aab' | head -1); APK=$(find "$APP_DIR/build/outputs/apk" -name '*release*.apk' ! -name '*unsigned*' | head -1)
+          if [ $RC -ne 0 ] || [ -z "$AAB" ]; then /tmp/report.sh build fail "release build failed" /tmp/d.json 1; exit 1; fi
+          echo "$AAB" > /tmp/aab_path; echo "$APK" > /tmp/apk_path
+          /tmp/report.sh build ok "signed AAB $(du -h "$AAB" | cut -f1)" /tmp/d.json
+      - name: Prepare emulator test script
+        run: |
+          cat > /tmp/devtest.sh <<'EOS'
+          set +e
+          PKG=$(python3 -c "import json;print(json.load(open('/tmp/ctx.json'))['pkg'])")
+          APK=$(cat /tmp/apk_path)
+          logjson() { python3 -c "import json,sys;print(json.dumps({'log': (sys.argv[1] + open('/tmp/dev.log', errors='ignore').read())[-6000:]}))" "$1" > /tmp/d.json; }
+          /tmp/report.sh device_test running "emulator API 33: install + launch + 500 monkey events"
+          if [ -z "$APK" ]; then echo "no release APK built" > /tmp/dev.log; logjson ""; /tmp/report.sh device_test fail "no release APK to install" /tmp/d.json 0; exit 1; fi
+          if ! adb install -r "$APK" > /tmp/dev.log 2>&1; then logjson ""; /tmp/report.sh device_test fail "install failed" /tmp/d.json 0; exit 1; fi
+          adb logcat -c
+          adb shell monkey -p "$PKG" -c android.intent.category.LAUNCHER 1 >> /tmp/dev.log 2>&1
+          sleep 8
+          adb shell monkey -p "$PKG" --pct-syskeys 0 --throttle 120 -v 500 >> /tmp/dev.log 2>&1
+          adb logcat -d > /tmp/logcat.txt
+          if grep -qE "FATAL EXCEPTION|ANR in $PKG" /tmp/logcat.txt; then
+            grep -A 25 -E "FATAL EXCEPTION|ANR in" /tmp/logcat.txt | head -80 >> /tmp/dev.log
+            logjson ""; /tmp/report.sh device_test fail "app crashed / ANR on emulator" /tmp/d.json 1; exit 1
+          fi
+          logjson "installed + launched + 500 monkey events, no crash / ANR
+          "
+          /tmp/report.sh device_test ok "launch + 500 monkey events, no crash" /tmp/d.json
+          EOS
+          chmod +x /tmp/devtest.sh
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
+      - name: Emulator test (install, launch, 500 monkey events, no crash)
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 33
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          script: bash /tmp/devtest.sh
+      - name: Upload AAB + test APK to MFC server
+        run: |
+          AAB=$(cat /tmp/aab_path); APK=$(cat /tmp/apk_path)
+          ARGS=(-F "aab=@$AAB" -F "version_name=$(cat /tmp/vn)" -F "version_code=$(cat /tmp/vc)" -F "commit=$(git rev-parse HEAD)" -F "sha256=$(sha256sum "$AAB" | cut -d' ' -f1)" -F "notes=$(head -c 3500 /tmp/notes.md)")
+          [ -n "$APK" ] && ARGS+=(-F "apk=@$APK")
+          curl -sS -f -m 600 -X POST "$HOOK?action=upload&fix=$FIX&token=$TOKEN" "${ARGS[@]}" || { /tmp/report.sh aab fail "upload to server failed (check PHP upload_max_filesize / post_max_size ≥ 200M)" "" 0; exit 1; }
+      - name: Report unexpected failure
+        if: failure()
+        run: |
+          [ -f /tmp/reported_fail ] || /tmp/report.sh failed fail "workflow step failed: see ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" "" 0
