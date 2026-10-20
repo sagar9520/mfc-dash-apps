@@ -98,12 +98,14 @@ fun MoneyScreen(vm: DashVm, st: UiState, nav: NavHostController) {
                 "noconv" -> c.cost > 0 && c.conversions == 0.0
                 else -> true
             }
-        }.sortedWith(when (sort) {
-            "cpi" -> compareByDescending<Campaign> { it.cpi ?: Double.MAX_VALUE }
-            "conv" -> compareByDescending { it.conversions }
-            "ctr" -> compareByDescending { it.ctr ?: 0.0 }
-            else -> compareByDescending { it.cost }
-        })
+        }.let { list ->
+            when (sort) {
+                "cpi" -> list.sortedBy { it.cpi ?: Double.MAX_VALUE }
+                "conv" -> list.sortedByDescending { it.conversions }
+                "ctr" -> list.sortedByDescending { it.ctr ?: 0.0 }
+                else -> list.sortedByDescending { it.cost }
+            }
+        }
         SectionTitle("Google Ads campaigns".t(), (if (cs.size != d.campaigns.size) tf("%s of %s", cs.size, d.campaigns.size) + " · " else "") + (if (k.gadsUpdated.isNotBlank()) "update".t() + " " + tOnly(k.gadsUpdated) else "no script data".t()))
         Panel {
             Table(listOf("Campaign".t(), "Cost".t(), "Conv", "Cost/conv".t(), "Clicks", "CTR", "Status".t()),
