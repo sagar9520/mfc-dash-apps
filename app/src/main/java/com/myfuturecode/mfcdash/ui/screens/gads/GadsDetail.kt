@@ -481,7 +481,7 @@ fun GadsRunScreen(vm: GadsVm, nav: NavHostController, id: Long) {
                     r.sources.mapObj { it }.forEach { s ->
                         Column(Modifier.padding(vertical = 4.dp)) {
                             Text(listOfNotNull(s.sn("company"), s.sn("cid")?.let { "CID $it" }).joinToString(" · ").ifBlank { s.toString().take(80) }, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
-                            Small(s.keys().asSequence().filter { it !in setOf("company", "cid") }.joinToString(" · ") { k -> gText(k) + ": " + s.opt(k).toString().take(60) }, maxLines = 4)
+                            Small(s.keys().asSequence().filter { it !in setOf("company", "cid") }.joinToString(" · ") { k -> gText(k) + ": " + s.opt(k)?.toString().orEmpty().take(60) }, maxLines = 4)
                         }
                     }
                 }
