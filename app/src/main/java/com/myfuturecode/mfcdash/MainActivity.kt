@@ -36,8 +36,23 @@ class MainActivity : ComponentActivity() {
         if (i == null) return
         val route = i.getStringExtra("route")?.also { i.removeExtra("route") }
             ?: i.data?.takeIf { it.scheme == "mfcdash" && it.host == "health" }?.let { u -> healthRoute(u.pathSegments).also { i.data = null } }
+            ?: i.data?.takeIf { it.scheme == "mfcdash" && it.host == "gads" }?.let { u -> gadsRoute(u.pathSegments).also { i.data = null } }
             ?: return
         (application as App).pendingRoute.value = route
+    }
+
+    /** Google Ads monitor email link: mfcdash://gads/alert/12, /account/1112223333, /campaign/cid/id, /<tab>. */
+    private fun gadsRoute(seg: List<String>): String {
+        val id = seg.getOrNull(1)
+        val digits = Regex("\\d{1,30}")
+        return when (seg.firstOrNull()) {
+            "alert" -> if (id?.toLongOrNull() != null) "gads/alert/$id" else "gads/t/history"
+            "run" -> if (id?.toLongOrNull() != null) "gads/run/$id" else "gads/t/live"
+            "account" -> if (id != null && id.matches(digits)) "gads/account/$id" else "gads"
+            "campaign" -> seg.getOrNull(2).let { c -> if (id != null && c != null && id.matches(digits) && c.matches(digits)) "gads/campaign/$id/$c" else "gads" }
+            null, "" -> "gads"
+            else -> seg[0].let { t -> if (t.matches(Regex("[a-z]+"))) "gads/t/$t" else "gads" }
+        }
     }
 
     private fun healthRoute(seg: List<String>): String {

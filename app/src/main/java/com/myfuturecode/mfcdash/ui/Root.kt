@@ -32,6 +32,7 @@ import androidx.navigation.navArgument
 import com.myfuturecode.mfcdash.notify.Notify
 import com.myfuturecode.mfcdash.ui.screens.*
 import com.myfuturecode.mfcdash.ui.screens.health.*
+import com.myfuturecode.mfcdash.ui.screens.gads.*
 import com.myfuturecode.mfcdash.App
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.myfuturecode.mfcdash.util.t
@@ -58,6 +59,8 @@ fun Root(vm: DashVm) {
     val ctx0 = LocalContext.current
     val hvm: HealthVm = viewModel(factory = HealthVm.factory(ctx0.applicationContext as App))
     LaunchedEffect(hvm) { hvm.msg.collect { snack.showSnackbar(it) } }
+    val gvm: GadsVm = viewModel(factory = GadsVm.factory(ctx0.applicationContext as App))
+    LaunchedEffect(gvm) { gvm.msg.collect { snack.showSnackbar(it) } }
 
     // Android 13+: notification ki permission (ek baar poochho)
     val ctx = LocalContext.current
@@ -87,12 +90,12 @@ fun Root(vm: DashVm) {
             }
         },
     ) { pad ->
-        Box(Modifier.padding(pad)) { AppNav(nav, vm, st, hvm) }
+        Box(Modifier.padding(pad)) { AppNav(nav, vm, st, hvm, gvm) }
     }
 }
 
 @Composable
-private fun AppNav(nav: NavHostController, vm: DashVm, st: UiState, hvm: HealthVm) {
+private fun AppNav(nav: NavHostController, vm: DashVm, st: UiState, hvm: HealthVm, gvm: GadsVm) {
     NavHost(nav, startDestination = "home") {
         composable("home") { HomeScreen(vm, st, nav) }
         composable("money") { MoneyScreen(vm, st, nav) }
@@ -118,6 +121,23 @@ private fun AppNav(nav: NavHostController, vm: DashVm, st: UiState, hvm: HealthV
         }
         composable("health/run/{id}", arguments = listOf(navArgument("id") { type = NavType.LongType })) {
             HealthRunScreen(hvm, nav, it.arguments?.getLong("id") ?: 0L)
+        }
+        // Google Ads AI Health Monitor (sirf monitoring)
+        composable("gads") { GadsScreen(gvm, nav, "accounts") }
+        composable("gads/t/{tab}", arguments = listOf(navArgument("tab") { type = NavType.StringType })) {
+            GadsScreen(gvm, nav, it.arguments?.getString("tab") ?: "accounts")
+        }
+        composable("gads/alert/{id}", arguments = listOf(navArgument("id") { type = NavType.LongType })) {
+            GadsAlertScreen(gvm, nav, it.arguments?.getLong("id") ?: 0L)
+        }
+        composable("gads/account/{cid}", arguments = listOf(navArgument("cid") { type = NavType.StringType })) {
+            GadsAccountScreen(gvm, nav, it.arguments?.getString("cid") ?: "")
+        }
+        composable("gads/campaign/{cid}/{cmp}", arguments = listOf(navArgument("cid") { type = NavType.StringType }, navArgument("cmp") { type = NavType.StringType })) {
+            GadsCampaignScreen(gvm, nav, it.arguments?.getString("cid") ?: "", it.arguments?.getString("cmp") ?: "")
+        }
+        composable("gads/run/{id}", arguments = listOf(navArgument("id") { type = NavType.LongType })) {
+            GadsRunScreen(gvm, nav, it.arguments?.getLong("id") ?: 0L)
         }
         composable("campaign/{idx}", arguments = listOf(navArgument("idx") { type = NavType.IntType })) {
             CampaignScreen(vm, st, nav, it.arguments?.getInt("idx") ?: 0)

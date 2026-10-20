@@ -175,5 +175,10 @@ class Api(private val prefs: Prefs) {
 
     suspend fun hAction(action: String, fields: Map<String, String> = emptyMap()): JSONObject = hpost(action, fields)
 
+    // ---- api/gads_health.php (Google Ads AI Health Monitor: sirf monitoring, Google Ads me kuch nahi badalta)
+    suspend fun gGet(view: String, params: Map<String, String> = emptyMap()): JSONObject =
+        getJson("api/gads_health.php?view=$view" + hq(params).let { if (it.isEmpty()) "" else "&$it" })
+    suspend fun gAction(action: String, fields: Map<String, String> = emptyMap()): JSONObject = postForm("api/gads_health.php?action=$action", fields)
+
     fun logout() { jar.clear() }
 }

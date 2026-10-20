@@ -79,6 +79,13 @@ fun HomeScreen(vm: DashVm, st: UiState, nav: NavHostController) {
         AlertRow("AI", "AI App Health & Auto Fix".t(),
             if (hOpen > 0) tf("%s open health alerts · consoles, apps, crashes, fixes, AAB", hOpen) else "Consoles, apps, crashes, AI fixes, AAB releases, new tasks".t(),
             if (hOpen > 0) ex.bad else MaterialTheme.colorScheme.primary) { nav.navigate("health") }
+        Spacer(Modifier.height(8.dp))
+        // ---- Google Ads AI Health Monitor (alag module, sirf monitoring)
+        val gOpen = st.alerts?.alerts?.filter { it.open && it.isGads } ?: emptyList()
+        val gCrit = gOpen.count { it.level >= 3 }
+        AlertRow("G", "Google Ads AI Health Monitor".t(),
+            if (gOpen.isNotEmpty()) tf("%s open Google Ads alerts · accounts, spend, CPI, policy", gOpen.size) else "Accounts, suspensions, spend, CPI, ROAS, creatives · read-only".t(),
+            if (gCrit > 0) ex.bad else if (gOpen.isNotEmpty()) ex.warn else MaterialTheme.colorScheme.primary) { nav.navigate("gads") }
         Spacer(Modifier.height(12.dp))
 
         // ---- Active now

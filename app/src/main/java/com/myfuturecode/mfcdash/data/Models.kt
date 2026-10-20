@@ -297,10 +297,16 @@ data class AlertItem(
     val title: String, val body: String, val ai: String, val fired: Int, val createdAt: String, val updatedAt: String,
     val resolvedAt: String?, val readAt: String?, val titleHi: String = "", val bodyHi: String = "",
     val issueId: Long? = null,   // AI App Health alerts: metrics.issue_id
+    val gaAlertId: Long? = null, // Google Ads monitor alerts ("gah_*"): metrics.ga_alert_id
 ) {
     val isHealth get() = rule.startsWith("health")
-    /** Notification / card tap: health alert -> us issue ki screen. */
-    val route get() = if (isHealth) issueId?.let { "health/issue/$it" } ?: "health" else "alerts"
+    val isGads get() = rule.startsWith("gah_")
+    /** Notification / card tap: health alert -> us issue ki screen; Google Ads monitor alert -> us alert ki screen. */
+    val route get() = when {
+        isHealth -> issueId?.let { "health/issue/$it" } ?: "health"
+        isGads -> gaAlertId?.let { "gads/alert/$it" } ?: "gads"
+        else -> "alerts"
+    }
     val open get() = resolvedAt == null
     val unread get() = readAt == null
     val levelText get() = when (level) { 3 -> "URGENT".t(); 2 -> "Watch".t(); else -> "Info".t() }
@@ -313,6 +319,7 @@ data class AlertItem(
             j.s("title"), j.s("body"), j.s("ai"), j.d("fired", 1.0).toInt(), j.s("created_at"), j.s("updated_at"),
             j.sn("resolved_at"), j.sn("read_at"), j.s("title_hi"), j.s("body_hi"),
             j.optJSONObject("metrics")?.dn("issue_id")?.toLong(),
+            j.optJSONObject("metrics")?.dn("ga_alert_id")?.toLong(),
         )
     }
 }

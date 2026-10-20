@@ -1,0 +1,157 @@
+package com.myfuturecode.mfcdash.util
+
+/** Google Ads AI Health Monitor ke strings: English → Hinglish. (HI aur HI_HEALTH ke baad dekha jaata hai.) */
+val HI_GADS: Map<String, String> = mapOf(
+    // ---- module / tabs
+    "Google Ads AI Health Monitor" to "Google Ads AI Health Monitor", "Google Ads AI Health" to "Google Ads AI Health", "Ads Monitor" to "Ads Monitor",
+    "All Accounts" to "Sab Accounts", "Account Health" to "Account Health", "Suspensions & Policy" to "Suspension & Policy", "Spend" to "Kharcha", "CPI / CPA" to "CPI / CPA",
+    "Campaigns & Ad Groups" to "Campaigns & Ad Groups", "AI Creative Review" to "AI Creative Review", "AI Recommendations" to "AI Salah", "Live Monitoring" to "Live Monitoring",
+    "Alert History" to "Alert History", "Notification Settings" to "Notification Settings",
+    "%s open Google Ads alerts · accounts, spend, CPI, policy" to "%s Google Ads alerts khule · accounts, kharcha, CPI, policy",
+    "Accounts, suspensions, spend, CPI, ROAS, creatives · read-only" to "Accounts, suspension, kharcha, CPI, ROAS, creatives · sirf dekhna",
+    "Google Ads monitor is not on the server yet" to "Google Ads monitor abhi server par nahi hai",
+    "Upload api/gads_health.php, api/gads_ingest.php, lib/gads_health.php and lib/gads_rules.php to mfc_dash (see the setup guide), then tap Try again." to
+        "api/gads_health.php, api/gads_ingest.php, lib/gads_health.php aur lib/gads_rules.php mfc_dash me upload karo (setup guide dekho), phir Dobara try karo dabao.",
+    "Read-only: this monitor never changes anything in Google Ads. Do any step yourself in Google Ads." to
+        "Sirf dekhna: ye monitor Google Ads me kabhi kuch nahi badalta. Koi bhi step aap khud Google Ads me karo.",
+    "Read-only monitoring · each account separate" to "Sirf monitoring · har account alag", "GOOGLE ADS PORTFOLIO" to "GOOGLE ADS PORTFOLIO",
+    // ---- filters
+    "Date range" to "Date range", "Company" to "Company", "Account" to "Account", "Currency" to "Currency", "Country" to "Desh", "Campaign" to "Campaign", "Ad group" to "Ad group",
+    "Status" to "Status", "14 days" to "14 din", "Critical" to "Critical", "Warning" to "Warning", "Info" to "Info", "Any problem" to "Koi bhi problem", "Healthy" to "Theek",
+    "Stale / no data" to "Purana / data nahi", "Open" to "Khule", "Resolved" to "Band", "Confirmed" to "Confirmed", "Suspected" to "Shak", "Insufficient data" to "Data kam",
+    "Simulated" to "Simulated", "Enabled" to "Chalu", "Paused / removed" to "Paused / hataya", "With alert" to "Alert wale", "No alert" to "Bina alert", "Low" to "Low",
+    "Learning" to "Learning", "Good" to "Good", "Best" to "Best", "Success" to "Success", "Partial" to "Adhura", "Failed" to "Fail", "Running" to "Chal raha",
+    // ---- counts
+    "%s / %s AI calls today" to "aaj %s / %s AI calls", "%s accounts" to "%s accounts", "%s alerts" to "%s alerts", "%s campaigns" to "%s campaigns", "%s critical" to "%s critical",
+    "%s days ago" to "%s din pehle", "%s failed checks" to "%s checks fail", "%s info" to "%s info", "%s installs" to "%s installs", "%s warning" to "%s warning",
+    "%s%% confidence" to "%s%% bharosa", "AI %s%% sure" to "AI %s%% sure", "every %s h" to "har %s ghante", "every %s min" to "har %s min",
+    "every day at %s:00 (server time)" to "roz %s:00 baje (server time)", "min %s installs" to "kam se kam %s installs", "alert at +%s%%" to "+%s%% par alert", "alert at -%s%%" to "-%s%% par alert",
+    "reported up to %s" to "%s tak report hua", "Google reported up to %s (account time)" to "Google ne %s tak report kiya (account time)",
+    "Google reported up to %s (account time %s)" to "Google ne %s tak report kiya (account time %s)",
+    // ---- all accounts / setup
+    "Accounts" to "Accounts", "Spend today" to "Aaj ka kharcha", "per currency, never combined" to "har currency alag, kabhi jode nahi", "next scan" to "agla scan",
+    "Pace vs usual" to "Aam din ke mukable", "Pace" to "Raftaar", "Data" to "Data", "Stale" to "Purana",
+    "No account added yet. Tap + to add one (only accounts you are authorized for)." to "Abhi koi account nahi. + dabao (sirf wahi account jinki aapko permission hai).",
+    "DATA SOURCE DISCONNECTED: no data received yet" to "DATA SOURCE DISCONNECTED: abhi tak data nahi aaya",
+    "DATA SOURCE DISCONNECTED" to "DATA SOURCE DISCONNECTED", "STALE DATA" to "STALE DATA",
+    "STALE DATA: numbers may be incomplete, no spend alerts until data is fresh" to "STALE DATA: numbers adhure ho sakte hain, naya data aane tak spend alert nahi",
+    "STALE DATA: spend rules paused until fresh data arrives" to "STALE DATA: naya data aane tak spend rules ruke hain",
+    "monitoring off" to "monitoring band", "In the dashboard, not monitored" to "Dashboard me hai, monitor nahi ho raha",
+    "These accounts are in your existing dashboard data. They are monitored only after you add them and confirm authorization." to
+        "Ye accounts aapke dashboard data me hain. Inhe tabhi monitor karenge jab aap add karke permission confirm karoge.",
+    "Add" to "Jodo", "Setup" to "Setup",
+    "Cron is not running: scheduled checks will not happen. Add the cron from the setup guide." to "Cron nahi chal raha: apne aap checks nahi honge. Setup guide se cron lagao.",
+    "Email alerts are off (email is not configured on the server)." to "Email alerts band hain (server par email set nahi hai).",
+    "Google Ads email intake is not configured: suspension emails are not read." to "Google Ads email padhna set nahi hai: suspension emails nahi padhe ja rahe.",
+    "Email intake error: " to "Email padhne me error: ", "AI key not set: rule alerts work, AI explanations are off." to "AI key nahi hai: rule wale alerts chalenge, AI explanation band.",
+    "DEVELOPMENT MODE is on: simulated test events are allowed (labelled SIMULATED)." to "DEVELOPMENT MODE chalu: simulated test events ban sakte hain (SIMULATED likha hota hai).",
+    "Last scan" to "Pichhla scan", "Run check now" to "Abhi check karo", "Check started" to "Check shuru",
+    // ---- account health
+    "No account in this filter" to "Is filter me koi account nahi", "Tap an account for its checks, campaigns, alerts and emails." to "Account dabao: checks, campaigns, alerts aur emails dikhenge.",
+    "Existing dashboard data" to "Dashboard ka data", "Read-only Ads Script" to "Read-only Ads Script", "Google Ads emails" to "Google Ads emails", "no data yet" to "abhi data nahi",
+    "not configured" to "set nahi", "No data source enabled" to "Koi data source chalu nahi", "never" to "kabhi nahi", "No checks yet (runs on the next scan)" to "Abhi checks nahi (agle scan me)",
+    "No metrics" to "Numbers nahi",
+    // ---- alerts
+    "Account status comes only from Google: customer status (read-only script) or verified Google Ads emails. Zero spend alone is never called a suspension." to
+        "Account ka status sirf Google se: customer status (read-only script) ya verified Google Ads email. Sirf zero spend ko kabhi suspension nahi kehte.",
+    "Every alert ever raised, with when it was first seen, notified and closed." to "Har alert: kab pehli baar dikha, kab bataya, kab band hua.",
+    "suspension · payment · policy · disapprovals" to "suspension · payment · policy · disapproval",
+    "No suspension, payment or policy problem found" to "Koi suspension, payment ya policy problem nahi mila", "No alerts in this filter" to "Is filter me koi alert nahi",
+    "Alert" to "Alert", "SIMULATED · dev test" to "SIMULATED · dev test", "Where" to "Kahan", "Customer ID" to "Customer ID", "MCC (label)" to "MCC (naam)", "When" to "Kab",
+    "First seen" to "Pehli baar", "Last checked" to "Aakhri check", "Notified" to "Bataya", "Acknowledged" to "Dekh liya", "Closed" to "Band", "Evidence" to "Saboot",
+    "Source" to "Source", "Data freshness" to "Data kitna naya", "Classification" to "Kism", "Numbers (current vs previous)" to "Numbers (abhi vs pehle)",
+    "Business impact" to "Business par asar", "Possible causes (rules)" to "Sambhav wajah (rules)", "Suggested next step (manual)" to "Agla step (khud karna hai)",
+    "AI root cause" to "AI: asli wajah", "AI summary" to "AI summary", "Likely causes" to "Sambhav wajah", "What to do (manually in Google Ads)" to "Kya karna hai (khud Google Ads me)",
+    "Creative idea for your review" to "Creative idea (aap dekh lo)", "AI failed: " to "AI fail: ",
+    "No AI analysis yet. AI runs automatically for new critical alerts and in the 6-hourly deep analysis." to "Abhi AI analysis nahi. Naye critical alerts par aur har 6 ghante AI apne aap chalta hai.",
+    "Ask AI now" to "Abhi AI se poochho", "Ask AI again" to "AI se dobara poochho", "AI is checking (about 30 sec)" to "AI dekh raha hai (lagbhag 30 sec)", "AI is checking…" to "AI dekh raha hai…",
+    "AI key not set (Settings > AI in the app)." to "AI key nahi hai (app me Settings > AI).", "Acknowledge" to "Dekh liya", "No more notifications for this alert" to "Is alert ki aur notification nahi aayegi",
+    "Close" to "Band karo",
+    "Email / simulated alerts close by hand. Metric alerts close by themselves when fresh data shows the problem is gone." to
+        "Email / simulated alerts haath se band hote hain. Number wale alerts apne aap band hote hain jab naya data dikhaye ki problem chali gayi.",
+    "This alert closes by itself when fresh data shows the problem is gone. Acknowledge stops repeat notifications." to
+        "Ye alert apne aap band hoga jab naya data dikhaye ki problem chali gayi. Dekh liya dabane se baar-baar notification nahi aayegi.",
+    "Log" to "Log",
+    // ---- account detail
+    "Usual by now" to "Aam taur par ab tak", "Data sources" to "Data sources", "Script status (from Google)" to "Script status (Google se)", "Token" to "Token", "not set" to "set nahi",
+    "New token + script" to "Naya token + script", "Policy snapshot" to "Policy snapshot", "Checks" to "Checks", "Open alerts" to "Khule alerts", "No open alerts" to "Koi khula alert nahi",
+    "Campaigns" to "Campaigns", "No campaign data yet" to "Abhi campaign data nahi", "today" to "aaj", "yesterday" to "kal", "was" to "pehle",
+    "Email source is off for this account." to "Is account ka email source band hai.", "No Google Ads email for this account yet" to "Is account ka abhi koi Google Ads email nahi",
+    "verified" to "verified", "NOT verified" to "verified NAHI", "Account details (kept separate)" to "Account details (alag rakhe)", "MCC (label only)" to "MCC (sirf naam)",
+    "Invoice / billing ref" to "Invoice / billing ref", "Credit line ref" to "Credit line ref", "Time zone" to "Time zone", "(from Google / default)" to "(Google se / default)",
+    "Authorized by" to "Permission di", "Monitoring" to "Monitoring", "Phone notifications" to "Phone notification", "Email alerts" to "Email alerts", "critical only" to "sirf critical",
+    "Edit" to "Badlo", "Check now" to "Abhi check karo", "Thresholds for this account" to "Is account ki limits", "Using the global thresholds (Notification Settings)." to "Sab accounts wali limits lag rahi hain (Notification Settings).",
+    "Account CPI target" to "Account CPI target", "Make a new token?" to "Naya token banaye?",
+    "The old token stops working now. Paste the new one into this account's script." to "Purana token abhi band ho jayega. Naya token is account ki script me paste karo.",
+    "New token" to "Naya token",
+    // ---- account sheet / token
+    "Add Google Ads account" to "Google Ads account jodo", "Edit account" to "Account badlo",
+    "Each account stays separate: its own company, MCC, invoice, credit line, currency and time zone. Nothing is linked." to
+        "Har account alag rehta hai: apni company, MCC, invoice, credit line, currency aur time zone. Kuch bhi link nahi hota.",
+    "Customer ID (xxx-xxx-xxxx)" to "Customer ID (xxx-xxx-xxxx)", "Company *" to "Company *", "Account name" to "Account ka naam", "MCC (label only, never linked)" to "MCC (sirf naam, kabhi link nahi)",
+    "Invoice / billing reference" to "Invoice / billing reference", "Credit line reference" to "Credit line reference", "Empty = taken from Google Ads data." to "Khali = Google Ads data se le lenge.",
+    "Notes" to "Notes", "Read-only Ads Script in this account (hourly)" to "Is account me read-only Ads Script (har ghante)", "Google Ads notification emails" to "Google Ads ke notification emails",
+    "I am authorized to monitor this account. Read-only: no changes, no account or MCC linking." to "Mujhe is account ko monitor karne ki permission hai. Sirf dekhna: koi badlav nahi, koi account ya MCC link nahi.",
+    "Add account" to "Account jodo", "Save" to "Save", "Saved" to "Save ho gaya", "Script token" to "Script token",
+    "Shown only once. The server keeps only a hash. Put it in this account's read-only script." to "Sirf ek baar dikhega. Server par sirf hash rehta hai. Ise is account ki read-only script me daalo.",
+    "Copy" to "Copy", "Share script" to "Script share karo",
+    "Google Ads > Tools > Bulk actions > Scripts > + New script: paste, Authorize, Preview, then schedule it Hourly. The script only reads (search) and sends numbers to your dashboard." to
+        "Google Ads > Tools > Bulk actions > Scripts > + New script: paste karo, Authorize, Preview, phir Hourly schedule. Script sirf padhti hai (search) aur numbers aapke dashboard ko bhejti hai.",
+    "Threshold" to "Limit", "Value" to "Value", "default" to "default", "Leave empty to use the default." to "Default ke liye khali chhodo.",
+    "all accounts" to "sab accounts", "account" to "account", "campaign" to "campaign", "country" to "desh",
+    // ---- monitors / campaigns
+    "Window" to "Samay", "Impr." to "Impr.", "Value" to "Value", "budget" to "budget", "target" to "target",
+    "No CPI target: set one in the campaign page" to "CPI target nahi: campaign page me set karo", "No ROAS target: set one in the campaign page" to "ROAS target nahi: campaign page me set karo",
+    "No campaign data in this filter" to "Is filter me campaign data nahi", "Today vs history" to "Aaj vs pehle",
+    "Today counts only hours Google has reported (reporting lag). Installs arrive late, so today's CPI is not judged." to
+        "Aaj me sirf wahi ghante gine jo Google ne report kiye (reporting lag). Installs late aate hain, isliye aaj ka CPI judge nahi karte.",
+    "Spend by hour (today vs usual)" to "Ghante ka kharcha (aaj vs aam)", "bar = today · text: today / usual (median of comparable days)" to "bar = aaj · text: aaj / aam (milte-julte dinon ka median)",
+    "Ad groups" to "Ad groups", "No ad group data" to "Ad group data nahi", "Countries" to "Desh", "No country data" to "Desh ka data nahi", "Target" to "Target",
+    "Tap a country to set its CPI target." to "CPI target set karne ke liye desh dabao.", "Thresholds for this campaign" to "Is campaign ki limits", "Set" to "Set",
+    "Campaign values override account and global values. Google's own tCPA / tROAS are used when no CPI / ROAS target is set here." to
+        "Campaign ki value account aur global se upar hai. Yahan CPI / ROAS target na ho to Google ka tCPA / tROAS use hota hai.",
+    "Ad policy" to "Ad policy", "ad " to "ad ", "Creatives" to "Creatives", "Google labels, no asset CPI" to "Google ke labels, asset CPI nahi", "Last 30 days" to "Pichhle 30 din",
+    "Day" to "Din", "No daily data" to "Roz ka data nahi", "Alerts (30 days)" to "Alerts (30 din)", "No alerts for this campaign" to "Is campaign ka koi alert nahi",
+    // ---- creatives / recs
+    "No creative data yet (needs asset data from the dashboard or the read-only script)" to "Abhi creative data nahi (dashboard ya read-only script se asset data chahiye)",
+    "AI idea for manual review" to "AI idea (aap khud dekho)", "Low-performing assets: open alert →" to "Kamzor assets: alert kholo →",
+    "AI calls today" to "Aaj ke AI calls", "Last deep analysis" to "Pichhla deep analysis", "off (no key)" to "band (key nahi)",
+    "AI runs only when the rules find something (and every 6 hours for a deeper look), so it stays cheap." to "AI tabhi chalta hai jab rules kuch pakdein (aur har 6 ghante gehra check), isliye sasta rehta hai.",
+    "Run deep analysis now" to "Abhi deep analysis chalao", "Started" to "Shuru", "Daily portfolio review" to "Roz ka portfolio review", "AI overall" to "AI: kul milakar",
+    "spend" to "kharcha", "7d avg" to "7 din avg", "installs" to "installs", "Open issues and what to do" to "Khuli problems aur kya karna hai", "Nothing to fix right now" to "Abhi kuch theek nahi karna",
+    // ---- live / runs
+    "Next scan" to "Agla scan", "Email check" to "Email check", "Deep AI" to "Deep AI", "Daily review" to "Roz ka review", "server time" to "server time", "Running now" to "Abhi chal raha",
+    "Check email" to "Email check karo", "A run that could not fetch data is shown as PARTIAL or FAILED, never as success." to "Jo run data nahi la paya wo PARTIAL ya FAILED dikhega, kabhi success nahi.",
+    "auto 10 sec" to "auto 10 sec", "Activity" to "Activity", "Scan" to "Scan", "Deep AI analysis" to "Deep AI analysis", "Simulation" to "Simulation", "AI analysis" to "AI analysis",
+    "Run" to "Run", "Run ID" to "Run ID", "Trigger" to "Trigger", "Started" to "Shuru", "Finished" to "Khatam", "Accounts checked" to "Accounts check hue", "Campaigns checked" to "Campaigns check hue",
+    "Issues found" to "Problems mili", "Recommendations" to "Salah", "Failed checks" to "Fail checks", "Next run" to "Agla run", "SIMULATED test run (development mode)" to "SIMULATED test run (development mode)",
+    "Errors" to "Errors", "Data source status" to "Data source status", "Summary" to "Summary", "Nothing logged" to "Kuch log nahi",
+    // ---- settings
+    "Notifications" to "Notifications", "Critical and warning alerts, once per problem (no repeats)" to "Critical aur warning alerts, har problem par ek baar (repeat nahi)",
+    "Email for critical alerts" to "Critical alerts ka email", "to" to "ko", "email not configured on the server" to "server par email set nahi", "Daily summary email" to "Roz ka summary email",
+    "Change daily summary hour" to "Roz ke summary ka time badlo", "AI explanations" to "AI explanation", "Change daily AI limit" to "Roz ki AI limit badlo", "Send test" to "Test bhejo",
+    "Daily summary now" to "Abhi roz ka summary", "Test puts a [TEST] alert on this phone (and an email if email is configured)." to "Test se is phone par [TEST] alert aayega (aur email, agar set hai).",
+    "Test sent: check your notifications" to "Test bheja: notifications dekho", "Google Ads email intake" to "Google Ads email padhna", "Mailbox" to "Mailbox", "Last read" to "Aakhri baar padha",
+    "Read-only (IMAP EXAMINE). Only emails from google.com with DKIM/DMARC pass count as verified. Set imap in gads_config.php." to
+        "Sirf padhna (IMAP EXAMINE). Sirf google.com ke DKIM/DMARC pass emails verified gine jaate hain. gads_config.php me imap set karo.",
+    "Check email now" to "Abhi email check karo", "Thresholds (all accounts)" to "Limits (sab accounts)", "tap to change" to "badalne ke liye dabao", "(default)" to "(default)",
+    "Account / campaign / country values" to "Account / campaign / desh ki values", "No account yet. Use + at the top." to "Abhi koi account nahi. Upar + dabao.", "dashboard" to "dashboard",
+    "script" to "script", "email" to "email", "Each account is monitored on its own. Accounts and MCCs are never linked." to "Har account alag monitor hota hai. Accounts aur MCC kabhi link nahi hote.",
+    "Cron (every 5 min)" to "Cron (har 5 min)", "running" to "chal raha", "NOT running" to "NAHI chal raha", "Script data URL" to "Script data URL", "Development mode" to "Development mode",
+    "Allows SIMULATED test events. Keep off in normal use." to "SIMULATED test events banane deta hai. Aam taur par band rakho.",
+    "Simulated alerts are marked [SIMULATED], never touch Google Ads, and can be cleared any time." to "Simulated alerts par [SIMULATED] likha hota hai, Google Ads ko chhoote nahi, kabhi bhi hata sakte ho.",
+    "Simulate" to "Simulate karo", "Spend drop" to "Kharcha gira", "Spend spike" to "Kharcha uchla", "Zero spend" to "Zero kharcha", "Missing data" to "Data gayab", "Campaign stopped" to "Campaign ruki",
+    "Suspension email" to "Suspension email", "Simulated alert created" to "Simulated alert bana", "Clear simulated alerts" to "Simulated alerts hatao", "Cleared" to "Hata diye",
+    "Daily summary hour (0-23)" to "Roz ke summary ka ghanta (0-23)", "AI calls per day (1-500)" to "Roz ke AI calls (1-500)",
+    // ---- threshold help
+    "Spend drop: % below the usual pace for this time of day" to "Kharcha gira: is time ke aam kharche se % kam", "Spend spike: % above the usual pace" to "Kharcha uchla: aam se % zyada",
+    "CPI alert: % above the CPI target" to "CPI alert: CPI target se % upar", "Zero spend for this many reported hours (only campaigns expected to spend)" to "Itne report hue ghante zero kharcha (sirf chalne wali campaigns)",
+    "Minimum usual impressions before pace alerts" to "Pace alert se pehle kam se kam aam impressions", "Minimum usual spend before pace alerts" to "Pace alert se pehle kam se kam aam kharcha",
+    "Minimum installs before CPI is judged" to "CPI judge karne se pehle kam se kam installs", "Comparable past days needed" to "Kitne milte-julte purane din chahiye",
+    "Data older than this = STALE DATA" to "Isse purana data = STALE DATA", "Google spend reporting lag (hours)" to "Google kharcha report lag (ghante)",
+    "Install / conversion reporting lag (hours)" to "Install / conversion report lag (ghante)", "ROAS alert: % below the ROAS target" to "ROAS alert: ROAS target se % neeche",
+    "Installs drop alert (%)" to "Installs gire alert (%)", "New campaign learning period (days)" to "Nayi campaign ka learning time (din)", "Smaller change shown as INFO (%)" to "Chhota badlav INFO me (%)",
+    "Default CPI target (account currency)" to "Default CPI target (account ki currency)", "Default ROAS target (1.0 = 100%)" to "Default ROAS target (1.0 = 100%)",
+    // ---- alerts screen
+    "Open alert" to "Alert kholo",
+)
