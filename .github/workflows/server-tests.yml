@@ -36,3 +36,30 @@ jobs:
           TEST_DB_USER: root
           TEST_DB_PASS: testpass
         run: php server/tests/gads_integration_test.php
+  research-studio:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: testpass
+          MYSQL_DATABASE: mfc_studio_test
+        ports: ['3306:3306']
+        options: --health-cmd="mysqladmin ping -ptestpass" --health-interval=5s --health-timeout=5s --health-retries=20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: pdo_mysql, mbstring, curl, iconv
+          coverage: none
+          ini-values: opcache.jit=disable
+      - name: PHP syntax
+        run: for f in server/lib/studio.php server/api/studio.php server/tests/studio_test.php; do php -l "$f"; done
+      - name: Studio tests (logic + MySQL, simulated data, fake Claude responses)
+        env:
+          TEST_DB_HOST: 127.0.0.1
+          TEST_DB_NAME: mfc_studio_test
+          TEST_DB_USER: root
+          TEST_DB_PASS: testpass
+        run: php server/tests/studio_test.php
