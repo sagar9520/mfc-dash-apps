@@ -5,7 +5,7 @@
     </style>
     <style name="Theme.MfcDash.Splash" parent="Theme.SplashScreen">
         <item name="windowSplashScreenBackground">@color/icon_bg</item>
-        <item name="windowSplashScreenAnimatedIcon">@mipmap/ic_launcher_fg</item>
+        <item name="windowSplashScreenAnimatedIcon">@mipmap/ic_mfc_fg</item>
         <item name="postSplashScreenTheme">@style/Theme.MfcDash</item>
     </style>
 </resources>

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Naya naam (ic_mfc): Samsung jaise launcher purana icon cache me rakhte hain, naya resource unhe naya icon lene par majboor karta hai -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@mipmap/ic_mfc_bg" />
+    <foreground android:drawable="@mipmap/ic_mfc_fg" />
+    <monochrome android:drawable="@mipmap/ic_mfc_mono" />
+</adaptive-icon>
