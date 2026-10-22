@@ -31,11 +31,19 @@ import com.myfuturecode.mfcdash.ui.kit.KPill
 import com.myfuturecode.mfcdash.ui.kit.KRow
 import com.myfuturecode.mfcdash.ui.kit.KScreen
 import com.myfuturecode.mfcdash.ui.kit.KSection
+import com.myfuturecode.mfcdash.ui.kit.KSkelCard
+import com.myfuturecode.mfcdash.ui.kit.KSkelHero
+import com.myfuturecode.mfcdash.ui.kit.KSkelSection
+import com.myfuturecode.mfcdash.ui.kit.KSkelStats
+import com.myfuturecode.mfcdash.ui.kit.KSkeleton
+import com.myfuturecode.mfcdash.ui.kit.KSortKind
 import com.myfuturecode.mfcdash.ui.kit.KSplit
 import com.myfuturecode.mfcdash.ui.kit.KTint
 import com.myfuturecode.mfcdash.ui.kit.KTwoPane
 import com.myfuturecode.mfcdash.ui.kit.icon
 import com.myfuturecode.mfcdash.ui.kit.isWide
+import com.myfuturecode.mfcdash.ui.kit.kSorted
+import com.myfuturecode.mfcdash.ui.kit.rememberKSort
 import com.myfuturecode.mfcdash.ui.theme.Mfc
 import com.myfuturecode.mfcdash.util.fmtDay
 import com.myfuturecode.mfcdash.util.inr
@@ -50,15 +58,30 @@ fun CampaignScreen(vm: DashVm, st: UiState, nav: NavHostController, idx: Int) {
     val d = st.data
     val c = d?.campaigns?.getOrNull(idx)
     val wide = isWide()
+    // do list (roz ka hisaab, creatives): har ek ka Sort button section ke daayein; default = aaj ka order
+    val daySort = rememberKSort("day")
+    val dayOpts = listOf("day" to "Date".t(), "cost" to "Cost".t(), "conv" to "Conv".t())
+    val crSort = rememberKSort("cost")
+    val crOpts = listOf("cost" to "Cost".t(), "conv" to "Conv".t(), "cpi" to "Cost/conv".t(), "clicks" to "Clicks".t(), "imps" to "Impressions".t())
     KScreen(top = {
         DashBar(
             c?.campaign ?: "Campaign".t(), vm, st, nav, back = true,
             sub = if (d == null || c == null) null else listOf(d.appName(c.pkg), c.account).filter { it.isNotBlank() }.joinToString(" · "),
         )
         if (d != null && c != null && !wide) CampHero(d, c)
+        else if (d == null && st.loading && !wide) KSkelHero(KTint.Sand)
     }) {
         if (d == null) {
-            DashNoData(st, st.loading) { vm.refresh() }
+            DashNoData(st, st.loading, {
+                KSkeleton {
+                    if (wide) KSkelHero(KTint.Sand)
+                    KSkelStats(6, 3)
+                    KSkelSection(width = 100.dp)
+                    KSkelCard(2, title = false)
+                    KSkelSection(width = 120.dp)
+                    KSkelCard(4)
+                }
+            }) { vm.refresh() }
             return@KScreen
         }
         if (c == null) {
@@ -96,9 +119,9 @@ fun CampaignScreen(vm: DashVm, st: UiState, nav: NavHostController, idx: Int) {
             }
             // ---- ROAS cohort (api/app.php)
             val cr = ex2?.campaignRoas?.firstOrNull { it.campaign.equals(c.campaign, true) && (it.pkg == c.pkg || c.pkg.isBlank()) }
-            KSection("ROAS cohort".t())
+            KSection("ROAS cohort".t(), trailing = cohortTrailing(ex2))
             when {
-                ex2 == null -> ExtraMissingCard("ROAS D0 / D1 / D3 / D7")
+                ex2 == null -> ExtraMissingCard("ROAS D0 / D1 / D3 / D7", !st.extraMissing)
                 cr == null -> CampNoUtm(c)
                 else -> KCard {
                     RoasCurve(cr, st.roasTarget)
@@ -120,20 +143,31 @@ fun CampaignScreen(vm: DashVm, st: UiState, nav: NavHostController, idx: Int) {
             // ---- roz ka kharcha / conv
             val daily = ex2?.campaignDaily?.filter { it.campaign.equals(c.campaign, true) }?.sortedBy { it.day } ?: emptyList()
             if (daily.isNotEmpty()) {
-                KSection("Daily".t())
+                SortSection("Daily".t(), daySort, dayOpts, mapOf("day" to KSortKind.DATE))
                 KCard {
                     BarLineChart(daily.map { fmtDay(it.day).take(2) }, daily.map { it.cost }, line2 = daily.map { it.conversions }, barColor = cc.zAmber)
                     Legend("Spend ₹".t() to cc.zAmber, "Conversions".t() to cc.zGreen)
                     Spacer(Modifier.height(8.dp))
                     Table(
                         listOf("Date".t(), "Cost".t(), "Impr".t(), "Clicks".t(), "Conv".t(), "Cost/conv".t()),
-                        daily.sortedByDescending { it.day }.map { listOf(fmtDay(it.day), inr(it.cost), num(it.impressions), num(it.clicks), num(it.conversions, 1), inr(if (it.conversions > 0) it.cost / it.conversions else null, 1)) },
+                        when (daySort.key) {
+                            "cost" -> daily.kSorted(daySort.desc) { it.cost }
+                            "conv" -> daily.kSorted(daySort.desc) { it.conversions }
+                            else -> daily.kSorted(daySort.desc) { it.day }
+                        }.map { listOf(fmtDay(it.day), inr(it.cost), num(it.impressions), num(it.clicks), num(it.conversions, 1), inr(if (it.conversions > 0) it.cost / it.conversions else null, 1)) },
                     )
                 }
             }
-            KSection("Creatives".t(), trailing = { DashText("7 days".t(), 13.sp, cc.ink3) })
+            SortSection("Creatives".t(), crSort, crOpts, mapOf("cpi" to KSortKind.NUM_LOW), trailing = { DashText("7 days".t(), 13.sp, cc.ink3) })
             KCard {
-                val a = d.assets.filter { it.campaign == c.campaign }.sortedByDescending { it.cost }
+                val a0 = d.assets.filter { it.campaign == c.campaign }
+                val a = when (crSort.key) {
+                    "conv" -> a0.kSorted(crSort.desc) { it.conversions }
+                    "cpi" -> a0.kSorted(crSort.desc) { it.cpi }
+                    "clicks" -> a0.kSorted(crSort.desc) { it.clicks }
+                    "imps" -> a0.kSorted(crSort.desc) { it.impressions }
+                    else -> a0.kSorted(crSort.desc) { it.cost }
+                }
                 Table(
                     listOf("Creative".t(), "Type".t(), "Label".t(), "Impr".t(), "Clicks".t(), "CTR", "Conv".t(), "Cost/conv".t(), "Cost".t()),
                     a.map { listOf(it.name, it.type, it.label.ifBlank { "–" }, num(it.impressions), num(it.clicks), pct(if (it.impressions > 0) it.clicks / it.impressions else null), num(it.conversions, 1), inr(it.cpi, 1), inr(it.cost, 1)) },
@@ -145,7 +179,7 @@ fun CampaignScreen(vm: DashVm, st: UiState, nav: NavHostController, idx: Int) {
             if (u.isEmpty()) CampNoUtm(c)
             else KCard { Table(listOf("utm_campaign", "Installs".t()), u.map { listOf(it.c, num(it.n)) }) }
             KSection("Change log".t())
-            if (ex2 == null) ExtraMissingCard("Change log".t()) else NotesSection(vm, ex2.notes.filter { it.campaign.equals(c.campaign, true) }, c.campaign, c.pkg)
+            if (ex2 == null) ExtraMissingCard("Change log".t(), !st.extraMissing) else NotesSection(vm, ex2.notes.filter { it.campaign.equals(c.campaign, true) }, c.campaign, c.pkg)
         }
         if (wide) KTwoPane(left = left, right = right) else { left(); right() }
     }

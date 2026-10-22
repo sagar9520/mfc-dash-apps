@@ -26,6 +26,8 @@ import com.myfuturecode.mfcdash.ui.kit.KSplit
 import com.myfuturecode.mfcdash.ui.kit.KTint
 import com.myfuturecode.mfcdash.ui.kit.KTwoPane
 import com.myfuturecode.mfcdash.ui.kit.isWide
+import com.myfuturecode.mfcdash.ui.kit.kSorted
+import com.myfuturecode.mfcdash.ui.kit.rememberKSort
 import com.myfuturecode.mfcdash.ui.theme.Mfc
 import com.myfuturecode.mfcdash.util.num
 import com.myfuturecode.mfcdash.util.pct
@@ -37,7 +39,12 @@ fun CrossPromoScreen(vm: DashVm, st: UiState, nav: NavHostController) {
     var src by rememberSaveable { mutableStateOf("") }
     var tgt by rememberSaveable { mutableStateOf("") }
     var fmt by rememberSaveable { mutableStateOf("") }
-    TabScreen("Cross promo".t(), vm, st, nav, back = true, showApps = false, filters = { v ->
+    // bar ka Sort button = "Which app promotes which" list (default views zyada -> kam, aaj jaisa)
+    val sort = rememberKSort("views")
+    val sortOpts = listOf(
+        "views" to "Views".t(), "clicks" to "Clicks".t(), "ctr" to "CTR", "installs" to "Installs".t(), "ipc" to "Inst/click".t(),
+    )
+    TabScreen("Cross promo".t(), vm, st, nav, back = true, showApps = false, skeleton = { DashSkel(KTint.Sand, stats = 2) }, sort = sort, sortOptions = sortOpts, filters = { v ->
         val all = v.cp?.rows ?: emptyList()
         val appOpts = { pk: List<String> -> listOf("" to "All".t()) + pk.filter { it.isNotBlank() }.distinct().map { it to v.d.appName(it) } }
         if (all.isNotEmpty()) {
@@ -46,6 +53,8 @@ fun CrossPromoScreen(vm: DashVm, st: UiState, nav: NavHostController) {
             FilterChips("Type".t(), listOf("" to "All".t()) + all.map { it.fmt }.distinct().sorted().map { it to cpFmtName(it) }, fmt) { fmt = it }
         }
     }) { v ->
+        // crosspromo.php ka jawab data.php ke baad aata hai: tab tak (8 sec tak) skeleton, "0 installs" wala hero nahi
+        if (dashPending(v.cp == null)) { DashSkel(KTint.Sand, stats = 2); return@TabScreen }
         val d = v.d
         val c = Mfc.c
         val cp = v.cp
@@ -91,7 +100,13 @@ fun CrossPromoScreen(vm: DashVm, st: UiState, nav: NavHostController) {
             KCard {
                 Table(
                     listOf("Shown in".t(), "Promoted".t(), "Type".t(), "Views".t(), "Clicks".t(), "CTR", "Installs".t(), "Inst/click".t()),
-                    rows.sortedByDescending { it.views }.map { listOf(d.appName(it.src), d.appName(it.tgt), cpFmtName(it.fmt), num(it.views), num(it.clicks), pct(it.ctr), num(it.installs), pct(it.installPerClick)) },
+                    when (sort.key) {
+                        "clicks" -> rows.kSorted(sort.desc) { it.clicks }
+                        "ctr" -> rows.kSorted(sort.desc) { it.ctr }
+                        "installs" -> rows.kSorted(sort.desc) { it.installs }
+                        "ipc" -> rows.kSorted(sort.desc) { it.installPerClick }
+                        else -> rows.kSorted(sort.desc) { it.views }
+                    }.map { listOf(d.appName(it.src), d.appName(it.tgt), cpFmtName(it.fmt), num(it.views), num(it.clicks), pct(it.ctr), num(it.installs), pct(it.installPerClick)) },
                     empty = "No promo shown".t(),
                 )
             }

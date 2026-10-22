@@ -166,6 +166,8 @@ data class DashData(
     val recent: List<FeedRow>, val recentInstalls: List<InstallRow>, val failReasons: List<FailRow>, val crashes: List<CrashRow>,
     val purchases: List<PurchaseRow>, val versions: List<VersionRow>, val maxCheck: MaxCheck, val history: List<HistoryRow>,
     val fetchedAt: Long = System.currentTimeMillis(),
+    /** Disk cache ka pichhla copy (network wala abhi nahi aaya / fail): screens ise "Live" na kahein. fetchedAt = kab ka tha. */
+    val cached: Boolean = false,
 ) {
     fun appName(pkg: String) = apps.firstOrNull { it.pkg == pkg }?.name ?: pkg.substringAfterLast('.')
     fun appColor(pkg: String) = apps.firstOrNull { it.pkg == pkg }?.color ?: "#4A1FC4"
@@ -277,13 +279,23 @@ data class Note(val id: Long, val campaign: String, val pkg: String, val note: S
 data class ExtraData(
     val from: String, val to: String, val liveMinutes: Int, val active: Active, val retention: List<Retention>, val retentionDays: List<RetentionDay>,
     val campaignRoas: List<CampaignRoas>, val organicInstalls: Double, val campaignDaily: List<CampaignDay>, val notes: List<Note>,
+    val cohortFrom: String = "", val cohortTo: String = "",
 ) {
     fun ret(cohort: String) = retention.firstOrNull { it.cohort == cohort }
+    /** Server chhoti range par cohort ko pichhle 14 din tak badha deta hai: tab yeh din ginti deta hai (warna null). */
+    fun cohortDays(): Int? {
+        if (cohortFrom.isEmpty() || cohortFrom == from) return null
+        return runCatching {
+            val f = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).apply { timeZone = java.util.TimeZone.getTimeZone("UTC") }
+            ((f.parse(cohortTo.ifEmpty { to })!!.time - f.parse(cohortFrom)!!.time) / 86_400_000L).toInt() + 1
+        }.getOrNull()
+    }
     companion object {
         fun parse(j: JSONObject) = ExtraData(
             j.s("from"), j.s("to"), j.d("live_minutes", 6.0).toInt(), Active.of(j.obj("active")), j.arr("retention").mapObj(Retention::of),
             j.arr("retention_days").mapObj(RetentionDay::of), j.arr("campaign_roas").mapObj(CampaignRoas::of), j.obj("organic").d("installs"),
             j.arr("campaign_daily").mapObj(CampaignDay::of), j.arr("notes").mapObj(Note::of),
+            j.s("cohort_from"), j.s("cohort_to"),
         )
     }
 }
@@ -304,12 +316,16 @@ data class AlertItem(
     val isGads get() = rule.startsWith("gah_")
     val isStudio get() = rule.startsWith("studio_")
     val isCost get() = rule.startsWith("cost_")
-    /** Notification / card tap: health alert -> us issue ki screen; Google Ads monitor alert -> us alert ki screen. */
+    /**
+     * Notification / card tap: health alert -> us issue ki screen; Google Ads monitor alert -> us alert ki screen.
+     * Naya version live -> us app ka AI Health. Play mail -> Alerts (mail ki baat / link wahin dikhti hai).
+     */
     val route get() = when {
         isHealth -> issueId?.let { "health/issue/$it" } ?: "health"
         isGads -> gaAlertId?.let { "gads/alert/$it" } ?: "gads"
         isStudio -> stRoute?.takeIf { it.matches(Regex("studio(/[a-z]+(/\\d+)?)?")) } ?: "studio"
         isCost -> "cost"
+        rule == "new_version" && pkg.isNotBlank() -> "health/app/$pkg"
         else -> "alerts"
     }
     val open get() = resolvedAt == null

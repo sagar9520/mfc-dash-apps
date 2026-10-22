@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.windowInsetsTopHeight
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -48,6 +49,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.myfuturecode.mfcdash.App
+import com.myfuturecode.mfcdash.data.PageLoad
 import com.myfuturecode.mfcdash.notify.Notify
 import com.myfuturecode.mfcdash.ui.kit.KBarIcon
 import com.myfuturecode.mfcdash.ui.kit.KBottomNav
@@ -55,6 +57,7 @@ import com.myfuturecode.mfcdash.ui.kit.KDetailBar
 import com.myfuturecode.mfcdash.ui.kit.KIcons
 import com.myfuturecode.mfcdash.ui.kit.KNavItem
 import com.myfuturecode.mfcdash.ui.kit.KNum
+import com.myfuturecode.mfcdash.ui.kit.KPageLoadBar
 import com.myfuturecode.mfcdash.ui.kit.KTop
 import com.myfuturecode.mfcdash.ui.screens.AdsScreen
 import com.myfuturecode.mfcdash.ui.screens.AlertsScreen
@@ -93,6 +96,9 @@ import com.myfuturecode.mfcdash.util.tf
 /** Neeche ke 4 tab. Money / Users / Ads / Live / Promo ab detail screens hain (back ke saath). */
 private val TAB_ROUTES = setOf("home", "apps", "alerts", "settings")
 
+/** Aakhri page (back stack entry id) jis par loading line chali. Process bhar: Activity dobara bane to bhi yaad. */
+private object NavSeen { var id: String? = null }
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun Root(vm: DashVm) {
@@ -127,6 +133,15 @@ fun Root(vm: DashVm) {
         if (r in TAB_ROUTES) nav.goTab(r) else nav.navigate(r) { launchSingleTop = true }
         vm.consumeRoute()
     }
+    // Har naya page (tab badla, back, detail khuli, login ke baad pehli screen) = naya load: upar ki neeli line.
+    // Wahi page (same entry id) dobara aaye to nahi: wahi tab dobara dabana, ya Activity dobara bani (phone ghumaya,
+    // Fold khola / band kiya: nav wahi entry id ke saath lautata hai, isliye NavSeen process bhar yaad rakhta hai).
+    LaunchedEffect(nav) {
+        nav.currentBackStackEntryFlow.collect { e ->
+            PageLoad.route = e.destination.route   // DashVm ka 20 s refresh line tabhi khole jab uski screen dikh rahi ho
+            if (e.id != NavSeen.id) { NavSeen.id = e.id; PageLoad.start() }
+        }
+    }
 
     val c = Mfc.c
     val brand = Mfc.style == ThemeStyle.BRAND
@@ -154,6 +169,8 @@ fun Root(vm: DashVm) {
             // status bar + bottom nav ki jagah yahin; screens ko dobara nahi deni
             Box(Modifier.padding(pad).consumeWindowInsets(pad)) { AppNav(nav, vm, st, hvm, gvm, svm, cvm) }
         }
+        // browser jaisi neeli loading line: sabse upar (screen aur bottom nav ke bhi upar), status bar ke theek neeche
+        KPageLoadBar(Modifier.align(Alignment.TopCenter).windowInsetsPadding(WindowInsets.statusBars))
     }
 }
 

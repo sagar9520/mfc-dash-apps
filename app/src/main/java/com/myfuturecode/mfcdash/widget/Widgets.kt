@@ -14,7 +14,7 @@ import androidx.glance.appwidget.action.ActionCallback
 import androidx.glance.appwidget.provideContent
 
 /**
- * Teeno widget ek hi tarah bante hain: har lage widget (appWidgetId) ke apne options, data cache se.
+ * Chaaron widget ek hi tarah bante hain: har lage widget (appWidgetId) ke apne options, data cache se.
  * rev badle (naya data / Save / theme) to chalu widget turant dobara banta hai.
  */
 abstract class MfcWidget(private val kind: WKind) : GlanceAppWidget() {
@@ -43,6 +43,7 @@ abstract class MfcWidget(private val kind: WKind) : GlanceAppWidget() {
 class PaisaWidget : MfcWidget(WKind.PAISA)
 class AdsWidget : MfcWidget(WKind.ADS)
 class HealthWidget : MfcWidget(WKind.HEALTH)
+class AlertsWidget : MfcWidget(WKind.ALERTS)
 
 class PaisaWidgetReceiver : GlanceAppWidgetReceiver() {
     override val glanceAppWidget: GlanceAppWidget = PaisaWidget()
@@ -56,17 +57,23 @@ class HealthWidgetReceiver : GlanceAppWidgetReceiver() {
     override val glanceAppWidget: GlanceAppWidget = HealthWidget()
 }
 
+class AlertsWidgetReceiver : GlanceAppWidgetReceiver() {
+    override val glanceAppWidget: GlanceAppWidget = AlertsWidget()
+}
+
 internal val WKind.receiver: Class<out GlanceAppWidgetReceiver>
     get() = when (this) {
         WKind.PAISA -> PaisaWidgetReceiver::class.java
         WKind.ADS -> AdsWidgetReceiver::class.java
         WKind.HEALTH -> HealthWidgetReceiver::class.java
+        WKind.ALERTS -> AlertsWidgetReceiver::class.java
     }
 
 internal fun WKind.widget(): GlanceAppWidget = when (this) {
     WKind.PAISA -> PaisaWidget()
     WKind.ADS -> AdsWidget()
     WKind.HEALTH -> HealthWidget()
+    WKind.ALERTS -> AlertsWidget()
 }
 
 /** Band ka refresh: turant "…", phir sab widgets ka data naye sire se. */

@@ -83,18 +83,28 @@ import com.myfuturecode.mfcdash.ui.kit.KIcons
 import com.myfuturecode.mfcdash.ui.kit.KKind
 import com.myfuturecode.mfcdash.ui.kit.KListDivider
 import com.myfuturecode.mfcdash.ui.kit.KLive
-import com.myfuturecode.mfcdash.ui.kit.KLoading
 import com.myfuturecode.mfcdash.ui.kit.KPageTokens
 import com.myfuturecode.mfcdash.ui.kit.KPill
 import com.myfuturecode.mfcdash.ui.kit.KRoasMeter
 import com.myfuturecode.mfcdash.ui.kit.KRow
 import com.myfuturecode.mfcdash.ui.kit.KScreen
 import com.myfuturecode.mfcdash.ui.kit.KSection
+import com.myfuturecode.mfcdash.ui.kit.KSkelCard
+import com.myfuturecode.mfcdash.ui.kit.KSkelHero
+import com.myfuturecode.mfcdash.ui.kit.KSkelSection
+import com.myfuturecode.mfcdash.ui.kit.KSkelStats
+import com.myfuturecode.mfcdash.ui.kit.KSkeleton
+import com.myfuturecode.mfcdash.ui.kit.KSortButton
+import com.myfuturecode.mfcdash.ui.kit.KSortKind
+import com.myfuturecode.mfcdash.ui.kit.KSortState
+import com.myfuturecode.mfcdash.ui.kit.kSortLead
 import com.myfuturecode.mfcdash.ui.kit.KSegTabs
 import com.myfuturecode.mfcdash.ui.kit.KSplit
 import com.myfuturecode.mfcdash.ui.kit.KTabBar
 import com.myfuturecode.mfcdash.ui.kit.KTint
+import com.myfuturecode.mfcdash.ui.kit.KTwoPane
 import com.myfuturecode.mfcdash.ui.kit.KWeekBars
+import com.myfuturecode.mfcdash.ui.kit.isWide
 import com.myfuturecode.mfcdash.ui.theme.Mfc
 import com.myfuturecode.mfcdash.ui.theme.parseHex
 import com.myfuturecode.mfcdash.util.agoText
@@ -108,12 +118,15 @@ import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
 import kotlin.math.abs
+import kotlinx.coroutines.delay
 
 val RANGES = listOf("today" to "Today", "yesterday" to "Yesterday", "7d" to "7 days", "30d" to "30 days", "custom" to "Custom")
 
 /** Jo data tab dikha raha hai: sab apps ya ek app (app filter). */
 class View(val d: DashData, val extra: ExtraData?, val extraMissing: Boolean, val cp: CpData?, val pkg: String?) {
     val allApps get() = pkg == null
+    /** Sab apps: data aa gaya, app.php ka jawab abhi raste me (missing nahi). Ek app me data + extra saath aate hain. */
+    val extraPending get() = allApps && extra == null && !extraMissing
 }
 
 // ---------------------------------------------------------------- app bar + period
@@ -360,13 +373,18 @@ fun FilterToggle(box: FilterBox) {
     }
 }
 
-/** Ek line: kaunse filter lage hain + Hatao. Kuch na laga ho to kuch nahi. */
+/**
+ * Ek line: kaunse filter lage hain + Hatao. Kuch na laga ho to kuch nahi.
+ * lead = shuru me sort pill (`kSortLead(sort, opts)`: sort default par null); sirf pill ho to sirf pill.
+ */
 @Composable
-fun FilterSummary(box: FilterBox) {
+fun FilterSummary(box: FilterBox, lead: (@Composable () -> Unit)? = null) {
     val act = box.active
-    if (act.isEmpty()) return
+    if (act.isEmpty() && lead == null) return
     val c = Mfc.c
-    Row(Modifier.fillMaxWidth().padding(start = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().padding(start = if (lead != null) 0.dp else 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        lead?.invoke()
+        if (act.isEmpty()) return@Row
         Text(
             buildAnnotatedString {
                 act.forEachIndexed { i, r ->
@@ -375,7 +393,7 @@ fun FilterSummary(box: FilterBox) {
                     withStyle(SpanStyle(color = c.brand, fontWeight = FontWeight.SemiBold)) { append(r.selectedText) }
                 }
             },
-            Modifier.weight(1f), style = TextStyle(fontSize = 13.sp, fontFeatureSettings = "tnum"), maxLines = 2, overflow = TextOverflow.Ellipsis,
+            Modifier.weight(1f).padding(start = if (lead != null) 8.dp else 0.dp), style = TextStyle(fontSize = 13.sp, fontFeatureSettings = "tnum"), maxLines = 2, overflow = TextOverflow.Ellipsis,
         )
         Box(
             Modifier.heightIn(min = 48.dp).clip(RoundedCornerShape(24.dp)).clickable(role = Role.Button) { box.reset() }.padding(horizontal = 12.dp),
@@ -415,10 +433,13 @@ fun FilterSheet(box: FilterBox) {
 
 // ---------------------------------------------------------------- tab / detail screen frame
 
-/** Data na ho: load ho raha = spinner, warna error + Dobara try. */
+/**
+ * Data na ho: load ho raha = skeleton (screen jaisa dhaancha, chamak ke saath), warna error + Dobara try.
+ * Data pehle se ho aur refresh chale to ye nahi aata (purana data + bar ka ghoomta refresh).
+ */
 @Composable
-fun DashNoData(st: UiState, loading: Boolean, onRetry: () -> Unit) {
-    if (loading) { KLoading(); return }
+fun DashNoData(st: UiState, loading: Boolean, skeleton: @Composable () -> Unit = { DashSkel() }, onRetry: () -> Unit) {
+    if (loading) { skeleton(); return }
     Column(Modifier.fillMaxWidth().padding(top = 32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         KEmpty(st.error ?: "No data received".t(), KIcons.Info)
         KButton("Try again".t(), onRetry, kind = KBtn.SOFT, icon = KIcons.Refresh)
@@ -426,14 +447,62 @@ fun DashNoData(st: UiState, loading: Boolean, onRetry: () -> Unit) {
 }
 
 /**
+ * Screen ka pehla frame (ya keys badle): load wala LaunchedEffect abhi chala nahi, to bhi "load ho raha" maano,
+ * taaki skeleton se pehle ek frame "No data received" na jhalke. keys = load wale LaunchedEffect ki keys.
+ */
+@Composable
+fun dashFirstFrame(vararg keys: Any?): Boolean {
+    var first by remember(*keys) { mutableStateOf(true) }
+    LaunchedEffect(*keys) { first = false }
+    return first
+}
+
+/**
+ * Data aa gaya par saath wala jawab (jaise cross promo) abhi raste me: pending ho to ms tak true (skeleton dikhao),
+ * phir false (jawab na aaye to screen jaisi hai waisi). pending false = turant false.
+ */
+@Composable
+fun dashPending(pending: Boolean, ms: Long = 8_000L): Boolean {
+    var wait by remember(pending) { mutableStateOf(pending) }
+    if (pending) LaunchedEffect(Unit) { delay(ms); wait = false }
+    return wait
+}
+
+/**
+ * Aam detail screen ka skeleton: hero + numbers card (TileGrid jaisa; stats = 0: nahi) + do section (Users / Ads / Promo jaisa).
+ * Fold: do column.
+ */
+@Composable
+fun DashSkel(tint: KTint = KTint.Green, stats: Int = 4, cols: Int = 2) {
+    KSkeleton {
+        val left: @Composable ColumnScope.() -> Unit = {
+            KSkelHero(tint)
+            if (stats > 0) KSkelStats(stats, cols)
+        }
+        val right: @Composable ColumnScope.() -> Unit = {
+            KSkelSection()
+            KSkelCard(4)
+            KSkelSection(width = 110.dp)
+            KSkelCard(3)
+        }
+        if (isWide()) KTwoPane(left = left, right = right) else { left(); right() }
+    }
+}
+
+/**
  * Detail screen ka dhaancha (kit): app bar (back = wapas), period tabs, app chips, filter summary, phir content.
  * Filters bar ke Filter icon (ginti ke saath) ke peeche sheet me.
+ * sort (rememberKSort) diya ho to Filter ke baad Sort button, aur default se alag ho to filter summary ke shuru me pill.
  */
 @Composable
 fun TabScreen(title: String, vm: DashVm, st: UiState, nav: NavHostController, showRange: Boolean = true, back: Boolean = false, showApps: Boolean = true,
-              filters: (@Composable ColumnScope.(View) -> Unit)? = null, content: @Composable ColumnScope.(View) -> Unit) {
+              skeleton: @Composable () -> Unit = { DashSkel() },
+              filters: (@Composable ColumnScope.(View) -> Unit)? = null,
+              sort: KSortState? = null, sortOptions: List<Pair<String, String>> = emptyList(), sortKinds: Map<String, KSortKind> = emptyMap(),
+              content: @Composable ColumnScope.(View) -> Unit) {
     val pkg = if (showApps) st.appFilter else null
     LaunchedEffect(pkg, st.range, st.from, st.to, st.lastOk) { if (pkg != null) vm.loadApp(pkg, force = true) }
+    val first = dashFirstFrame(pkg, st.range, st.from, st.to, st.lastOk)
     val box = remember { FilterBox() }
     val d = if (pkg == null) st.data else st.appData[pkg]
     val v = if (d == null) null else View(d, if (pkg == null) st.extra else st.appExtra[pkg], st.extraMissing, if (pkg == null) st.cp else st.appCp[pkg], pkg)
@@ -442,6 +511,7 @@ fun TabScreen(title: String, vm: DashVm, st: UiState, nav: NavHostController, sh
             if (filters != null && box.rows.isNotEmpty()) {
                 KBarIcon(KIcons.Filter, "Filters".t(), { box.open = true }, badge = box.active.size, badgeUrgent = false)
             }
+            if (sort != null) KSortButton(sort, sortOptions, sortKinds)
             if (showRange) DashRangeIcon(vm, st)
         })
         if (showRange) DashPeriodTabs(vm, st, Modifier.padding(start = 16.dp, end = 16.dp, top = 2.dp, bottom = 10.dp))
@@ -450,10 +520,10 @@ fun TabScreen(title: String, vm: DashVm, st: UiState, nav: NavHostController, sh
         when {
             v != null -> {
                 if (filters != null) CompositionLocalProvider(LocalFilterBox provides box) { filters(v) }
-                FilterSummary(box)
+                FilterSummary(box, lead = sort?.let { kSortLead(it, sortOptions, sortKinds) })
                 content(v)
             }
-            else -> DashNoData(st, st.loading || (pkg != null && st.appLoading == pkg)) {
+            else -> DashNoData(st, st.loading || (pkg != null && (st.appLoading == pkg || first)), skeleton) {
                 if (pkg != null) vm.loadApp(pkg, force = true) else vm.refresh()
             }
         }
@@ -483,7 +553,7 @@ fun moneyProfitLabel(range: String): String = when (range) {
 /** Hero ke daayein: aaj ka data = Live · 2 min pehle, warna period. */
 @Composable
 private fun MoneyNote(d: DashData) {
-    if (d.today) KLive("Live".t() + " · " + agoText(d.fetchedAt))
+    if (d.today && !d.cached) KLive("Live".t() + " · " + agoText(d.fetchedAt))   // disk wala copy = Live nahi, period dikhao
     else DashText(periodText(d), 13.sp, Mfc.c.ink2)
 }
 

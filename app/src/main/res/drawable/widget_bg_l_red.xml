@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Ujla widget: upar loss (Paisa) halka rang (FDECEA), 46% par safed, neeche safed -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <gradient
+        android:type="linear"
+        android:angle="270"
+        android:startColor="#FFFDECEA"
+        android:centerColor="#FFFFFFFF"
+        android:centerY="0.46"
+        android:endColor="#FFFFFFFF" />
+    <corners android:radius="24dp" />
+</shape>

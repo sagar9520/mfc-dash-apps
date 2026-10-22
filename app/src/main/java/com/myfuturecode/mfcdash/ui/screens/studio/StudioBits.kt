@@ -63,6 +63,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.navigation.NavHostController
+import com.myfuturecode.mfcdash.data.PageLoad
 import com.myfuturecode.mfcdash.ui.GState
 import com.myfuturecode.mfcdash.ui.kit.KAvatar
 import com.myfuturecode.mfcdash.ui.kit.KBtn
@@ -71,11 +72,17 @@ import com.myfuturecode.mfcdash.ui.kit.KCard
 import com.myfuturecode.mfcdash.ui.kit.KIconTile
 import com.myfuturecode.mfcdash.ui.kit.KIcons
 import com.myfuturecode.mfcdash.ui.kit.KKind
-import com.myfuturecode.mfcdash.ui.kit.KLoading
 import com.myfuturecode.mfcdash.ui.kit.KNum
 import com.myfuturecode.mfcdash.ui.kit.KPageTokens
 import com.myfuturecode.mfcdash.ui.kit.KPill
 import com.myfuturecode.mfcdash.ui.kit.KRow
+import com.myfuturecode.mfcdash.ui.kit.KSkelCard
+import com.myfuturecode.mfcdash.ui.kit.KSkelHero
+import com.myfuturecode.mfcdash.ui.kit.KSkelRows
+import com.myfuturecode.mfcdash.ui.kit.KSkelSection
+import com.myfuturecode.mfcdash.ui.kit.KSkeleton
+import com.myfuturecode.mfcdash.ui.kit.KTint
+import com.myfuturecode.mfcdash.ui.kit.KTwoPane
 import com.myfuturecode.mfcdash.ui.kit.KStatus
 import com.myfuturecode.mfcdash.ui.kit.fg
 import com.myfuturecode.mfcdash.ui.kit.icon
@@ -218,7 +225,8 @@ fun jobName(j: String) = when (j) {
 
 internal fun sAgo(ts: String?): String = tsMs(ts)?.let { agoText(it) } ?: "–"
 
-internal fun sUpdated(g: GState): String = if (g.lastOk == 0L) "Loading…".t() else "Updated".t() + " " + agoText(g.lastOk)
+/** "Updated 2 min pehle". Pehli baar khaali (neeche skeleton dikh raha hai, "Loading…" nahi). */
+internal fun sUpdated(g: GState): String = if (g.lastOk == 0L) "" else "Updated".t() + " " + agoText(g.lastOk)
 
 /** Wapas: stack khali ho to Studio. */
 internal fun sBack(nav: NavHostController): () -> Unit = { if (!nav.popBackStack()) nav.navigate("studio") }
@@ -248,7 +256,8 @@ internal fun rememberOpenUrl(): (String) -> Unit {
 internal fun SPoll(ms: Long, vararg keys: Any?, tick: () -> Unit) {
     val t by rememberUpdatedState(tick)
     val life = LocalLifecycleOwner.current.lifecycle
-    LaunchedEffect(life, *keys) { life.repeatOnLifecycle(Lifecycle.State.STARTED) { while (true) { t(); delay(ms) } } }
+    // har tick = dikh rahi screen ka sync: upar ki line, par 15 s me ek hi baar (PageLoad.startAuto; tez job poll chup)
+    LaunchedEffect(life, *keys) { life.repeatOnLifecycle(Lifecycle.State.STARTED) { while (true) { PageLoad.startAuto(); t(); delay(ms) } } }
 }
 
 // ---------------------------------------------------------------- text
@@ -298,13 +307,38 @@ fun SProblem(g: GState, onRetry: () -> Unit) {
     }
 }
 
+/** View ka data, ya pehli baar skeleton (list jaisa), ya error. */
 @Composable
-fun SLoad(g: GState, j: JSONObject?, retry: () -> Unit, content: @Composable (JSONObject) -> Unit) {
+fun SLoad(g: GState, j: JSONObject?, retry: () -> Unit, skeleton: @Composable () -> Unit = { SSkel() }, content: @Composable (JSONObject) -> Unit) {
     if (j == null) {
-        if (g.error != null) SProblem(g, retry) else KLoading()
+        if (g.error != null) SProblem(g, retry) else skeleton()
         return
     }
     content(j)
+}
+
+/** View abhi aa raha (koi error nahi): hero ki jagah skeleton. */
+internal fun sSkelOn(g: GState, j: JSONObject?) = j == null && g.error == null
+
+/** Aam skeleton: ideas / projects / runs ki list. */
+@Composable
+fun SSkel(rows: Int = 5, lead: Boolean = true) {
+    KSkeleton { KSkelRows(rows, lead = lead) }
+}
+
+/** Studio detail (idea / project / run) ka skeleton, hero ke neeche: card + section + rows. Fold: hero baayein. */
+@Composable
+internal fun SDetailSkel(wide: Boolean) {
+    KSkeleton {
+        if (wide) KTwoPane(
+            left = { KSkelHero(KTint.Lav); KSkelCard(4) },
+            right = { KSkelSection(); KSkelRows(3, lead = false) },
+        ) else {
+            KSkelCard(4)
+            KSkelSection()
+            KSkelRows(3, lead = false)
+        }
+    }
 }
 
 /** Studio kabhi khud publish nahi karta: har gate par aapka OK. */

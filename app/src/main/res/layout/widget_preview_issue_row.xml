@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- App Health / Alerts preview ki ek line: chhota badge + "—" -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginTop="5dp"
+    android:gravity="center_vertical"
+    android:orientation="horizontal">
+
+    <TextView
+        android:layout_width="28dp"
+        android:layout_height="19dp"
+        android:background="@drawable/widget_pill"
+        android:backgroundTint="#FFFDE9E7"
+        android:gravity="center"
+        android:maxLines="1"
+        android:text="@string/widget_pv_dash"
+        android:textColor="#FFB4221A"
+        android:textSize="12sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="7dp"
+        android:layout_weight="1"
+        android:maxLines="1"
+        android:text="@string/widget_pv_dash"
+        android:textColor="#FF17161D"
+        android:textSize="12.5sp" />
+</LinearLayout>

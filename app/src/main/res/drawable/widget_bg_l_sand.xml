@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Ujla widget: upar Ads + Live halka rang (FFF0D6), 5% par safed, neeche safed -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <gradient
+        android:type="linear"
+        android:angle="270"
+        android:startColor="#FFFFF0D6"
+        android:centerColor="#FFFFFFFF"
+        android:centerY="0.5"
+        android:endColor="#FFFFFFFF" />
+    <corners android:radius="24dp" />
+</shape>

@@ -25,6 +25,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -64,6 +65,7 @@ import com.myfuturecode.mfcdash.ui.kit.KIconTile
 import com.myfuturecode.mfcdash.ui.kit.KIcons
 import com.myfuturecode.mfcdash.ui.kit.KKind
 import com.myfuturecode.mfcdash.ui.kit.KListDivider
+import com.myfuturecode.mfcdash.ui.kit.KLoadOnChange
 import com.myfuturecode.mfcdash.ui.kit.KLive
 import com.myfuturecode.mfcdash.ui.kit.KPaceMeter
 import com.myfuturecode.mfcdash.ui.kit.KPageTokens
@@ -73,7 +75,11 @@ import com.myfuturecode.mfcdash.ui.kit.KScreen
 import com.myfuturecode.mfcdash.ui.kit.KSection
 import com.myfuturecode.mfcdash.ui.kit.KSectionLink
 import com.myfuturecode.mfcdash.ui.kit.KSegTabs
+import com.myfuturecode.mfcdash.ui.kit.KSkelHero
 import com.myfuturecode.mfcdash.ui.kit.KSmallAction
+import com.myfuturecode.mfcdash.ui.kit.KSortButton
+import com.myfuturecode.mfcdash.ui.kit.KSortKind
+import com.myfuturecode.mfcdash.ui.kit.KSortState
 import com.myfuturecode.mfcdash.ui.kit.KSplit
 import com.myfuturecode.mfcdash.ui.kit.KStatus
 import com.myfuturecode.mfcdash.ui.kit.KTint
@@ -81,6 +87,9 @@ import com.myfuturecode.mfcdash.ui.kit.KTwoPane
 import com.myfuturecode.mfcdash.ui.kit.isWide
 import com.myfuturecode.mfcdash.ui.kit.kRoasColor
 import com.myfuturecode.mfcdash.ui.kit.kSignedPct
+import com.myfuturecode.mfcdash.ui.kit.kSortLead
+import com.myfuturecode.mfcdash.ui.kit.kSorted
+import com.myfuturecode.mfcdash.ui.kit.rememberKSort
 import com.myfuturecode.mfcdash.ui.screens.FilterBox
 import com.myfuturecode.mfcdash.ui.screens.FilterChips
 import com.myfuturecode.mfcdash.ui.screens.FilterSheet
@@ -105,6 +114,7 @@ import com.myfuturecode.mfcdash.util.strings
 import com.myfuturecode.mfcdash.util.t
 import com.myfuturecode.mfcdash.util.tOnly
 import com.myfuturecode.mfcdash.util.tf
+import com.myfuturecode.mfcdash.util.tsMs
 import org.json.JSONObject
 import java.util.Locale
 
@@ -131,6 +141,79 @@ private fun statusOptions(tab: String): List<Pair<String, String>> = listOf("" t
 // tabs: Accounts | Alerts | AI | More (baaki 9 menu me)
 private val G_MAIN = listOf("accounts", "history", "recs")
 private val G_MORE = listOf("health", "policy", "spend", "cpi", "roas", "campaigns", "creatives", "live", "settings")
+
+// Sort (bar ka Sort button, Filter ke baad): har list tab ka apna. Default = server ka aaj ka order (bina chhede wahi list).
+// accounts / health: company A -> Z; alerts / AI: khule + level; spend / CPI / ROAS: alert wale pehle, phir 7 din kharcha;
+// campaigns: kharcha; live: naye runs pehle. Creatives (campaign id order) aur Settings par Sort nahi.
+private val G_SORT_DEF = mapOf(
+    "accounts" to ("name" to false), "health" to ("name" to false), "history" to ("level" to true), "policy" to ("level" to true),
+    "recs" to ("level" to true), "spend" to ("alerts" to true), "cpi" to ("alerts" to true), "roas" to ("alerts" to true),
+    "campaigns" to ("spend" to true), "live" to ("time" to true),
+)
+private val G_SORT_KINDS = mapOf("time" to KSortKind.DATE, "account" to KSortKind.TEXT, "cpi" to KSortKind.NUM_LOW)
+
+private fun gSortOpts(tab: String): List<Pair<String, String>> = when (tab) {
+    "accounts", "health" -> listOf("name" to "Name".t(), "spend" to "Spend today".t(), "alerts" to "Alerts".t(), "pace" to "Pace".t())
+    "history", "policy", "recs" -> listOf("level" to "Level".t(), "time" to "Time".t(), "account" to "Account".t())
+    "spend" -> listOf("alerts" to "Alerts".t(), "spend" to "Spend".t(), "pace" to "Pace".t(), "name" to "Name".t())
+    "cpi" -> listOf("alerts" to "Alerts".t(), "spend" to "Spend".t(), "cpi" to "CPI", "installs" to "Installs".t(), "name" to "Name".t())
+    "roas" -> listOf("alerts" to "Alerts".t(), "spend" to "Spend".t(), "roas" to "ROAS", "name" to "Name".t())
+    "campaigns" -> listOf("spend" to "Spend".t(), "installs" to "Installs".t(), "cpi" to "CPI", "ctr" to "CTR", "roas" to "ROAS", "name" to "Name".t())
+    "live" -> listOf("time" to "Time".t(), "issues" to "Issues".t())
+    else -> emptyList()
+}
+
+private fun gAcctName(j: JSONObject): String = j.s("company").ifBlank { j.s("account_name").ifBlank { j.s("cid_fmt") } }
+
+/** Accounts (overview ki list): default par server ka order (company A -> Z). Kharcha ₹ me milakar (USD x rate). */
+private fun gSortAccs(accs: List<JSONObject>, s: KSortState?, usdInr: Double?): List<JSONObject> = when {
+    s == null || s.isDefault -> accs
+    s.key == "spend" -> accs.kSorted(s.desc) { j -> j.dn("spend_today")?.let { gToInr(it, j.s("currency"), usdInr) ?: it } }
+    s.key == "alerts" -> accs.kSorted(s.desc) { it.d("critical") * 1000 + it.d("warning") }
+    s.key == "pace" -> accs.kSorted(s.desc) { j -> j.dn("pace_pct")?.takeIf { j.b("monitoring") && j.b("fresh") } }
+    else -> accs.kSorted(s.desc) { gAcctName(it).lowercase() }
+}
+
+private fun gLevelRank(l: String): Int = when (l.uppercase()) {
+    "CRITICAL" -> 3
+    "WARNING" -> 2
+    "INFO" -> 1
+    else -> 0
+}
+
+/** Alerts / AI list: default par server ka order (khule pehle, level, aakhri baar). Time = row par dikhne wala (pehli baar). */
+private fun gSortAlerts(list: List<GAlert>, s: KSortState?): List<GAlert> = when {
+    s == null || s.isDefault -> list
+    s.key == "time" -> list.kSorted(s.desc) { tsMs(it.firstSeen) }
+    s.key == "account" -> list.kSorted(s.desc) { it.company.ifBlank { it.cidFmt }.lowercase() }
+    else -> list.kSorted(s.desc) { (if (it.open) 10 else 0) + gLevelRank(it.level) }
+}
+
+/** Spend / CPI / ROAS campaigns: default par server ka order (alert wale pehle, phir 7 din kharcha). Number = 7 din. */
+private fun gSortMonitor(rows: List<JSONObject>, s: KSortState?, usdInr: Double?): List<JSONObject> {
+    if (s == null || s.isDefault) return rows
+    fun d7(r: JSONObject) = r.obj("windows").obj("d7")
+    return when (s.key) {
+        "spend" -> rows.kSorted(s.desc) { r -> d7(r).dn("cost")?.let { gToInr(it, r.s("currency"), usdInr) ?: it } }
+        "pace" -> rows.kSorted(s.desc) { it.dn("pace_pct") }
+        "cpi" -> rows.kSorted(s.desc) { r -> d7(r).dn("cpi")?.let { gToInr(it, r.s("currency"), usdInr) ?: it } }
+        "installs" -> rows.kSorted(s.desc) { d7(it).dn("conversions") }
+        "roas" -> rows.kSorted(s.desc) { d7(it).dn("roas") }
+        "name" -> rows.kSorted(s.desc) { it.s("name").ifBlank { it.s("campaign_id") }.lowercase() }
+        else -> rows.kSorted(s.desc) { it.arr("alerts").length() }
+    }
+}
+
+/** Campaigns table: default par server ka order (kharcha zyada -> kam); account ke group ke andar bhi wahi order. */
+private fun gSortCamps(rows: List<JSONObject>, s: KSortState?): List<JSONObject> = when {
+    s == null || s.isDefault -> rows
+    s.key == "installs" -> rows.kSorted(s.desc) { it.dn("installs") }
+    s.key == "cpi" -> rows.kSorted(s.desc) { it.dn("cpi") }
+    s.key == "ctr" -> rows.kSorted(s.desc) { it.dn("ctr") }
+    s.key == "roas" -> rows.kSorted(s.desc) { it.dn("roas") }
+    s.key == "name" -> rows.kSorted(s.desc) { it.s("name").ifBlank { it.s("campaign_id") }.lowercase() }
+    else -> rows.kSorted(s.desc) { it.dn("cost") }
+}
 
 private fun gShortTab(k: String): String = when (k) {
     "accounts" -> "Accounts".t()
@@ -214,6 +297,7 @@ fun GadsScreen(vm: GadsVm, nav: NavHostController, startTab: String) {
     )
     // hero har tab par dikhta hai, isliye overview yahin se
     gPoll(60_000L, f, r) { vm.load("overview", f) }
+    KLoadOnChange(tab, f)   // user ne tab / filter badla = upar ki line
     val o = g.view("overview", f)
     val accs = o?.arr("accounts")?.mapObj { it }.orEmpty()
     val usdInr = gUsdInr()
@@ -223,10 +307,17 @@ fun GadsScreen(vm: GadsVm, nav: NavHostController, startTab: String) {
     val go: (String) -> Unit = { tab = it }
     val onAdd: (Pair<String, String>) -> Unit = { addPre = it }
     val onToken: (String, String) -> Unit = { c0, t0 -> token = c0 to t0 }
+    // har list tab ka apna sort (tab badalne par yaad); Creatives / Settings par null
+    val sorts = G_SORT_DEF.mapValues { (k, d) -> key(k) { rememberKSort(d.first, d.second) } }
+    // Health tab par ek hi account chuna ho (filter ya akela account) to list nahi, account ka page dikhta hai: Sort nahi
+    val sort = sorts[tab]?.takeUnless { tab == "health" && (account.isNotBlank() || accs.size == 1) }
+    val sortOpts = gSortOpts(tab)
+    val sortLead = sort?.let { kSortLead(it, sortOpts, G_SORT_KINDS) }
 
     val bar: @Composable ColumnScope.() -> Unit = {
         KDetailBar("Google Ads".t(), gBack(nav), sub = if (o == null) updatedText(g) else if (accs.size == 1) "1 account".t() else tf("%s accounts", accs.size), actions = {
             if (tab != "settings" && box.rows.isNotEmpty()) KBarIcon(KIcons.Filter, "Filters".t(), { box.open = true }, badge = box.active.size, badgeUrgent = false)
+            if (sort != null) KSortButton(sort, sortOpts, G_SORT_KINDS)
             KBarIcon(KIcons.Refresh, "Refresh".t(), { reload.intValue++ })
         })
     }
@@ -257,27 +348,28 @@ fun GadsScreen(vm: GadsVm, nav: NavHostController, startTab: String) {
             }
         }
     }
-    val body: @Composable () -> Unit = { TabBody(tab, g, vm, nav, f, r, o, usdInr, drop, spike, wide, onAdd, onToken, go) }
+    val body: @Composable () -> Unit = { TabBody(tab, g, vm, nav, f, r, o, usdInr, drop, spike, wide, onAdd, onToken, go, sort) }
 
     if (wide) {
         // Fold: tabs poori chaudai me (aadhe pane me "Accounts" kat jaata), phir baayein hero (+ setup / naye accounts), daayein tab ka data
         KScreen(top = bar) {
             filters()
             GadsTabs(tab, openAlerts, go)
-            FilterSummary(box)
+            FilterSummary(box, lead = sortLead)
             KTwoPane(
                 left = {
-                    GadsHero(o, accs, usdInr, drop, spike)
+                    if (gSkelOn(g, o)) KSkelHero(KTint.Sand) else GadsHero(o, accs, usdInr, drop, spike)
                     if (tab == "accounts" && o != null) AccountsExtra(o, onAdd)
                 },
                 right = { body() },
             )
         }
     } else {
-        KScreen(top = { bar(); GadsHero(o, accs, usdInr, drop, spike) }) {
+        // pehli baar (overview abhi nahi aaya): hero ki jagah skeleton, "–" nahi
+        KScreen(top = { bar(); if (gSkelOn(g, o)) KSkelHero(KTint.Sand) else GadsHero(o, accs, usdInr, drop, spike) }) {
             filters()
             GadsTabs(tab, openAlerts, go)
-            FilterSummary(box)
+            FilterSummary(box, lead = sortLead)
             body()
         }
     }
@@ -292,19 +384,20 @@ fun GadsScreen(vm: GadsVm, nav: NavHostController, startTab: String) {
 private fun TabBody(
     tab: String, g: GState, vm: GadsVm, nav: NavHostController, f: Map<String, String>, r: Int, o: JSONObject?, usdInr: Double?,
     drop: Double, spike: Double, wide: Boolean, onAdd: (Pair<String, String>) -> Unit, onToken: (String, String) -> Unit, go: (String) -> Unit,
+    sort: KSortState?,
 ) {
     when (tab) {
-        "health" -> HealthTab(g, vm, nav, f, r, o)
-        "policy" -> AlertsTab(g, vm, nav, f, r, "status")
-        "spend", "cpi", "roas" -> MonitorTab(g, vm, nav, f, r, tab)
-        "campaigns" -> CampaignsTab(g, vm, nav, f, r)
+        "health" -> HealthTab(g, vm, nav, f, r, o, sort, usdInr)
+        "policy" -> AlertsTab(g, vm, nav, f, r, "status", sort)
+        "spend", "cpi", "roas" -> MonitorTab(g, vm, nav, f, r, tab, sort, usdInr)
+        "campaigns" -> CampaignsTab(g, vm, nav, f, r, sort)
         "creatives" -> CreativesTab(g, vm, nav, f, r)
-        "recs" -> RecsTab(g, vm, nav, f, r)
-        "live" -> LiveMonTab(g, vm, nav, f, r)
-        "history" -> AlertsTab(g, vm, nav, f, r, "all")
+        "recs" -> RecsTab(g, vm, nav, f, r, sort)
+        "live" -> LiveMonTab(g, vm, nav, f, r, sort)
+        "history" -> AlertsTab(g, vm, nav, f, r, "all", sort)
         "settings" -> SettingsTab(g, vm, nav, r, onToken)
         else -> {
-            AccountsMain(g, vm, nav, f, o, usdInr, drop, spike, onAdd, go)
+            AccountsMain(g, vm, nav, f, o, usdInr, drop, spike, onAdd, go, sort)
             if (!wide && o != null) AccountsExtra(o, onAdd)
         }
     }
@@ -404,10 +497,10 @@ private fun GadsTabs(tab: String, alerts: Int, onPick: (String) -> Unit) {
 @Composable
 private fun AccountsMain(
     g: GState, vm: GadsVm, nav: NavHostController, f: Map<String, String>, o: JSONObject?, usdInr: Double?, drop: Double, spike: Double,
-    onAdd: (Pair<String, String>) -> Unit, go: (String) -> Unit,
+    onAdd: (Pair<String, String>) -> Unit, go: (String) -> Unit, sort: KSortState?,
 ) {
     GLoad(g, o, { vm.load("overview", f) }) { ov ->
-        val accs = ov.arr("accounts").mapObj { it }
+        val accs = gSortAccs(ov.arr("accounts").mapObj { it }, sort, usdInr)
         KSection("Accounts".t())
         KCard(list = true) {
             accs.forEachIndexed { i, j ->
@@ -496,14 +589,14 @@ fun SetupWarnings(s: JSONObject) {
 // ---------------------------------------------------------------- B. Account Health
 
 @Composable
-private fun HealthTab(g: GState, vm: GadsVm, nav: NavHostController, f: Map<String, String>, reload: Int, o: JSONObject?) {
+private fun HealthTab(g: GState, vm: GadsVm, nav: NavHostController, f: Map<String, String>, reload: Int, o: JSONObject?, sort: KSortState?, usdInr: Double?) {
     GLoad(g, o, { vm.load("overview", f) }) { ov ->
         val accs = ov.arr("accounts").mapObj { it }
         val sel = f["account"].orEmpty().ifBlank { if (accs.size == 1) accs[0].s("cid") else "" }
         when {
             accs.isEmpty() -> KCard { KEmpty("No accounts".t(), KIcons.Ads) }
             sel.isNotBlank() -> AccountBody(g, vm, nav, sel, reload)
-            else -> accs.forEach { j -> HealthCard(j, nav) }
+            else -> gSortAccs(accs, sort, usdInr).forEach { j -> HealthCard(j, nav) }
         }
     }
 }
@@ -533,11 +626,11 @@ private fun HealthCard(j: JSONObject, nav: NavHostController) {
 // ---------------------------------------------------------------- C / K. alert lists
 
 @Composable
-private fun AlertsTab(g: GState, vm: GadsVm, nav: NavHostController, f: Map<String, String>, reload: Int, group: String) {
+private fun AlertsTab(g: GState, vm: GadsVm, nav: NavHostController, f: Map<String, String>, reload: Int, group: String, sort: KSortState?) {
     val p = f + ("group" to group)
     gPoll(30_000L, p, reload) { vm.load("alerts", p) }
     GLoad(g, g.view("alerts", p), { vm.load("alerts", p) }) { j ->
-        val list = j.arr("alerts").mapObj(GAlert::of)
+        val list = gSortAlerts(j.arr("alerts").mapObj(GAlert::of), sort)
         KSection(
             if (group == "status") "Policy".t() else "Alerts".t(),
             trailing = if (list.isNotEmpty()) { { KPill(list.size.toString(), KKind.NEUTRAL, icon = null) } } else null,
@@ -549,7 +642,7 @@ private fun AlertsTab(g: GState, vm: GadsVm, nav: NavHostController, f: Map<Stri
 // ---------------------------------------------------------------- D / E / F. Spend / CPI / ROAS
 
 @Composable
-private fun MonitorTab(g: GState, vm: GadsVm, nav: NavHostController, f: Map<String, String>, reload: Int, kind: String) {
+private fun MonitorTab(g: GState, vm: GadsVm, nav: NavHostController, f: Map<String, String>, reload: Int, kind: String, sort: KSortState?, usdInr: Double?) {
     val p = f + ("kind" to kind)
     gPoll(60_000L, p, reload) { vm.load("monitor", p) }
     GLoad(g, g.view("monitor", p), { vm.load("monitor", p) }) { j ->
@@ -581,7 +674,7 @@ private fun MonitorTab(g: GState, vm: GadsVm, nav: NavHostController, f: Map<Str
                 }
             }
         }
-        val rows = j.arr("rows").mapObj { it }
+        val rows = gSortMonitor(j.arr("rows").mapObj { it }, sort, usdInr)
         KSection(tf("%s campaigns", rows.size))
         if (rows.isEmpty()) KCard { KEmpty("No campaign data".t(), KIcons.Ads) }
         rows.forEach { r -> MonitorCard(r, kind, nav, g) }
@@ -656,11 +749,11 @@ private fun MonitorCard(r: JSONObject, kind: String, nav: NavHostController, g: 
 // ---------------------------------------------------------------- G. Campaigns & ad groups
 
 @Composable
-private fun CampaignsTab(g: GState, vm: GadsVm, nav: NavHostController, f: Map<String, String>, reload: Int) {
+private fun CampaignsTab(g: GState, vm: GadsVm, nav: NavHostController, f: Map<String, String>, reload: Int, sort: KSortState?) {
     gPoll(120_000L, f, reload) { vm.load("campaigns", f) }
     GLoad(g, g.view("campaigns", f), { vm.load("campaigns", f) }) { j ->
         val roasT = gRoasT()
-        val rows = j.arr("rows").mapObj { it }
+        val rows = gSortCamps(j.arr("rows").mapObj { it }, sort)
         if (rows.isEmpty()) KCard { KEmpty("No campaign data".t(), KIcons.Ads) }
         rows.groupBy { it.s("cid") }.forEach { (cid, list) ->
             val first = list.first()
@@ -741,12 +834,12 @@ fun AiBox(title: String, text: String) {
 // ---------------------------------------------------------------- I. AI: kya karna hai
 
 @Composable
-private fun RecsTab(g: GState, vm: GadsVm, nav: NavHostController, f: Map<String, String>, reload: Int) {
+private fun RecsTab(g: GState, vm: GadsVm, nav: NavHostController, f: Map<String, String>, reload: Int, sort: KSortState?) {
     gPoll(60_000L, f, reload) { vm.load("recs", f) }
     GLoad(g, g.view("recs", f), { vm.load("recs", f) }) { j ->
         val roasT = gRoasT()
         val lv = f["status"].orEmpty().uppercase()
-        val list = j.arr("alerts").mapObj(GAlert::of).filter { lv.isBlank() || it.level == lv }
+        val list = gSortAlerts(j.arr("alerts").mapObj(GAlert::of).filter { lv.isBlank() || it.level == lv }, sort)
         KSection("What to do".t(), trailing = if (list.isNotEmpty()) { { KPill(list.size.toString(), KKind.NEUTRAL, icon = null) } } else null)
         if (list.isEmpty()) KCard { KEmpty("Nothing to fix".t(), KIcons.Ok) }
         list.forEach { a -> RecCard(a, nav) }
@@ -830,7 +923,7 @@ private fun DailyReview(d: JSONObject, nav: NavHostController, roasT: Double) {
 // ---------------------------------------------------------------- J. Live
 
 @Composable
-private fun LiveMonTab(g: GState, vm: GadsVm, nav: NavHostController, f: Map<String, String>, reload: Int) {
+private fun LiveMonTab(g: GState, vm: GadsVm, nav: NavHostController, f: Map<String, String>, reload: Int, sort: KSortState?) {
     gPoll(10_000L, f, reload) { vm.load("live", f) }
     GLoad(g, g.view("live", f), { vm.load("live", f) }) { j ->
         SetupWarnings(j.obj("setup"))
@@ -871,7 +964,14 @@ private fun LiveMonTab(g: GState, vm: GadsVm, nav: NavHostController, f: Map<Str
                 kind = KBtn.OUTLINE, busy = "mail_check" in g.busy,
             )
         }
-        val runs = j.arr("runs").mapObj(GRun::of)
+        // runs: default par server ka order (naye pehle)
+        val runs = j.arr("runs").mapObj(GRun::of).let { l ->
+            when {
+                sort == null || sort.isDefault -> l
+                sort.key == "issues" -> l.kSorted(sort.desc) { it.issues + it.failedChecks }
+                else -> l.kSorted(sort.desc) { tsMs(it.startedAt) }
+            }
+        }
         KSection("Runs".t(), trailing = { KLive("auto 10 sec".t()) })
         KCard(list = true) {
             if (runs.isEmpty()) KEmpty("No runs yet".t())

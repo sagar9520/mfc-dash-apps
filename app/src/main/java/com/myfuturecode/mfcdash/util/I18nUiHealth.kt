@@ -22,4 +22,6 @@ val HI_UI_HEALTH: Map<String, String> = mapOf(
     "Suggested fix" to "Sujhaya fix", "Missing evidence" to "Saboot nahi mila", "Cause" to "Wajah", "Location" to "Jagah",
     "Fold" to "Chhota karo", "Expand" to "Poora dekho", "Files modified" to "Badli files", "GitHub run" to "GitHub run",
     "events" to "events",
+    // app screen: Google ka din + version-wise crash / ANR
+    "All versions" to "Sab versions", "Version-wise" to "Version ke hisaab se", "Newest" to "Naya",
 )

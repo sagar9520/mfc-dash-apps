@@ -2,7 +2,8 @@
 /**
  * MFC Dashboard — Smart Alerts (rule engine + Claude AI)
  * Poore dashboard par nazar: data aana band, crash, Google Ads (campaign / ROAS / CPI / spend), revenue, installs,
- * retention, payments, ad network / ad unit (fill, no-fill, CTR, eCPM). 3 level: 1 = Info, 2 = Dhyan do / Watch, 3 = URGENT.
+ * retention, payments, ad network / ad unit (fill, no-fill, CTR, eCPM), naya version Play par live (info, ek version par ek baar).
+ * 3 level: 1 = Info, 2 = Dhyan do / Watch, 3 = URGENT. (Play Console emails: rule play_mail, lib/playmail.php health cron se likhta hai.)
  * Har alert English + Hinglish (title/body + title_hi/body_hi) me aata hai; app apni bhasha chunti hai (GET ?lang=en|hi),
  * aur Claude AI ki explanation bhi usi bhasha me (kya hua, nuksan/fayda, wajah, fix).
  *
@@ -38,6 +39,7 @@ const AL_MIN_SPEND_NOINST = 500;  // ₹: itna kharch aur 0 install -> urgent
 const AL_ROAS_SPEND_MIN  = 1500;  // ₹: 3 din me itna kharch ho tabhi ROAS alert
 const AL_BRIEF_HOUR      = 9;     // subah 9 baje roz ka brief (local time)
 const AL_AI_MAX_PER_RUN  = 6;     // ek run me max itne alerts AI se samjhao
+const AL_LIVE_MIN_USERS  = 5;     // naya version "live" tab maana jaata hai jab itne alag devices par dikhe (test installs se alert nahi)
 const AL_AI_DEFAULT_MODEL = 'claude-opus-5-5';
 
 // rules jo apne aap "theek ho gaya" ho jaate hain jab condition hat jaaye
@@ -218,7 +220,7 @@ function al_compute(PDO $pdo, ?callable $log, bool $force): array
 
         $ctx = al_context($pdo);
         $found = [];
-        $rules = ['al_rule_activity', 'al_rule_agg', 'al_rule_gads_feed', 'al_rule_campaigns', 'al_rule_roas', 'al_rule_crash', 'al_rule_ver_crash',
+        $rules = ['al_rule_activity', 'al_rule_agg', 'al_rule_gads_feed', 'al_rule_campaigns', 'al_rule_roas', 'al_rule_crash', 'al_rule_ver_crash', 'al_rule_new_version',
             'al_rule_fill', 'al_rule_adunit', 'al_rule_revenue', 'al_rule_installs', 'al_rule_uninstall', 'al_rule_payments', 'al_rule_retention', 'al_rule_brief', 'al_rule_records'];
         foreach ($rules as $fn) {
             try { $fn($pdo, $ctx, $found); }
@@ -597,6 +599,83 @@ function al_rule_ver_crash(PDO $pdo, array $ctx, array &$found): void
             L("$c crashes among $u users today (other versions " . al_pct($oRate, 1) . '). Impact: this version loses ad revenue and retention. Fix: halt the rollout / roll back, then read the stack trace in Play Console > Vitals.', "Aaj $u users me $c crashes (baaki versions " . al_pct($oRate, 1) . '). Asar: is version par ad kamai aur retention dono girte hain. Fix: rollout roko / purana version wapas lao, phir Play Console > Vitals me stack trace dekho.'), $m, $pkg);
         }
     }
+}
+
+/** 7b) Naya version Play par live: tracker (day_ver, wahi table jo ver_crash use karta hai) me pkg ka naya, ab tak se ooncha version
+ *  kam se kam AL_LIVE_MIN_USERS alag devices par (aaj + kal, local din). Ek version = ek hi info alert (akey live|pkg|ver):
+ *  app_alerts me row ho (resolved bhi) to dobara kabhi nahi; har app ka "ab tak ka sabse ooncha live version" kv al_live_ver me. */
+function al_rule_new_version(PDO $pdo, array $ctx, array &$found): void
+{
+    $vcCol = al_has_col($pdo, 'day_ver', 'vc') ? 'MAX(vc)' : 'NULL';
+    $min = AL_LIVE_MIN_USERS;
+    $rows = al_q($pdo, "SELECT pkg, ver, $vcCol vc, COUNT(DISTINCT did) users FROM day_ver WHERE day >= :y AND ver <> '' GROUP BY pkg, ver HAVING users >= $min", [':y' => $ctx['yest']]);
+    if (!$rows) return;
+    $top = [];   // har app ka sabse ooncha version (window me)
+    foreach ($rows as $r) if (!isset($top[$r['pkg']]) || al_ver_cmp($r, $top[$r['pkg']]) > 0) $top[$r['pkg']] = $r;
+    $base = json_decode((string)(kv_get('al_live_ver') ?? ''), true);
+    $base = is_array($base) ? array_filter($base, fn($b) => is_array($b) && isset($b['ver'])) : [];   // kharab entry = us app ka base dobara history se
+    $row2base = fn(array $r) => ['ver' => (string)$r['ver'], 'vc' => isset($r['vc']) && $r['vc'] !== null ? (int)$r['vc'] : null, 'users' => (int)$r['users'], 'at' => time()];
+    $save = false;
+    // pehli baar (naya deploy / naya app): base = pichhle 30 din ka sabse ooncha live version, taaki purane versions par alert na aaye
+    $miss = array_values(array_diff(array_keys($top), array_keys($base)));
+    if ($miss) {
+        $in = implode(',', array_fill(0, count($miss), '?'));
+        foreach (al_q($pdo, "SELECT pkg, ver, $vcCol vc, COUNT(DISTINCT did) users FROM day_ver WHERE day >= ? AND day < ? AND ver <> '' AND pkg IN ($in) GROUP BY pkg, ver HAVING users >= $min",
+            array_merge([$ctx['back'](30), $ctx['yest']], $miss)) as $r)
+            if (!isset($base[$r['pkg']]) || al_ver_cmp($r, $base[$r['pkg']]) > 0) $base[$r['pkg']] = $row2base($r);
+        // history hi nahi (bilkul naya app): abhi wala version base, alert nahi (naye app ka alert health_newapp deta hai)
+        foreach ($miss as $pkg) if (!isset($base[$pkg])) $base[$pkg] = $row2base($top[$pkg]);
+        $save = true;
+    }
+    foreach ($top as $pkg => $r) {
+        $b = $base[$pkg];
+        if (al_ver_cmp($r, $b) <= 0) continue;
+        $ver = (string)$r['ver'];
+        $key = "live|$pkg|$ver";
+        $ex = al_q($pdo, 'SELECT metrics FROM app_alerts WHERE akey = ? LIMIT 1', [$key]);
+        if ($ex) {   // alert ban chuka (khula ho ya resolved): ab yahi base, dobara kabhi nahi
+            $m = json_decode((string)$ex[0]['metrics'], true) ?: [];
+            $base[$pkg] = $row2base($r);
+            if ($base[$pkg]['vc'] === null && isset($m['version_code'])) $base[$pkg]['vc'] = (int)$m['version_code'];
+            $save = true;
+            continue;
+        }
+        $vc = $r['vc'] !== null ? (int)$r['vc'] : al_ver_code($pdo, $pkg, $ver);
+        $u = (int)$r['users']; $nm = al_name($ctx, $pkg); $prev = (string)$b['ver'];
+        al_add($found, $key, 1, 'new_version', L("$nm v$ver is live on Play", "$nm v$ver Play par live"),
+            L("$u users are already on v$ver (MFC tracker, today + yesterday; previous version v$prev). Crash / ANR % for this version shows in AI Health once Google publishes vitals (1-2 days).",
+              "$u users already v$ver par hain (MFC tracker, aaj + kal; pichhla version v$prev). Is version ka crash / ANR % AI Health me tab dikhega jab Google vitals de (1-2 din)."),
+            ['version' => $ver, 'version_code' => $vc, 'users' => $u, 'previous_version' => $prev, 'previous_version_code' => $b['vc'] ?? null, 'min_users' => $min], $pkg);
+    }
+    if ($save) kv_set('al_live_ver', json_encode($base, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+}
+
+/** Version compare: dono ke versionCode hon to wahi, warna version name natural ("1.10" > "1.9"). */
+function al_ver_cmp(array $a, array $b): int
+{
+    $ca = (int)($a['vc'] ?? 0); $cb = (int)($b['vc'] ?? 0);
+    if ($ca > 0 && $cb > 0 && $ca !== $cb) return $ca <=> $cb;
+    $x = ltrim(trim((string)($a['ver'] ?? '')), 'vV'); $y = ltrim(trim((string)($b['ver'] ?? '')), 'vV');
+    return $x === $y ? 0 : version_compare($x, $y);
+}
+
+function al_has_col(PDO $pdo, string $table, string $col): bool
+{
+    static $c = [];
+    $k = "$table.$col";
+    if (!isset($c[$k])) {
+        try { $c[$k] = (bool)$pdo->query("SHOW COLUMNS FROM `$table` LIKE " . $pdo->quote($col))->fetch(); } catch (Throwable $e) { $c[$k] = false; }
+    }
+    return $c[$k];
+}
+
+/** Version name -> versionCode (events ka sabse naya event). Sirf alert banate waqt, ek version par ek baar. Na mile to null. */
+function al_ver_code(PDO $pdo, string $pkg, string $ver): ?int
+{
+    try {
+        $v = al_q1($pdo, 'SELECT vc FROM events WHERE pkg = ? AND ts >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL 2 DAY) AND ver = ? AND vc > 0 ORDER BY ts DESC LIMIT 1', [$pkg, $ver]);
+        return $v !== null ? (int)$v : null;
+    } catch (Throwable $e) { return null; }
 }
 
 /** 8) Ad fill gir gaya (aaj) */

@@ -22,10 +22,17 @@ class CostVm(app: App) : ViewModel() {
     val msg: SharedFlow<String> = _msg
 
     fun load(range: String = "month") {
+        val k = gkey(range, emptyMap())
+        // pehli baar (app khuli): disk wala pichhla jawab turant, phir network
+        if (k !in _s.value.views) viewModelScope.launch {
+            // sirf aaj ka copy: range = today / 7d / month (kal ka "Today", pichhle mahine ka "This month" nahi)
+            val c = runCatching { api.cGetCached(range) }.getOrNull()?.takeIf { cacheSameDay(it.at) } ?: return@launch
+            _s.update { it.withCached(k, c) }
+        }
         viewModelScope.launch {
             try {
                 val j = api.cGet(range)
-                _s.update { it.copy(views = it.views + (gkey(range, emptyMap()) to j), error = null, missing = false, lastOk = System.currentTimeMillis()) }
+                _s.update { it.copy(views = it.views + (k to j), cached = it.cached - k, error = null, missing = false, lastOk = System.currentTimeMillis()) }
             } catch (e: Exception) {
                 val m = e.message ?: "error"
                 _s.update { it.copy(error = m, missing = m.contains("404")) }

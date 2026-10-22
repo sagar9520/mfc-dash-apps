@@ -94,7 +94,7 @@ function h_schema(PDO $pdo): void
     static $done = false;
     if ($done) return;
     $done = true;
-    if ((kv_get('h_schema_v') ?? '') === '1') return;
+    if ((kv_get('h_schema_v') ?? '') === '1') { h_schema_up($pdo); return; }
     $T = ' ENGINE=InnoDB DEFAULT CHARSET=utf8mb4';
     $pdo->exec("CREATE TABLE IF NOT EXISTS health_consoles (
   id VARCHAR(20) NOT NULL PRIMARY KEY, name VARCHAR(120) NOT NULL DEFAULT '', status VARCHAR(20) NOT NULL DEFAULT 'UNKNOWN',
@@ -106,7 +106,7 @@ function h_schema(PDO $pdo): void
   monitoring TINYINT NOT NULL DEFAULT 1, autofix TINYINT NOT NULL DEFAULT 1, email TINYINT NOT NULL DEFAULT 1,
   repo VARCHAR(160) NOT NULL DEFAULT '', repo_verified TINYINT NOT NULL DEFAULT 0, signing_verified TINYINT NOT NULL DEFAULT 0,
   verify_note VARCHAR(500) NOT NULL DEFAULT '', verified_at DATETIME NULL, status VARCHAR(20) NOT NULL DEFAULT 'UNKNOWN',
-  crash_rate DOUBLE NULL, anr_rate DOUBLE NULL, vitals_day DATE NULL, last_scan_at DATETIME NULL, updated_at DATETIME NOT NULL,
+  crash_rate DOUBLE NULL, anr_rate DOUBLE NULL, vitals_day DATE NULL, vitals_ver TEXT NULL, last_scan_at DATETIME NULL, updated_at DATETIME NOT NULL,
   KEY k_console (console_id))$T");
     $pdo->exec("CREATE TABLE IF NOT EXISTS health_runs (
   id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY, run_uid VARCHAR(40) NOT NULL, job_type VARCHAR(20) NOT NULL,
@@ -150,6 +150,22 @@ function h_schema(PDO $pdo): void
   created_at DATETIME NOT NULL, KEY k_pkg (pkg, created_at))$T");
     $pdo->exec("CREATE TABLE IF NOT EXISTS health_emails (ekey VARCHAR(190) NOT NULL PRIMARY KEY, sent_at DATETIME NOT NULL, ok TINYINT NOT NULL DEFAULT 1)$T");
     kv_set('h_schema_v', '1');
+    h_schema_up($pdo);
+}
+
+/** Purani install par naye columns (ek baar, safe ALTER: column pehle se ho to kuch nahi). */
+function h_schema_up(PDO $pdo): void
+{
+    if ((kv_get('h_schema_m') ?? '') === '2') return;
+    // m2: version-wise vitals (Google ka latest din, top 5 versions) JSON
+    $has = fn() => (bool)$pdo->query("SHOW COLUMNS FROM health_apps LIKE 'vitals_ver'")->fetch();
+    if (!$has()) {
+        try { $pdo->exec('ALTER TABLE health_apps ADD COLUMN vitals_ver TEXT NULL'); }
+        catch (PDOException $e) {
+            if (!$has()) { error_log('mfc health schema m2: ' . $e->getMessage()); return; }   // ALTER ki permission nahi: module chalta rahe, agli request phir koshish
+        }   // doosri request ne saath me jod diya (duplicate column): theek
+    }
+    kv_set('h_schema_m', '2');
 }
 
 // ================================================================ events / runs
@@ -584,18 +600,20 @@ function h_console_warn(PDO $pdo, string $cid, string $w): void
     h_x($pdo, "UPDATE health_consoles SET warnings = ?, status = IF(status = 'OK', 'WARNING', status), updated_at = UTC_TIMESTAMP() WHERE id = ?", [h_json($cur), $cid]);
 }
 
-/** Crash rate + ANR rate (user-perceived), Google ke freshness ke hisaab se aakhri available din. */
+/** Crash rate + ANR rate (user-perceived), Google ke freshness ke hisaab se aakhri available din.
+ *  Saath me usi din ka version-wise rate (dimension versionCode, top 5 versions) -> health_apps.vitals_ver (naya update kaisa chal raha). */
 function h_job_vitals(PDO $pdo, HRun $run, string $only, string $console): void
 {
     $cons = h_consoles_cfg();
     if (!$cons) { $run->stage('no Play Console configured'); return; }
     $apps = array_filter(h_apps($pdo, $only), fn($a) => $a['console_id'] !== '' && isset($cons[$a['console_id']]) && ($console === '' || $a['console_id'] === $console));
-    $run->stage('Play vitals (crash / ANR rate) · ' . count($apps) . ' apps');
+    $run->stage('Play vitals (crash / ANR rate, overall + per version) · ' . count($apps) . ' apps');
     if (!$apps) { $run->error('no app is linked to a Play Console yet (discovery has not succeeded) — check Consoles tab'); return; }
     $run->addTotal(count($apps) * 2);
     foreach ($apps as $a) {
         $pkg = $a['pkg']; $cid = $a['console_id'];
         $vals = [];
+        $byVer = []; $verDay = [];   // versionCode => [vc, crash, anr, users]; kind => din
         foreach ([['crashRateMetricSet', 'userPerceivedCrashRate', 'crash', H_CRASH_BAD], ['anrRateMetricSet', 'userPerceivedAnrRate', 'anr', H_ANR_BAD]] as [$set, $metric, $kind, $bad]) {
             try {
                 $meta = h_play($cid, 'GET', 'apps/' . rawurlencode($pkg) . '/' . $set);
@@ -635,6 +653,11 @@ function h_job_vitals(PDO $pdo, HRun $run, string $only, string $console): void
                         if ($id) h_issue_status($pdo, $id, 'RESOLVED', "$kind rate back to " . round($v * 100, 2) . "% ($day)");
                     }
                 }
+                // version-wise (usi din ka): fail ho to bhi main vitals ka kaam nahi rukta
+                if ($day !== null) {
+                    try { h_vitals_by_ver($cid, $pkg, $set, $metric, $kind, $day, $tzid, $byVer); $verDay[$kind] = $day; }
+                    catch (Throwable $e2) { h_log($pdo, "{$run->uid} · $pkg $set per-version skipped: " . h_cut($e2->getMessage(), 300), 'warn', ['run' => $run->id, 'pkg' => $pkg]); }
+                }
                 h_console_mark($pdo, $cid, true);
             } catch (HPlayError $e) {
                 $run->error("$pkg $set: " . $e->getMessage(), $pkg);
@@ -642,8 +665,53 @@ function h_job_vitals(PDO $pdo, HRun $run, string $only, string $console): void
             } catch (Throwable $e) { $run->error("$pkg $set: " . $e->getMessage(), $pkg); }
             $run->check();
         }
+        try { h_vitals_ver_save($pdo, $pkg, $byVer, $verDay); }
+        catch (Throwable $e) { h_log($pdo, "{$run->uid} · $pkg per-version save skipped: " . h_cut($e->getMessage(), 300), 'warn', ['run' => $run->id, 'pkg' => $pkg]); }
     }
     h_refresh_app_status($pdo);
+}
+
+/** Ek metric set ka ek din, version-wise (dimension versionCode). $acc[vc] me us kind ka rate + distinctUsers bharta hai. */
+function h_vitals_by_ver(string $cid, string $pkg, string $set, string $metric, string $kind, string $day, string $tzid, array &$acc): void
+{
+    $d = new DateTime($day);
+    $n = (clone $d)->modify('+1 day');   // endTime exclusive: sirf yahi ek din
+    $dt = fn(DateTime $x) => ['year' => (int)$x->format('Y'), 'month' => (int)$x->format('n'), 'day' => (int)$x->format('j'), 'timeZone' => ['id' => $tzid]];
+    $res = h_play($cid, 'POST', 'apps/' . rawurlencode($pkg) . '/' . $set . ':query', [
+        'timelineSpec' => ['aggregationPeriod' => 'DAILY', 'startTime' => $dt($d), 'endTime' => $dt($n)],
+        'dimensions' => ['versionCode'], 'metrics' => [$metric, 'distinctUsers'], 'pageSize' => 1000]);
+    foreach ((array)($res['rows'] ?? []) as $r) {
+        $vc = '';
+        foreach ((array)($r['dimensions'] ?? []) as $dm)
+            if (($dm['dimension'] ?? '') === 'versionCode') $vc = trim((string)($dm['int64Value'] ?? ($dm['stringValue'] ?? '')));
+        if ($vc === '' || !preg_match('/^\d{1,12}$/', $vc)) continue;
+        $v = null; $u = null;
+        foreach ((array)($r['metrics'] ?? []) as $m) {
+            if (($m['metric'] ?? '') === $metric && isset($m['decimalValue']['value'])) $v = round((float)$m['decimalValue']['value'], 6);
+            if (($m['metric'] ?? '') === 'distinctUsers' && isset($m['decimalValue']['value'])) $u = (int)round((float)$m['decimalValue']['value']);
+        }
+        $acc[$vc] = $acc[$vc] ?? ['vc' => $vc, 'crash' => null, 'anr' => null, 'users' => null];
+        $acc[$vc][$kind] = $v;
+        // users: crash set wala (dono me hota hai), na ho to ANR wala
+        if ($u !== null && ($kind === 'crash' || $acc[$vc]['users'] === null)) $acc[$vc]['users'] = $u;
+    }
+}
+
+/** Top 5 versions (distinctUsers) -> health_apps.vitals_ver = {"day":"YYYY-MM-DD","rows":[{vc, crash, anr, users}]} (versionCode ulte kram me). Kuch na mila to purana rehne do. */
+function h_vitals_ver_save(PDO $pdo, string $pkg, array $byVer, array $verDay): void
+{
+    if (!$byVer || !$verDay) return;
+    $day = $verDay['crash'] ?? $verDay['anr'];
+    foreach ($verDay as $k => $d) {
+        if ($d === $day) continue;
+        foreach (array_keys($byVer) as $vc) $byVer[$vc][$k] = null;   // alag din ka rate mat milao
+    }
+    $rows = array_values(array_filter($byVer, fn($r) => $r['crash'] !== null || $r['anr'] !== null));
+    if (!$rows) return;
+    usort($rows, fn($x, $y) => ($y['users'] ?? -1) <=> ($x['users'] ?? -1));
+    $rows = array_slice($rows, 0, 5);
+    usort($rows, fn($x, $y) => (int)$y['vc'] <=> (int)$x['vc']);
+    h_x($pdo, 'UPDATE health_apps SET vitals_ver = ? WHERE pkg = ?', [h_json(['day' => $day, 'rows' => $rows]), $pkg]);
 }
 
 /** Ad issues: smart alerts (api/alerts.php) ke khule ad alerts -> health issues (wahi backend dobara). */

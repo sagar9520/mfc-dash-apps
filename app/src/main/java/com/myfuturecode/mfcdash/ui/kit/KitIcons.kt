@@ -60,6 +60,7 @@ import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.path
@@ -131,6 +132,11 @@ object KIcons {
     val TrendDown: ImageVector = Icons.AutoMirrored.Rounded.TrendingDown
     val History: ImageVector = Icons.Rounded.History
     val Sort: ImageVector = Icons.AutoMirrored.Rounded.Sort
+    // sort button: teer + 3 lakeeren (mockup ui_sort .i-sortd / .i-sortu). Desc = zyada -> kam, Asc = kam -> zyada
+    val SortDesc: ImageVector by lazy { sortIcon(true) }
+    val SortAsc: ImageVector by lazy { sortIcon(false) }
+    // Play Store jaisa trikon (outline, mockup .i-playst)
+    val PlayStore: ImageVector by lazy { playStore() }
     val Send: ImageVector = Icons.AutoMirrored.Rounded.Send
     val Info: ImageVector = Icons.Outlined.Info
     val Copy: ImageVector = Icons.Outlined.ContentCopy
@@ -143,6 +149,45 @@ private inline fun simple(name: String, crossinline d: androidx.compose.ui.graph
     ImageVector.Builder(name = name, defaultWidth = 20.dp, defaultHeight = 20.dp, viewportWidth = 20f, viewportHeight = 20f)
         .path(fill = SolidColor(Color.Black)) { d() }
         .build()
+
+// 24x24 line icon (stroke 2, gol sire), mockup ke SVG path
+private inline fun line24(
+    name: String, width: Float = 2f, crossinline d: androidx.compose.ui.graphics.vector.PathBuilder.() -> Unit,
+): ImageVector.Builder =
+    ImageVector.Builder(name = name, defaultWidth = 24.dp, defaultHeight = 24.dp, viewportWidth = 24f, viewportHeight = 24f)
+        .path(stroke = SolidColor(Color.Black), strokeLineWidth = width, strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round) { d() }
+
+// desc: M7 4v16 M3.5 16.5 7 20l3.5-3.5 M13 6h8 M13 12h6 M13 18h3 (asc: teer upar, lakeeren chhoti -> lambi)
+private fun sortIcon(desc: Boolean): ImageVector =
+    line24(if (desc) "k.sortDesc" else "k.sortAsc") {
+        if (desc) {
+            moveTo(7f, 4f); lineTo(7f, 20f)
+            moveTo(3.5f, 16.5f); lineTo(7f, 20f); lineTo(10.5f, 16.5f)
+            moveTo(13f, 6f); lineTo(21f, 6f)
+            moveTo(13f, 12f); lineTo(19f, 12f)
+            moveTo(13f, 18f); lineTo(16f, 18f)
+        } else {
+            moveTo(7f, 20f); lineTo(7f, 4f)
+            moveTo(3.5f, 7.5f); lineTo(7f, 4f); lineTo(10.5f, 7.5f)
+            moveTo(13f, 6f); lineTo(16f, 6f)
+            moveTo(13f, 12f); lineTo(19f, 12f)
+            moveTo(13f, 18f); lineTo(21f, 18f)
+        }
+    }.build()
+
+// M5 3.6v16.8c0 .8.9 1.3 1.6.9l14.2-8.4c.7-.4.7-1.4 0-1.8L6.6 2.7C5.9 2.3 5 2.8 5 3.6Z + andar M5.4 3 15 12l-9.6 9 (1.6)
+private fun playStore(): ImageVector =
+    line24("k.playStore") {
+        moveTo(5f, 3.6f); lineTo(5f, 20.4f)
+        curveToRelative(0f, .8f, .9f, 1.3f, 1.6f, .9f)
+        lineToRelative(14.2f, -8.4f)
+        curveToRelative(.7f, -.4f, .7f, -1.4f, 0f, -1.8f)
+        lineTo(6.6f, 2.7f)
+        curveTo(5.9f, 2.3f, 5f, 2.8f, 5f, 3.6f)
+        close()
+    }.path(stroke = SolidColor(Color.Black), strokeLineWidth = 1.6f, strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round) {
+        moveTo(5.4f, 3f); lineTo(15f, 12f); lineToRelative(-9.6f, 9f)
+    }.build()
 
 private fun triangle(): ImageVector =
     ImageVector.Builder(name = "k.tri", defaultWidth = 20.dp, defaultHeight = 20.dp, viewportWidth = 20f, viewportHeight = 20f)

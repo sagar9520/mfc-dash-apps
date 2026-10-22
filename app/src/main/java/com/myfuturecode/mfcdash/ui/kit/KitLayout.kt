@@ -12,6 +12,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
@@ -41,13 +42,26 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
+import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
+import androidx.compose.material3.pulltorefresh.pullToRefresh
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -72,6 +86,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import com.myfuturecode.mfcdash.R
+import com.myfuturecode.mfcdash.data.PageLoad
 import com.myfuturecode.mfcdash.ui.theme.BrandStops
 import com.myfuturecode.mfcdash.ui.theme.LocalMfc
 import com.myfuturecode.mfcdash.ui.theme.Mfc
@@ -80,6 +95,9 @@ import com.myfuturecode.mfcdash.ui.theme.OnBrandTop
 import com.myfuturecode.mfcdash.ui.theme.ThemeStyle
 import com.myfuturecode.mfcdash.ui.theme.mfcColors
 import com.myfuturecode.mfcdash.util.t
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 
 // ---------------- context ----------------
 
@@ -174,51 +192,166 @@ fun KPageTokens(content: @Composable () -> Unit) {
 
 // ---------------- screens ----------------
 
-/** Ek scroll: top (KTop me) + content (16dp side, 12dp gap), neeche nav bar + 24dp. Status bar Root sambhalta hai. */
+/**
+ * Ek scroll: top (KTop me) + content (16dp side, 12dp gap), neeche nav bar + 24dp. Status bar Root sambhalta hai.
+ * Upar se kheencho = refresh: andar ka KBarIcon(KIcons.Refresh) (ya [KPullAction]) apne aap judta hai.
+ * pullRefresh = false: is screen par kheenchna band (jaise Home, jiska apna PullToRefreshBox hai).
+ */
 @Composable
 fun KScreen(
     top: @Composable ColumnScope.() -> Unit,
     modifier: Modifier = Modifier,
     scroll: ScrollState = rememberScrollState(),
+    pullRefresh: Boolean = true,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val c = Mfc.c
     val side = kSide()
-    Column(modifier.fillMaxSize().background(c.page).verticalScroll(scroll)) {
-        KTop(top)
-        Column(
-            Modifier.fillMaxWidth().padding(start = side, end = side, top = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            content = content,
-        )
-        Spacer(Modifier.windowInsetsBottomHeight(WindowInsets.navigationBars))
-        Spacer(Modifier.height(24.dp))
+    val pull = remember { KPull() }
+    CompositionLocalProvider(LocalKPull provides pull) {
+        KPullBox(pull, pullRefresh, modifier.fillMaxSize().background(c.page)) {
+            Column(Modifier.fillMaxSize().verticalScroll(scroll)) {
+                KTop(top)
+                Column(
+                    Modifier.fillMaxWidth().padding(start = side, end = side, top = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    content = content,
+                )
+                Spacer(Modifier.windowInsetsBottomHeight(WindowInsets.navigationBars))
+                Spacer(Modifier.height(24.dp))
+            }
+        }
     }
 }
 
-/** KScreen jaisa, par LazyColumn. Items kItem / kItems / kCardItems se (khud side padding + 12dp gap). */
+/** KScreen jaisa, par LazyColumn. Items kItem / kItems / kCardItems se (khud side padding + 12dp gap). Pull-down bhi KScreen jaisa. */
 @Composable
 fun KLazyScreen(
     top: @Composable ColumnScope.() -> Unit,
     modifier: Modifier = Modifier,
     state: LazyListState = rememberLazyListState(),
+    pullRefresh: Boolean = true,
     content: LazyListScope.() -> Unit,
 ) {
     val c = Mfc.c
-    LazyColumn(modifier.fillMaxSize().background(c.page), state = state) {
-        item(key = "k.top", contentType = "k.top") {
-            Column {
-                KTop(top)
-                Spacer(Modifier.height(12.dp))
+    val pull = remember { KPull() }
+    CompositionLocalProvider(LocalKPull provides pull) {
+        KPullBox(pull, pullRefresh, modifier.fillMaxSize().background(c.page)) {
+            LazyColumn(Modifier.fillMaxSize(), state = state) {
+                item(key = "k.top", contentType = "k.top") {
+                    Column {
+                        KTop(top)
+                        Spacer(Modifier.height(12.dp))
+                    }
+                }
+                content()
+                item(key = "k.end", contentType = "k.end") {
+                    Column {
+                        Spacer(Modifier.windowInsetsBottomHeight(WindowInsets.navigationBars))
+                        Spacer(Modifier.height(12.dp))
+                    }
+                }
             }
         }
+    }
+}
+
+// ---------------- pull-down refresh ----------------
+
+/**
+ * Ek screen (KScreen / KLazyScreen) ka refresh: andar ke KBarIcon(KIcons.Refresh) / KPullAction apna onClick + spinning
+ * yahan likhte hain. KPullAction (screen ne khud chuna) hamesha icon se aage; warna aakhri juda hua jeet-ta hai,
+ * hatte hi agla.
+ */
+@Stable
+internal class KPull {
+    internal class Reg(val explicit: Boolean) {
+        /** Hamesha taaza lambda (har composition par SideEffect likhta hai); state nahi, to screen dobara nahi banti. */
+        var onClick: () -> Unit = {}
+        var spinning by mutableStateOf(false)
+        var enabled by mutableStateOf(true)
+    }
+
+    private val regs = mutableStateListOf<Reg>()
+    val top: Reg? get() = regs.lastOrNull { it.explicit } ?: regs.lastOrNull()
+    fun add(r: Reg) { if (r !in regs) regs.add(r) }
+    fun remove(r: Reg) { regs.remove(r) }
+}
+
+internal val LocalKPull = staticCompositionLocalOf<KPull?> { null }
+
+/** Sabse paas wali screen ke [KPull] me refresh likho (screen ke bahar ho to kuch nahi). */
+@Composable
+private fun KPullRegister(onClick: () -> Unit, spinning: Boolean, enabled: Boolean, explicit: Boolean) {
+    val pull = LocalKPull.current ?: return
+    val reg = remember { KPull.Reg(explicit) }
+    SideEffect {
+        reg.onClick = onClick
+        reg.spinning = spinning
+        reg.enabled = enabled
+    }
+    DisposableEffect(pull, reg) {
+        pull.add(reg)
+        onDispose { pull.remove(reg) }
+    }
+}
+
+/**
+ * Refresh sirf "More" menu me ho (bar me KBarIcon nahi), tab bhi screen ko upar se kheench kar refresh:
+ * `KPullAction({ vm.loadApp(pkg, force = true) }, spinning = loading)` screen ke top ya content me. Kuch nahi banata.
+ * Screen me refresh icon bhi ho to kheenchna KPullAction wala chalata hai (icon ka kaam alag ho, jaise Alerts "Check now").
+ */
+@Composable
+fun KPullAction(onRefresh: () -> Unit, spinning: Boolean = false, enabled: Boolean = true) =
+    KPullRegister(onRefresh, spinning, enabled, explicit = true)
+
+/**
+ * Pull-down wrapper. Hamesha yahi Box (action aaye ya jaaye, sirf enabled badalta hai: scroll reset / remount nahi).
+ * Indicator sirf user ke kheenche refresh par: jab tak us refresh ka spinning chale (max 15 s); 20 s poll par nahi.
+ * Spinning na mile (icon me spinning nahi diya) to jab tak PageLoad ka load chale.
+ * Home jaisa bahar ek aur PullToRefreshBox ho: yahan action ho to kheenchna yahi kha leta hai (andar wala pehle),
+ * action na ho to disabled, kheenchna seedha bahar wale ko.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun KPullBox(pull: KPull, allowed: Boolean, modifier: Modifier, content: @Composable BoxScope.() -> Unit) {
+    val c = Mfc.c
+    val state = rememberPullToRefreshState()
+    var refreshing by remember { mutableStateOf(false) }
+    val reg = pull.top
+    LaunchedEffect(refreshing) {
+        if (!refreshing) return@LaunchedEffect
+        withTimeoutOrNull(15_000) {
+            val spin = { pull.top?.spinning == true }
+            // VM ko loading = true karne do (ek-do frame); phir uske khatam hone tak
+            val saw = withTimeoutOrNull(800) { snapshotFlow(spin).first { it } } != null
+            if (saw) snapshotFlow(spin).first { !it } else while (PageLoad.busy()) delay(80)
+        }
+        refreshing = false
+    }
+    Box(
+        modifier.pullToRefresh(
+            isRefreshing = refreshing,
+            state = state,
+            enabled = allowed && reg != null && reg.enabled,
+            onRefresh = {
+                // hamesha true: action beech me hat gaya ho to bhi indicator threshold par atka na rahe (upar ka effect band karega)
+                refreshing = true
+                pull.top?.let { r ->
+                    PageLoad.start()
+                    r.onClick()
+                }
+            },
+        ),
+    ) {
         content()
-        item(key = "k.end", contentType = "k.end") {
-            Column {
-                Spacer(Modifier.windowInsetsBottomHeight(WindowInsets.navigationBars))
-                Spacer(Modifier.height(12.dp))
-            }
-        }
+        PullToRefreshDefaults.Indicator(
+            state = state,
+            isRefreshing = refreshing,
+            modifier = Modifier.align(Alignment.TopCenter),
+            containerColor = c.card,
+            color = c.brand,
+        )
     }
 }
 
@@ -285,21 +418,25 @@ fun KBarIcon(
     enabled: Boolean = true,
 ) {
     val c = Mfc.c
+    // Refresh icon = user ne khud dobara load maanga: pehle upar ki neeli line (PageLoad.start), phir onClick.
+    // Ek jagah se sab (~22) refresh icons. Saath me screen (KScreen / KLazyScreen) ka pull-down isi onClick se judta hai.
+    val refresh = icon == KIcons.Refresh
+    if (refresh) KPullRegister(onClick, spinning, enabled, explicit = false)
+    val click: () -> Unit = if (refresh) ({ PageLoad.start(); onClick() }) else onClick
     Box(
-        Modifier.size(48.dp).clip(CircleShape).clickable(enabled = enabled, role = Role.Button, onClickLabel = desc, onClick = onClick),
+        Modifier.size(48.dp).clip(CircleShape).clickable(enabled = enabled, role = Role.Button, onClickLabel = desc, onClick = click),
         contentAlignment = Alignment.Center,
     ) {
-        val angle = if (spinning) kSpin() else 0f
-        Icon(icon, desc, tint = c.ink, modifier = Modifier.size(24.dp).graphicsLayer { rotationZ = angle })
+        val spin = if (spinning) kSpin() else null   // ghoomna sirf draw me padha: har frame recomposition nahi
+        Icon(icon, desc, tint = c.ink, modifier = Modifier.size(24.dp).graphicsLayer { rotationZ = spin?.value ?: 0f })
         if (badge > 0) KBadge(badge, Modifier.align(Alignment.TopEnd).padding(top = 5.dp, end = 4.dp), urgent = badgeUrgent)
     }
 }
 
 @Composable
-private fun kSpin(): Float {
+private fun kSpin(): State<Float> {
     val tr = rememberInfiniteTransition(label = "kSpin")
-    val a by tr.animateFloat(0f, 360f, infiniteRepeatable(tween(900, easing = LinearEasing)), label = "kSpinA")
-    return a
+    return tr.animateFloat(0f, 360f, infiniteRepeatable(tween(900, easing = LinearEasing)), label = "kSpinA")
 }
 
 /** Home app bar: logo + MFC + "Namaste ..." + bell (badge). middle = Fold par beech me "Aaj ka haal" + pill. */

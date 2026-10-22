@@ -26,7 +26,10 @@ import com.myfuturecode.mfcdash.ui.kit.KSection
 import com.myfuturecode.mfcdash.ui.kit.KSplit
 import com.myfuturecode.mfcdash.ui.kit.KTint
 import com.myfuturecode.mfcdash.ui.kit.KTwoPane
+import com.myfuturecode.mfcdash.ui.kit.KSortKind
 import com.myfuturecode.mfcdash.ui.kit.isWide
+import com.myfuturecode.mfcdash.ui.kit.kSorted
+import com.myfuturecode.mfcdash.ui.kit.rememberKSort
 import com.myfuturecode.mfcdash.ui.theme.Mfc
 import com.myfuturecode.mfcdash.ui.theme.parseHex
 import com.myfuturecode.mfcdash.util.agoText
@@ -40,22 +43,33 @@ fun LiveScreen(vm: DashVm, st: UiState, nav: NavHostController) {
     var cc by rememberSaveable { mutableStateOf("") }
     var fmt by rememberSaveable { mutableStateOf("") }
     var rows by rememberSaveable { mutableStateOf("30") }
-    TabScreen("Live".t(), vm, st, nav, showRange = false, back = true, filters = { v ->
+    // bar ka Sort button: time (naya -> purana = server ka order, aaj jaisa) / desh feed + installs dono par, ₹ sirf feed par
+    val sort = rememberKSort("time")
+    val sortOpts = listOf("time" to "Time".t(), "rev" to "Revenue".t(), "cc" to "Country".t())
+    val sortKinds = mapOf("time" to KSortKind.DATE, "cc" to KSortKind.TEXT)
+    TabScreen("Live".t(), vm, st, nav, showRange = false, back = true, skeleton = { DashSkel(stats = 0) }, filters = { v ->
         val ccs = optionsOf(v.d.liveCountries.sortedByDescending { it.n }.map { it.cc }.take(8) + v.d.recent.map { it.cc } + v.d.recentInstalls.map { it.cc })
         val fmts = optionsOf(v.d.recent.map { it.fmt })
         if (ccs.size > 2) FilterChips("Country".t(), ccs, cc) { cc = it }
         if (fmts.size > 2) FilterChips("Format".t(), fmts, fmt) { fmt = it }
         FilterChips("Rows".t(), listOf("30" to "30", "100" to "100"), rows) { rows = it }
-    }) { v ->
+    }, sort = sort, sortOptions = sortOpts, sortKinds = sortKinds) { v ->
         val d = v.d
         val c = Mfc.c
         val r = d.r
         val limit = rows.toIntOrNull() ?: 30
+        // server feed naya pehle deta hai: time desc = waisa hi, asc = ulta
+        fun <T> List<T>.liveSorted(ccOf: (T) -> String, rev: ((T) -> Double)?): List<T> = when {
+            sort.key == "cc" -> kSorted(sort.desc) { ccOf(it).lowercase().ifBlank { null } }   // bina desh aakhir me
+            sort.key == "rev" && rev != null -> kSorted(sort.desc, by = rev)
+            sort.key == "time" && !sort.desc -> asReversed()
+            else -> this
+        }
 
         val left: @Composable ColumnScope.() -> Unit = {
             // hero: abhi live users + 30 min + top desh
             KHero(KTint.Green) {
-                KHeroHead("Live users now".t(), trailing = { KLive("Live".t() + " · " + agoText(d.fetchedAt)) })
+                KHeroHead("Live users now".t(), trailing = { if (!d.cached) KLive("Live".t() + " · " + agoText(d.fetchedAt)) })
                 KBigNum(num(d.liveTotal), size = 48.sp)
                 val top = d.liveCountries.sortedByDescending { it.n }.take(2).map { it.cc to num(it.n) }
                 KSplit(listOf("30 min" to num(d.live30)) + top)
@@ -73,7 +87,7 @@ fun LiveScreen(vm: DashVm, st: UiState, nav: NavHostController) {
         val right: @Composable ColumnScope.() -> Unit = {
             KSection("Live feed".t(), trailing = { DashText("30 min", 13.sp, c.ink3) })
             KCard {
-                val feed = d.recent.filter { (cc.isBlank() || it.cc == cc) && (fmt.isBlank() || it.fmt == fmt) }
+                val feed = d.recent.filter { (cc.isBlank() || it.cc == cc) && (fmt.isBlank() || it.fmt == fmt) }.liveSorted({ it.cc }, { it.revUsd })
                 Table(
                     if (v.allApps) listOf("Time".t(), "App".t(), "Network".t(), "Format".t(), "CC", "₹") else listOf("Time".t(), "Network".t(), "Format".t(), "CC", "₹"),
                     feed.take(limit).map { if (v.allApps) listOf(tOnly(it.ts), d.appName(it.pkg), it.net, it.fmt, it.cc, num(it.revUsd * r, 3)) else listOf(tOnly(it.ts), it.net, it.fmt, it.cc, num(it.revUsd * r, 3)) },
@@ -82,7 +96,7 @@ fun LiveScreen(vm: DashVm, st: UiState, nav: NavHostController) {
             }
             KSection("New installs".t(), trailing = { DashText("6 hours".t(), 13.sp, c.ink3) })
             KCard {
-                val inst = d.recentInstalls.filter { cc.isBlank() || it.cc == cc }
+                val inst = d.recentInstalls.filter { cc.isBlank() || it.cc == cc }.liveSorted({ it.cc }, null)
                 Table(
                     if (v.allApps) listOf("Time".t(), "App".t(), "CC", "Source".t(), "Phone".t()) else listOf("Time".t(), "CC", "Source".t(), "Phone".t()),
                     inst.take(limit).map { if (v.allApps) listOf(tOnly(it.firstSeen), d.appName(it.pkg), it.cc, it.src.ifBlank { "–" }, it.model) else listOf(tOnly(it.firstSeen), it.cc, it.src.ifBlank { "–" }, it.model) },

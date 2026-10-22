@@ -7,20 +7,16 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
@@ -29,12 +25,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -46,18 +41,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.PathEffect
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
@@ -75,26 +62,21 @@ import com.myfuturecode.mfcdash.ui.kit.KButton
 import com.myfuturecode.mfcdash.ui.kit.KCard
 import com.myfuturecode.mfcdash.ui.kit.KDetailBar
 import com.myfuturecode.mfcdash.ui.kit.KEmpty
-import com.myfuturecode.mfcdash.ui.kit.KIconTile
 import com.myfuturecode.mfcdash.ui.kit.KIcons
 import com.myfuturecode.mfcdash.ui.kit.KKind
-import com.myfuturecode.mfcdash.ui.kit.KListDivider
 import com.myfuturecode.mfcdash.ui.kit.KPageTokens
 import com.myfuturecode.mfcdash.ui.kit.KPill
-import com.myfuturecode.mfcdash.ui.kit.KRow
 import com.myfuturecode.mfcdash.ui.kit.KScreen
 import com.myfuturecode.mfcdash.ui.kit.KSection
-import com.myfuturecode.mfcdash.ui.kit.KStatus
+import com.myfuturecode.mfcdash.ui.kit.KSkelCircle
+import com.myfuturecode.mfcdash.ui.kit.KSkelLine
+import com.myfuturecode.mfcdash.ui.kit.KSkeleton
 import com.myfuturecode.mfcdash.ui.kit.KT
 import com.myfuturecode.mfcdash.ui.kit.KTwoPane
-import com.myfuturecode.mfcdash.ui.kit.icon
 import com.myfuturecode.mfcdash.ui.kit.isWide
 import com.myfuturecode.mfcdash.ui.kit.kSide
-import com.myfuturecode.mfcdash.ui.theme.Brand1
-import com.myfuturecode.mfcdash.ui.theme.Brand2
-import com.myfuturecode.mfcdash.ui.theme.Brand3
+import com.myfuturecode.mfcdash.ui.theme.LocalMfc
 import com.myfuturecode.mfcdash.ui.theme.Mfc
-import com.myfuturecode.mfcdash.ui.theme.MfcAngleGradient
 import com.myfuturecode.mfcdash.ui.theme.ThemeStyle
 import com.myfuturecode.mfcdash.ui.theme.mfcColors
 import com.myfuturecode.mfcdash.util.Lang
@@ -103,36 +85,21 @@ import com.myfuturecode.mfcdash.util.tf
 import com.myfuturecode.mfcdash.widget.AdsSnap
 import com.myfuturecode.mfcdash.widget.HealthSnap
 import com.myfuturecode.mfcdash.widget.PaisaSnap
-import com.myfuturecode.mfcdash.widget.WCell
+import com.myfuturecode.mfcdash.widget.WBrandBrush
+import com.myfuturecode.mfcdash.widget.WFetch
 import com.myfuturecode.mfcdash.widget.WKind
 import com.myfuturecode.mfcdash.widget.WOpts
-import com.myfuturecode.mfcdash.widget.WPal
-import com.myfuturecode.mfcdash.widget.WPillM
+import com.myfuturecode.mfcdash.widget.WPreview
 import com.myfuturecode.mfcdash.widget.WView
-import com.myfuturecode.mfcdash.widget.W_BAND
-import com.myfuturecode.mfcdash.widget.W_COL_GAP
-import com.myfuturecode.mfcdash.widget.W_GAP
-import com.myfuturecode.mfcdash.widget.W_PAD
-import com.myfuturecode.mfcdash.widget.W_TOP
 import com.myfuturecode.mfcdash.widget.WidgetData
 import com.myfuturecode.mfcdash.widget.WidgetPins
 import com.myfuturecode.mfcdash.widget.WidgetStore
 import com.myfuturecode.mfcdash.widget.WidgetSync
-import com.myfuturecode.mfcdash.widget.wBandPlan
 import com.myfuturecode.mfcdash.widget.wEveryName
-import com.myfuturecode.mfcdash.widget.wGridPlan
-import com.myfuturecode.mfcdash.widget.wHealthPlan
-import com.myfuturecode.mfcdash.widget.wItemName
-import com.myfuturecode.mfcdash.widget.wJoinFit
-import com.myfuturecode.mfcdash.widget.wLineK
 import com.myfuturecode.mfcdash.widget.wPal
-import com.myfuturecode.mfcdash.widget.wPillFull
-import com.myfuturecode.mfcdash.widget.wPillW
 import com.myfuturecode.mfcdash.widget.wRangeName
-import com.myfuturecode.mfcdash.widget.wShowSub
-import com.myfuturecode.mfcdash.widget.wSmallH
 import com.myfuturecode.mfcdash.widget.wThemeName
-import com.myfuturecode.mfcdash.widget.wValueSp
+import com.myfuturecode.mfcdash.widget.wTint
 import com.myfuturecode.mfcdash.widget.wView
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -142,8 +109,9 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
 /**
- * Widgets: teeno home-screen widget ka preview (asli data), kitne lage hain, lagao / badlo.
- * "Badlo" = isi screen me options (kya dikhana, samay, apps, rang, kitni der me update). Save = lage widgets bhi badlein.
+ * Widgets: chaaron home-screen widget ka preview (asli data), kitne lage hain, lagao / badlo.
+ * Har widget ka layout fix hai; "Badlo" = samay (Paisa), apps / accounts / consoles, rang, kitni der me update.
+ * Save = lage widgets bhi badlein.
  */
 @Composable
 fun WidgetsScreen(nav: NavHostController) {
@@ -169,6 +137,7 @@ private fun WList(nav: NavHostController, onEdit: (WKind) -> Unit) {
     val canPin = remember { WidgetPins.canPin(ctx) }
     var snaps by remember { mutableStateOf<Map<WKind, JSONObject?>>(emptyMap()) }
     var busy by remember { mutableStateOf(false) }
+    var tried by remember { mutableStateOf(false) }   // pehla load ho gaya (tab tak bina data = skeleton)
 
     // cache se turant (widget ne naya data laaya ho to bhi), phir purana ho to naya
     LaunchedEffect(rev) {
@@ -181,6 +150,7 @@ private fun WList(nav: NavHostController, onEdit: (WKind) -> Unit) {
         busy = true
         snaps = wLoadSnaps(app, force = false)
         busy = false
+        tried = true
     }
     val refresh: () -> Unit = {
         scope.launch {
@@ -189,6 +159,9 @@ private fun WList(nav: NavHostController, onEdit: (WKind) -> Unit) {
             busy = false
             WidgetSync.redraw(app)
         }
+    }
+    val item: @Composable (WKind) -> Unit = { k ->
+        WListItem(k, snaps[k], counts[k] ?: 0, canPin, busy, wait = busy || !tried) { onEdit(k) }
     }
 
     KScreen(top = {
@@ -199,58 +172,170 @@ private fun WList(nav: NavHostController, onEdit: (WKind) -> Unit) {
         )
     }) {
         if (isWide()) {
+            // Fold: baayein Paisa + Health, daayein Ads + Live + Alerts
             KTwoPane(
                 left = {
-                    WListItem(WKind.PAISA, snaps[WKind.PAISA], counts[WKind.PAISA] ?: 0, canPin, busy) { onEdit(WKind.PAISA) }
-                    WListItem(WKind.HEALTH, snaps[WKind.HEALTH], counts[WKind.HEALTH] ?: 0, canPin, busy) { onEdit(WKind.HEALTH) }
+                    item(WKind.PAISA)
+                    item(WKind.HEALTH)
                 },
                 right = {
-                    WListItem(WKind.ADS, snaps[WKind.ADS], counts[WKind.ADS] ?: 0, canPin, busy) { onEdit(WKind.ADS) }
+                    item(WKind.ADS)
+                    item(WKind.ALERTS)
                 },
             )
         } else {
-            WKind.entries.forEach { k ->
-                WListItem(k, snaps[k], counts[k] ?: 0, canPin, busy) { onEdit(k) }
-            }
+            WKind.entries.forEach { k -> item(k) }
         }
     }
 }
 
 @Composable
-private fun WListItem(kind: WKind, snap: JSONObject?, count: Int, canPin: Boolean, busy: Boolean, onEdit: () -> Unit) {
+private fun WListItem(kind: WKind, snap: JSONObject?, count: Int, canPin: Boolean, busy: Boolean, wait: Boolean, onEdit: () -> Unit) {
     val ctx = LocalContext.current
     val app = ctx.applicationContext as App
     val c = Mfc.c
     val rev by WidgetStore.rev.collectAsState()
     val o = remember(kind, rev) { WidgetStore.defaults(app, kind) }
     val v = rememberWView(kind, o, snap, busy)
+    // data pehli baar aa raha = widget jaisa skeleton (fail / bina data = asli preview "—" ke saath)
+    val skel = wait && snap == null && !v.login
     var failed by remember { mutableStateOf(false) }
-    val names = wItemsText(kind, o)
+    val desc = wDesc(kind)
     val pin: () -> Unit = { failed = !WidgetPins.pin(ctx, kind) }
     val status: @Composable () -> Unit = {
         if (count > 0) KPill(tf("%s placed", count), KKind.OK)
         else KPill("Not on home".t(), KKind.NEUTRAL, icon = KIcons.Plus)
     }
     Column(Modifier.fillMaxWidth().padding(bottom = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        if (kind == WKind.HEALTH) {
-            // chhota (2x2) widget: baayein preview, daayein haal + kya dikhta hai
+        if (!kind.wide) {
+            // chhota (2x2) widget: baayein preview, daayein naam + haal + kya dikhta hai
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                WPreview(v, Modifier.width(174.dp).height(168.dp), onEdit)
+                WPreviewOrSkel(v, skel, Modifier.size(W_SMALL.dp), onEdit)
                 Column(Modifier.weight(1f).padding(top = 4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    KT(kind.title(), 16.sp, c.ink, weight = FontWeight.SemiBold)
                     status()
-                    KT(names, 13.sp, c.ink2, maxLines = 4, lh = 18.sp)
+                    KT(desc, 13.sp, c.ink2, maxLines = 4, lh = 18.sp)
                 }
             }
         } else {
-            WPreview(v, Modifier.fillMaxWidth().widthIn(max = 460.dp).height(168.dp), onEdit)
+            WPreviewOrSkel(v, skel, Modifier.fillMaxWidth().widthIn(max = W_WIDE_MAX.dp).height(W_SMALL.dp), onEdit)
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                KT(names, 13.sp, c.ink2, Modifier.weight(1f))
+                KT(desc, 13.sp, c.ink2, Modifier.weight(1f), maxLines = 2, lh = 18.sp)
                 status()
             }
         }
         WListButtons(count, canPin, onEdit = onEdit, onPin = pin)
         if (!canPin || failed) WPinHint()
     }
+}
+
+@Composable
+private fun WPreviewOrSkel(v: WView, skel: Boolean, modifier: Modifier, onClick: (() -> Unit)? = null) {
+    if (skel) WSkelPreview(v, modifier, onClick) else WPreview(v, modifier, onClick)
+}
+
+/**
+ * Preview ka data pehli baar aa raha: wahi card (widget ka rang, kone, chhaya), andar us widget ke layout jaisa
+ * skeleton. Blocks ka rang widget ke theme se (Brand = safed parda), app ke theme se nahi.
+ */
+@Composable
+private fun WSkelPreview(v: WView, modifier: Modifier, onClick: (() -> Unit)?) {
+    val p = remember(v.style) { wPal(v.style) }
+    val shape = RoundedCornerShape(24.dp)
+    var m = modifier.shadow(4.dp, shape).clip(shape)
+    val tint = wTint(v)
+    m = when {
+        p.brand -> m.background(WBrandBrush)
+        p.dark -> m.background(p.bg).border(1.dp, Color(0xFF2A2640), shape)
+        tint != null -> m.background(Brush.verticalGradient(0f to tint.top, tint.stop to Color.White, 1f to Color.White))
+        else -> m.background(p.bg)
+    }
+    if (onClick != null) m = m.clickable(role = Role.Button, onClick = onClick)
+    CompositionLocalProvider(LocalMfc provides mfcColors(v.style, top = p.brand)) {
+        KSkeleton(m.padding(horizontal = if (v.kind == WKind.ADS) 14.dp else 16.dp, vertical = 14.dp)) {
+            if (v.kind == WKind.ADS) {
+                // do column: Ads kharcha | Live users, har ek me 3 lines + patli patti
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+                    repeat(2) { side ->
+                        Column(Modifier.weight(1f)) {
+                            KSkelLine(if (side == 0) .7f else .6f, 13.dp)
+                            KSkelLine(.85f, 9.dp, Modifier.padding(top = 10.dp))
+                            repeat(3) { i ->
+                                Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    KSkelLine(listOf(44.dp, 36.dp, 40.dp)[i], 13.dp)
+                                    Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) { KSkelLine(listOf(.6f, .5f, .7f)[i], 9.dp) }
+                                }
+                                KSkelLine(1f, 4.dp, Modifier.padding(top = 6.dp))
+                            }
+                        }
+                    }
+                }
+                return@KSkeleton
+            }
+            // sir: naam + samay
+            Row(Modifier.fillMaxWidth().height(22.dp), verticalAlignment = Alignment.CenterVertically) {
+                KSkelLine(if (v.kind.wide) 120.dp else 84.dp, 13.dp)
+                Box(Modifier.weight(1f))
+                KSkelLine(32.dp, 10.dp)
+            }
+            when (v.kind) {
+                WKind.PAISA -> {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
+                        Box(Modifier.weight(1f)) { KSkelLine(.55f, 30.dp) }
+                        KSkelLine(64.dp, 20.dp)
+                    }
+                    KSkelLine(1f, 6.dp)
+                    Box(Modifier.weight(1f))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                        repeat(3) { i ->
+                            Column(Modifier.weight(1f)) {
+                                KSkelLine(listOf(.7f, .6f, .75f)[i], 9.dp)
+                                KSkelLine(listOf(.85f, .8f, .5f)[i], 14.dp, Modifier.padding(top = 6.dp))
+                            }
+                        }
+                    }
+                }
+                WKind.HEALTH -> {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        repeat(3) {
+                            Column(Modifier.weight(1f)) {
+                                KSkelLine(26.dp, 20.dp)
+                                KSkelLine(30.dp, 9.dp, Modifier.padding(top = 5.dp))
+                            }
+                        }
+                    }
+                    repeat(2) { i ->
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            KSkelLine(22.dp, 16.dp)
+                            KSkelLine(listOf(.7f, .55f)[i], 11.dp)
+                        }
+                    }
+                }
+                else -> repeat(3) { i ->
+                    // Alerts: nishaan + app + kism
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        KSkelCircle(14.dp)
+                        Column(Modifier.weight(1f)) {
+                            KSkelLine(listOf(.7f, .8f, .6f)[i], 11.dp)
+                            KSkelLine(listOf(.45f, .5f, .38f)[i], 9.dp, Modifier.padding(top = 5.dp))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Preview ka size: 2x2 = 172dp ka chaukor (mockup), 4x2 = poori chaudai (max 460) x 172. */
+private const val W_SMALL = 172f
+private const val W_WIDE_MAX = 460f
+
+/** Widget me kya dikhta hai (ek line). */
+private fun wDesc(kind: WKind): String = when (kind) {
+    WKind.PAISA -> "Profit, ROAS, earnings, ads spend and live users".t()
+    WKind.ADS -> "Top 3 ad accounts with budget, top 3 live apps".t()
+    WKind.HEALTH -> "Apps with issues, top 3 by open issues".t()
+    WKind.ALERTS -> "3 newest open alerts, most urgent first".t()
 }
 
 /** Pehli baar: "Home screen par lagao" + Badlo. Lag gaya: Badlo + "Ek aur lagao". */
@@ -278,12 +363,6 @@ private fun WPinHint() {
     }
 }
 
-/** "Today's profit, ROAS, Earnings, All ads spend" (Health: "Apps fine" pehle). */
-private fun wItemsText(kind: WKind, o: WOpts): String {
-    val items = (if (kind.fixedHero != null) listOf(kind.fixedHero) else emptyList()) + o.items
-    return items.joinToString(", ") { wItemName(kind, it, o.range) }
-}
-
 /** Har widget kitni baar laga hai (screen dikhte waqt har 2 second; launcher se lagte hi badle). */
 @Composable
 private fun rememberWCounts(): Map<WKind, Int> {
@@ -309,32 +388,44 @@ private fun rememberWView(kind: WKind, o: WOpts, snap: JSONObject?, busy: Boolea
     val style = Mfc.style
     val lang = Lang.code
     val login = remember { app.prefs.hasLogin }
-    val target = remember { app.prefs.roasTarget }
-    return remember(kind, o, snap, busy, style, lang) { wView(kind, o, snap, login, style.key, target, busy = busy) }
+    return remember(kind, o, snap, busy, style, lang) { wView(kind, o, snap, login, style.key, busy = busy) }
 }
 
-/** Preview ka data: cache, 5 min se purana ho (ya force) to server se; mila to widgets bhi wahi dikhayenge. */
-private suspend fun wPreviewSnap(app: App, kind: WKind, o: WOpts, force: Boolean, lists: Boolean = false): JSONObject? =
-    withContext(Dispatchers.IO) {
-        val key = o.dataKey(kind)
-        val have = WidgetStore.snap(app, key)
-        val noList = lists && kind == WKind.HEALTH && HealthSnap.of(have)?.consoles.isNullOrEmpty()
-        val fresh = have != null && WidgetStore.age(app, key) < 5 * 60_000L && !noList
-        if ((!force && fresh) || !app.prefs.hasLogin) return@withContext have
-        try {
-            val j = WidgetData.fetch(app, kind, o, lists)
-            WidgetStore.saveSnap(app, key, j)
-            j
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            have
-        }
+/** Chunne ki list (apps / accounts / consoles) jo snap ke saath aati hai. Alerts me koi nahi. */
+private fun wChoices(kind: WKind, snap: JSONObject?): List<Pair<String, String>>? = when (kind) {
+    WKind.PAISA -> PaisaSnap.of(snap)?.allApps
+    WKind.ADS -> AdsSnap.of(snap)?.all
+    WKind.HEALTH -> HealthSnap.of(snap)?.consoles
+    WKind.ALERTS -> null
+}
+
+/**
+ * Preview ka data: cache, 5 min se purana ho (ya force) to server se; mila to widgets bhi wahi dikhayenge.
+ * lists = settings khuli hain: chunne ki list khaali ho to bhi naya laao. f = ek baar ka data.php sab me share.
+ */
+private suspend fun wPreviewSnap(
+    app: App, kind: WKind, o: WOpts, force: Boolean, lists: Boolean = false, f: WFetch = WFetch(app),
+): JSONObject? = withContext(Dispatchers.IO) {
+    val key = o.dataKey(kind)
+    val have = WidgetStore.snap(app, key)
+    val noList = lists && kind.picks && wChoices(kind, have).isNullOrEmpty()
+    val fresh = have != null && WidgetStore.age(app, key) < 5 * 60_000L && !noList
+    if ((!force && fresh) || !app.prefs.hasLogin) return@withContext have
+    try {
+        val j = WidgetData.fetch(app, kind, o, f)
+        WidgetStore.saveSnap(app, key, j)
+        j
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        have
     }
+}
 
 private suspend fun wLoadSnaps(app: App, force: Boolean): Map<WKind, JSONObject?> {
+    val f = WFetch(app) // Paisa (aaj) aur Ads + Live ek hi data.php se
     val out = LinkedHashMap<WKind, JSONObject?>()
-    for (k in WKind.entries) out[k] = wPreviewSnap(app, k, WidgetStore.defaults(app, k), force)
+    for (k in WKind.entries) out[k] = wPreviewSnap(app, k, WidgetStore.defaults(app, k), force, f = f)
     return out
 }
 
@@ -345,15 +436,12 @@ private suspend fun wLoadSnaps(app: App, force: Boolean): Map<WKind, JSONObject?
 private fun WConfig(kind: WKind, onClose: () -> Unit) {
     val ctx = LocalContext.current
     val app = ctx.applicationContext as App
-    val c = Mfc.c
     var o by remember(kind) { mutableStateOf(WidgetStore.defaults(app, kind)) }
     var snap by remember { mutableStateOf<JSONObject?>(null) }
     var choices by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
     var busy by remember { mutableStateOf(false) }
-    var more by remember { mutableStateOf(false) }
-    var heroMenu by remember { mutableStateOf(false) }
+    var done by remember { mutableStateOf<String?>(null) }   // kis key ka load ho chuka (tab tak bina data = skeleton)
     var picker by remember { mutableStateOf(false) }
-    var full by remember { mutableStateOf(false) }
     var failed by remember { mutableStateOf(false) }
     val counts = rememberWCounts()
     val placed = counts[kind] ?: 0
@@ -365,35 +453,15 @@ private fun WConfig(kind: WKind, onClose: () -> Unit) {
         busy = true
         snap = wPreviewSnap(app, kind, o, force = false, lists = true) ?: snap
         busy = false
+        done = key
     }
     // apps / accounts / consoles ki list (khaali data se purani list na mite)
     LaunchedEffect(snap) {
-        val l = when (kind) {
-            WKind.PAISA -> PaisaSnap.of(snap)?.allApps
-            WKind.ADS -> AdsSnap.of(snap)?.all
-            WKind.HEALTH -> HealthSnap.of(snap)?.consoles
-        }
+        val l = wChoices(kind, snap)
         if (!l.isNullOrEmpty()) choices = l
-    }
-    LaunchedEffect(full) {
-        if (full) {
-            delay(2_000)
-            full = false
-        }
     }
     val v = rememberWView(kind, o, snap, busy)
 
-    val toggle: (String) -> Unit = { item ->
-        val cur = o.items
-        o = when {
-            item in cur -> if (cur.size <= 1 && kind.fixedHero == null) o else o.copy(items = cur - item)
-            cur.size >= kind.maxItems -> {
-                full = true
-                o
-            }
-            else -> o.copy(items = cur + item)
-        }
-    }
     val save: (Boolean) -> Unit = { pin ->
         WidgetStore.applyToAll(app, kind, o)
         WidgetSync.schedule(app)
@@ -406,105 +474,55 @@ private fun WConfig(kind: WKind, onClose: () -> Unit) {
     val pickTitle = when (kind) {
         WKind.PAISA -> "Which apps".t()
         WKind.ADS -> "Which accounts".t()
-        WKind.HEALTH -> "Which consoles".t()
+        else -> "Which consoles".t()
     }
     val allText = when (kind) {
         WKind.PAISA -> if (choices.isEmpty()) "All apps".t() else tf("All apps (%s)", choices.size)
         WKind.ADS -> if (choices.isEmpty()) "All accounts".t() else tf("All accounts (%s)", choices.size)
-        WKind.HEALTH -> if (choices.isEmpty()) "All consoles".t() else tf("All consoles (%s)", choices.size)
+        else -> if (choices.isEmpty()) "All consoles".t() else tf("All consoles (%s)", choices.size)
     }
     val pickText = if (o.pick.isEmpty()) allText else tf("%s chosen", o.pick.size)
     val pickOne = when (kind) {
         WKind.PAISA -> "Pick apps".t()
         WKind.ADS -> "Pick accounts".t()
-        WKind.HEALTH -> "Pick consoles".t()
+        else -> "Pick consoles".t()
     }
-    val summary = listOfNotNull(
-        if (kind == WKind.PAISA) wRangeName(o.range) else null,
-        pickText, wThemeName(o.theme), wEveryName(o.every),
-    ).joinToString(" · ")
-    val first = if (kind.fixedHero != null) 2 else 1
 
-    val what: @Composable ColumnScope.() -> Unit = {
-        KCard {
-            KSection("What to show".t(), trailing = {
-                KT(tf("%s/%s chosen", o.items.size, kind.maxItems), 14.sp, c.ink2, weight = FontWeight.SemiBold)
-            })
-            Spacer(Modifier.height(6.dp))
-            kind.catalog.chunked(2).forEach { pair ->
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    pair.forEach { item ->
-                        val idx = o.items.indexOf(item)
-                        WOptRow(
-                            wItemName(kind, item, o.range), if (idx >= 0) idx + first else null, Modifier.weight(1f),
-                        ) { toggle(item) }
-                    }
-                    if (pair.size == 1) Spacer(Modifier.weight(1f))
-                }
-            }
-            if (full) KStatus(tf("Max %s", kind.maxItems), KKind.BAD, Modifier.padding(top = 6.dp))
-        }
-    }
-    val settings: @Composable ColumnScope.() -> Unit = {
-        KCard(list = true) {
-            if (kind.fixedHero == null) {
-                Box {
-                    KRow(
-                        "Big number".t(), sub = o.items.firstOrNull()?.let { wItemName(kind, it, o.range) },
-                        lead = { WNumBadge(1) }, chevron = true, onClick = { heroMenu = true },
-                    )
-                    DropdownMenu(expanded = heroMenu, onDismissRequest = { heroMenu = false }) {
-                        kind.catalog.forEach { item ->
-                            DropdownMenuItem(
-                                text = { Text(wItemName(kind, item, o.range)) },
-                                onClick = {
-                                    heroMenu = false
-                                    o = o.copy(items = (listOf(item) + o.items.filter { it != item }).take(kind.maxItems))
-                                },
-                            )
-                        }
-                    }
-                }
-            } else {
-                KRow("Big number".t(), sub = wItemName(kind, kind.fixedHero, o.range), lead = { WNumBadge(1) })
-            }
-            KListDivider(lead = true)
-            KRow(
-                "More settings".t(), sub = summary, lead = { KIconTile(KIcons.Filter) },
-                trailing = {
-                    Icon(
-                        KIcons.ChevDown, null, tint = c.chev,
-                        modifier = Modifier.size(24.dp).rotate(if (more) 180f else 0f),
-                    )
-                },
-                onClick = { more = !more },
-            )
-            if (more) {
-                Column(
-                    Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 14.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
+    // kya data: samay (Paisa) + kaun se apps / accounts / consoles. Alerts me kuch chunna nahi.
+    val data: @Composable ColumnScope.() -> Unit = {
+        if (kind == WKind.PAISA || kind.picks) {
+            KCard {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (kind == WKind.PAISA) {
-                        WLabel("Time range".t())
+                        WLabel("Time range".t(), top = false)
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             WOpts.RANGES.forEach { r -> WChip(wRangeName(r), o.range == r) { o = o.copy(range = r) } }
                         }
                     }
-                    WLabel(pickTitle)
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        WChip(allText, o.pick.isEmpty()) { o = o.copy(pick = emptyList()) }
-                        WChip(if (o.pick.isEmpty()) pickOne else pickText, o.pick.isNotEmpty(), chev = true) { picker = true }
-                    }
-                    WLabel("Widget colour".t())
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        WOpts.THEMES.forEach { th ->
-                            WChip(wThemeName(th), o.theme == th, swatch = wSwatch(th, Mfc.style)) { o = o.copy(theme = th) }
+                    if (kind.picks) {
+                        WLabel(pickTitle, top = kind == WKind.PAISA)
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            WChip(allText, o.pick.isEmpty()) { o = o.copy(pick = emptyList()) }
+                            WChip(if (o.pick.isEmpty()) pickOne else pickText, o.pick.isNotEmpty(), chev = true) { picker = true }
                         }
                     }
-                    WLabel("Update every".t())
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        WOpts.EVERY.forEach { m -> WChip(wEveryName(m), o.every == m) { o = o.copy(every = m) } }
+                }
+            }
+        }
+    }
+    // kaisa dikhe: rang + kitni der me update
+    val look: @Composable ColumnScope.() -> Unit = {
+        KCard {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                WLabel("Widget colour".t(), top = false)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    WOpts.THEMES.forEach { th ->
+                        WChip(wThemeName(th), o.theme == th, swatch = wSwatch(th, Mfc.style)) { o = o.copy(theme = th) }
                     }
+                }
+                WLabel("Update every".t())
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    WOpts.EVERY.forEach { m -> WChip(wEveryName(m), o.every == m) { o = o.copy(every = m) } }
                 }
             }
         }
@@ -522,18 +540,19 @@ private fun WConfig(kind: WKind, onClose: () -> Unit) {
     KScreen(top = {
         KDetailBar(tf("Set up %s widget", kind.shortTitle()), onClose)
         Box(Modifier.fillMaxWidth().padding(start = kSide(), end = kSide(), top = 4.dp, bottom = 16.dp)) {
-            val m = if (kind == WKind.HEALTH) Modifier.width(174.dp) else Modifier.fillMaxWidth().widthIn(max = 460.dp)
-            WPreview(v, m.height(168.dp))
+            val m = if (kind.wide) Modifier.fillMaxWidth().widthIn(max = W_WIDE_MAX.dp).height(W_SMALL.dp) else Modifier.size(W_SMALL.dp)
+            WPreviewOrSkel(v, snap == null && !v.login && (busy || done != key), m)
         }
     }) {
+        KSection("Settings".t())
         if (isWide()) {
-            KTwoPane(left = what, right = {
-                settings()
-                actions()
-            })
+            KTwoPane(left = {
+                data()
+                look()
+            }, right = actions)
         } else {
-            what()
-            settings()
+            data()
+            look()
             actions()
         }
     }
@@ -547,53 +566,8 @@ private fun WConfig(kind: WKind, onClose: () -> Unit) {
 }
 
 @Composable
-private fun WLabel(text: String) {
-    KT(text, 14.sp, Mfc.c.ink2, Modifier.padding(top = 6.dp), weight = FontWeight.SemiBold)
-}
-
-/** Brand rang ka chhota number (1 = bada number). */
-@Composable
-private fun WNumBadge(n: Int) {
-    val c = Mfc.c
-    Box(
-        Modifier.size(28.dp).clip(RoundedCornerShape(8.dp)).background(c.btnBg),
-        contentAlignment = Alignment.Center,
-    ) {
-        KT(n.toString(), 14.sp, c.btnFg, weight = FontWeight.Bold)
-    }
-}
-
-/** "Kya dikhana hai" ki ek line: chuna = number, nahi = khaali dabba. 48dp. */
-@Composable
-private fun WOptRow(name: String, num: Int?, modifier: Modifier, onToggle: () -> Unit) {
-    val c = Mfc.c
-    val on = num != null
-    Row(
-        modifier.heightIn(min = 48.dp).clip(RoundedCornerShape(12.dp))
-            .toggleable(value = on, role = Role.Checkbox, onValueChange = { onToggle() }),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        if (num != null) {
-            WNumBadge(num)
-        } else {
-            val dash = c.chev
-            Box(
-                Modifier.size(28.dp).drawBehind {
-                    val sw = 1.5.dp.toPx()
-                    drawRoundRect(
-                        color = dash, topLeft = Offset(sw / 2f, sw / 2f), size = Size(size.width - sw, size.height - sw),
-                        cornerRadius = CornerRadius(8.dp.toPx()),
-                        style = Stroke(width = sw, pathEffect = PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 3.dp.toPx()))),
-                    )
-                },
-            )
-        }
-        KT(
-            name, 15.sp, if (on) c.ink else c.ink2, Modifier.weight(1f),
-            weight = if (on) FontWeight.SemiBold else FontWeight.Normal, maxLines = 2, lh = 20.sp,
-        )
-    }
+private fun WLabel(text: String, top: Boolean = true) {
+    KT(text, 14.sp, Mfc.c.ink2, if (top) Modifier.padding(top = 6.dp) else Modifier, weight = FontWeight.SemiBold)
 }
 
 /** Option chip (48dp): chuna = brand halka + check. chev = list kholta hai. */
@@ -615,12 +589,10 @@ private fun WChip(text: String, on: Boolean, swatch: Brush? = null, chev: Boolea
     }
 }
 
-private val WBrandBrush: Brush = MfcAngleGradient(135f, listOf(0f to Brand1, .52f to Brand2, 1f to Brand3))
-
-/** Rang chip ka gola: widget ka card rang. */
+/** Rang chip ka gola: widget ka card rang (dark = widget ka #16131F). */
 private fun wSwatch(theme: String, app: ThemeStyle): Brush = when (theme) {
     "light" -> Brush.linearGradient(listOf(Color.White, Color.White))
-    "dark" -> Brush.linearGradient(listOf(Color(0xFF1A1728), Color(0xFF1A1728)))
+    "dark" -> Brush.linearGradient(listOf(Color(0xFF16131F), Color(0xFF16131F)))
     "brand" -> WBrandBrush
     else -> wSwatch(app.key, app)
 }
@@ -672,189 +644,5 @@ private fun WCheckRow(text: String, on: Boolean, onClick: () -> Unit) {
             Box(Modifier.size(22.dp).border(1.5.dp, c.chev, RoundedCornerShape(6.dp)))
         }
         KT(text, 15.sp, c.ink, Modifier.weight(1f), maxLines = 2, lh = 20.sp)
-    }
-}
-
-// ---------------------------------------------------------------- preview (home screen wale widget jaisa)
-
-@Composable
-private fun WPreview(v: WView, modifier: Modifier, onClick: (() -> Unit)? = null) {
-    val p = remember(v.style, v.kind) { wPal(v.style, v.kind) }
-    val bd = mfcColors(v.style).cardBd
-    val shape = RoundedCornerShape(20.dp)
-    val scale = LocalDensity.current.fontScale.coerceIn(1f, 2f)
-    var m = modifier.shadow(4.dp, shape).clip(shape)
-    m = if (p.brand) m.background(WBrandBrush) else m.background(p.bg)
-    if (!p.brand && bd.alpha > 0f) m = m.border(1.dp, bd, shape)
-    if (onClick != null) m = m.clickable(role = Role.Button, onClick = onClick)
-    BoxWithConstraints(m) {
-        val w = maxWidth.value
-        val bodyH = maxHeight.value - W_BAND
-        Column(Modifier.fillMaxSize()) {
-            WpBand(v, p, w, scale)
-            when {
-                v.login -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    KT("Log in".t(), 18.sp, p.ink, weight = FontWeight.Bold)
-                }
-                v.kind == WKind.HEALTH -> WpHealth(v, p, w, bodyH, scale)
-                else -> WpGrid(v, p, w, bodyH, scale)
-            }
-        }
-    }
-}
-
-private fun wpGlyph(k: WKind): Int = when (k) {
-    WKind.PAISA -> R.drawable.widget_glyph_paisa
-    WKind.ADS -> R.drawable.widget_glyph_ads
-    WKind.HEALTH -> R.drawable.widget_glyph_health
-}
-
-@Composable
-private fun WpBand(v: WView, p: WPal, w: Float, scale: Float) {
-    val plan = wBandPlan(v, w, scale)
-    Row(
-        Modifier.fillMaxWidth().height(W_BAND.dp).background(p.band).padding(start = 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (plan.mark) {
-            Image(painterResource(R.drawable.mfc_mark), null, Modifier.size(18.dp))
-            Spacer(Modifier.width(6.dp))
-        }
-        Image(painterResource(wpGlyph(v.kind)), null, Modifier.size(18.dp))
-        Spacer(Modifier.width(8.dp))
-        KT(v.title, 14.sp, p.ink, Modifier.weight(1f), weight = FontWeight.Medium)
-        if (plan.refresh) {
-            Row(
-                Modifier.padding(start = if (plan.time) 10.dp else 17.dp, end = if (plan.time) 14.dp else 17.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(KIcons.Refresh, null, tint = p.ink2, modifier = Modifier.size(14.dp))
-                if (plan.time) {
-                    Spacer(Modifier.width(6.dp))
-                    KT(v.time, 13.sp, if (v.stale) p.warn else p.ink2)
-                }
-            }
-        } else {
-            Spacer(Modifier.width(14.dp))
-        }
-    }
-}
-
-@Composable
-private fun WpGrid(v: WView, p: WPal, w: Float, bodyH: Float, scale: Float) {
-    val hero = v.cells.firstOrNull() ?: return
-    val rest = v.cells.drop(1)
-    val plan = wGridPlan(v, w, bodyH, scale)
-    val heroH = plan.heroSp * wLineK(scale)
-    Column(Modifier.fillMaxWidth().padding(start = W_PAD.dp, end = W_PAD.dp, top = W_TOP.dp)) {
-        if (plan.narrow) {
-            WpCell(hero, p, plan.heroRoom, plan.heroSp, true, heroH, scale)
-            rest.take(plan.rows).forEach { c ->
-                Spacer(Modifier.height(4.dp))
-                WpCompact(c, p, plan.heroRoom, scale)
-            }
-        } else {
-            Row(Modifier.fillMaxWidth()) {
-                Column(Modifier.weight(1f)) { WpCell(hero, p, plan.heroRoom, plan.heroSp, true, heroH, scale) }
-                Spacer(Modifier.width(W_COL_GAP.dp))
-                Column(Modifier.width(plan.c2.dp)) {
-                    rest.getOrNull(0)?.let { c -> WpCell(c, p, plan.c2, wValueSp(c, plan.c2, 18f, 13f, scale), false, heroH, scale) }
-                }
-            }
-            if (plan.two) {
-                Spacer(Modifier.height(W_GAP.dp))
-                Row(Modifier.fillMaxWidth()) {
-                    Column(Modifier.weight(1f)) {
-                        rest.getOrNull(1)?.let { c ->
-                            WpCell(c, p, plan.heroRoom, wValueSp(c, plan.heroRoom, 18f, 13f, scale), false, wSmallH(scale), scale)
-                        }
-                    }
-                    Spacer(Modifier.width(W_COL_GAP.dp))
-                    Column(Modifier.width(plan.c2.dp)) {
-                        rest.getOrNull(2)?.let { c ->
-                            WpCell(c, p, plan.c2, wValueSp(c, plan.c2, 18f, 13f, scale), false, wSmallH(scale), scale)
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun WpCell(c: WCell, p: WPal, room: Float, sp: Float, big: Boolean, lineH: Float, scale: Float) {
-    KT(c.label, 13.sp, if (c.strong) p.ink else p.ink2, weight = if (c.strong) FontWeight.Medium else FontWeight.Normal)
-    val sub = c.sub
-    val pill = c.pill
-    Row(
-        Modifier.height(lineH.dp),
-        verticalAlignment = if (big) Alignment.Bottom else Alignment.CenterVertically,
-    ) {
-        if (c.value.isNotEmpty()) {
-            KT(c.value, sp.sp, p.tone(c.tone), weight = if (big) FontWeight.Bold else FontWeight.Medium)
-        }
-        if (sub != null && wShowSub(c, room, scale)) {
-            Spacer(Modifier.width(6.dp))
-            KT(sub, 14.sp, p.ink2, Modifier.padding(bottom = (sp * 0.12f).dp))
-        }
-        if (pill != null) {
-            if (c.value.isNotEmpty()) Spacer(Modifier.width(8.dp))
-            WpPill(pill, p, full = wPillFull(c, room, sp, scale))
-        }
-    }
-}
-
-@Composable
-private fun WpCompact(c: WCell, p: WPal, room: Float, scale: Float) {
-    val pill = c.pill
-    Row(Modifier.fillMaxWidth().height(wSmallH(scale).dp), verticalAlignment = Alignment.CenterVertically) {
-        KT(c.label, 13.sp, if (c.strong) p.ink else p.ink2, Modifier.weight(1f))
-        if (c.value.isNotEmpty()) {
-            Spacer(Modifier.width(8.dp))
-            KT(c.value, 15.sp, p.tone(c.tone), weight = FontWeight.Medium)
-        }
-        if (pill != null) {
-            Spacer(Modifier.width(6.dp))
-            WpPill(pill, p, full = c.value.isEmpty() && wPillW(pill, scale) <= room * 0.6f)
-        }
-    }
-}
-
-@Composable
-private fun WpHealth(v: WView, p: WPal, w: Float, bodyH: Float, scale: Float) {
-    val hero = v.cells.firstOrNull() ?: return
-    val plan = wHealthPlan(v, w, bodyH, scale)
-    val of = hero.of
-    Column(Modifier.fillMaxWidth().padding(start = W_PAD.dp, end = W_PAD.dp, top = W_TOP.dp)) {
-        Row(verticalAlignment = Alignment.Bottom) {
-            KT(hero.value, plan.heroSp.sp, p.ink, weight = FontWeight.Bold)
-            if (of != null) KT(of, 18.sp, p.ink, Modifier.padding(bottom = (plan.heroSp * 0.12f).dp))
-            Spacer(Modifier.width(6.dp))
-            KT(hero.label, 13.sp, p.ink2, Modifier.padding(bottom = (plan.heroSp * 0.14f).dp))
-        }
-        v.cells.drop(1).take(plan.lines).forEach { c ->
-            Spacer(Modifier.height(W_GAP.dp))
-            val pill = c.pill
-            if (pill != null) WpPill(pill, p, full = true)
-            else KT(wJoinFit(c.value, c.sub, w - 2 * W_PAD, 14f, scale), 14.sp, p.tone(c.tone))
-        }
-    }
-}
-
-@Composable
-private fun WpPill(pm: WPillM, p: WPal, full: Boolean) {
-    val (bg, fg) = p.pill(pm.kind)
-    val icon = pm.kind.icon()
-    val text = full || icon == null
-    Row(
-        Modifier.height(26.dp).clip(CircleShape).background(bg)
-            .padding(start = if (icon != null) 6.dp else 10.dp, end = if (text) 10.dp else 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (icon != null) Icon(icon, if (text) null else pm.text, tint = fg, modifier = Modifier.size(16.dp))
-        if (text) {
-            if (icon != null) Spacer(Modifier.width(4.dp))
-            KT(pm.text, 13.sp, fg, weight = FontWeight.Medium)
-        }
     }
 }

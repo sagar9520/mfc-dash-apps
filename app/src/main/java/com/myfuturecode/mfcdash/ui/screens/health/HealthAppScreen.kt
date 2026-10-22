@@ -1,10 +1,23 @@
 package com.myfuturecode.mfcdash.ui.screens.health
 
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -14,15 +27,25 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
+import com.myfuturecode.mfcdash.data.HApp
 import com.myfuturecode.mfcdash.data.HAppDetail
 import com.myfuturecode.mfcdash.data.HEvent
 import com.myfuturecode.mfcdash.data.HRun
+import com.myfuturecode.mfcdash.data.HVerRow
 import com.myfuturecode.mfcdash.ui.HState
 import com.myfuturecode.mfcdash.ui.HealthVm
 import com.myfuturecode.mfcdash.ui.components.AppIcon
@@ -46,15 +69,30 @@ import com.myfuturecode.mfcdash.ui.kit.KIcons
 import com.myfuturecode.mfcdash.ui.kit.KKind
 import com.myfuturecode.mfcdash.ui.kit.KKv
 import com.myfuturecode.mfcdash.ui.kit.KListDivider
+import com.myfuturecode.mfcdash.ui.kit.KLoadOnChange
+import com.myfuturecode.mfcdash.ui.kit.KPill
 import com.myfuturecode.mfcdash.ui.kit.KProgress
 import com.myfuturecode.mfcdash.ui.kit.KRow
 import com.myfuturecode.mfcdash.ui.kit.KScreen
 import com.myfuturecode.mfcdash.ui.kit.KSection
 import com.myfuturecode.mfcdash.ui.kit.KSegTabs
+import com.myfuturecode.mfcdash.ui.kit.KSkelBars
+import com.myfuturecode.mfcdash.ui.kit.KSkelBlock
+import com.myfuturecode.mfcdash.ui.kit.KSkelCard
+import com.myfuturecode.mfcdash.ui.kit.KSkelRows
+import com.myfuturecode.mfcdash.ui.kit.KSkelSection
+import com.myfuturecode.mfcdash.ui.kit.KSkelStats
+import com.myfuturecode.mfcdash.ui.kit.KSortButton
+import com.myfuturecode.mfcdash.ui.kit.KSortKind
+import com.myfuturecode.mfcdash.ui.kit.KSortPill
+import com.myfuturecode.mfcdash.ui.kit.KSortState
 import com.myfuturecode.mfcdash.ui.kit.KSplit
+import com.myfuturecode.mfcdash.ui.kit.KStatus
 import com.myfuturecode.mfcdash.ui.kit.KTint
 import com.myfuturecode.mfcdash.ui.kit.KTwoPane
 import com.myfuturecode.mfcdash.ui.kit.isWide
+import com.myfuturecode.mfcdash.ui.kit.kSorted
+import com.myfuturecode.mfcdash.ui.kit.rememberKSort
 import com.myfuturecode.mfcdash.ui.theme.Mfc
 import com.myfuturecode.mfcdash.util.fmtDay
 import com.myfuturecode.mfcdash.util.inr
@@ -63,6 +101,7 @@ import com.myfuturecode.mfcdash.util.pct
 import com.myfuturecode.mfcdash.util.t
 import com.myfuturecode.mfcdash.util.tFull
 import com.myfuturecode.mfcdash.util.tf
+import com.myfuturecode.mfcdash.util.tsMs
 
 private val DAYS = listOf(7, 14, 30, 90)
 
@@ -77,9 +116,12 @@ fun HealthAppScreen(vm: HealthVm, nav: NavHostController, pkg: String) {
     var days by rememberSaveable { mutableIntStateOf(30) }
     var reload by remember { mutableIntStateOf(0) }
     Poll(30_000, pkg, days, reload) { vm.loadApp(pkg, days) }
+    KLoadOnChange(days)   // din badle = upar ki line
     val d = h.app["$pkg|$days"] ?: h.app.entries.firstOrNull { it.key.startsWith("$pkg|") }?.value
     var task by remember { mutableStateOf(false) }
     var issueF by rememberSaveable { mutableStateOf("open") }
+    // issues ka sort (section ke Sort button se); default = server ka order (aakhri baar, naya pehle)
+    val issueSort = rememberKSort("last")
     val back: () -> Unit = { if (!nav.popBackStack()) nav.navigate("home") }
     val bar: @Composable ColumnScope.() -> Unit = {
         val a = d?.app
@@ -87,13 +129,28 @@ fun HealthAppScreen(vm: HealthVm, nav: NavHostController, pkg: String) {
             a?.name?.ifBlank { null } ?: pkg, back, sub = pkg,
             lead = if (a != null) { { AppIcon(a.icon, a.name.ifBlank { pkg }, 36.dp) } } else null,
             actions = {
+                HPlayButton(pkg)
                 KBarIcon(KIcons.Plus, "New task".t(), { task = true })
                 KBarIcon(KIcons.Refresh, "Refresh".t(), { reload++ })
             },
         )
     }
     if (d == null) {
-        KScreen(top = bar) { if (h.error != null) HProblem(h) { vm.loadApp(pkg, days) } else Loading() }
+        // pehli baar: hero + Scan / Naya kaam, din, number grid, chart | Issues, scans ka dhaancha
+        HDetailWait(h, bar, { vm.loadApp(pkg, days) }, left = {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                repeat(2) { KSkelBlock(48.dp, RoundedCornerShape(24.dp), Modifier.weight(1f)) }
+            }
+            KSkelBlock(48.dp, RoundedCornerShape(24.dp))
+            KSkelStats(6, 3)
+            KSkelSection(width = 110.dp)
+            KSkelBars(14, 140.dp)
+        }, right = {
+            KSkelSection(width = 70.dp)
+            KSkelRows(4)
+            KSkelSection(width = 120.dp)
+            KSkelRows(3)
+        })
     } else if (isWide()) {
         // Fold: baayein hero + number + chart, daayein issues / builds / scans / switches
         KScreen(top = bar) {
@@ -102,16 +159,54 @@ fun HealthAppScreen(vm: HealthVm, nav: NavHostController, pkg: String) {
                     AppHero(d)
                     AppNumbers(d, h, vm, pkg, days, { days = it }) { task = true }
                 },
-                right = { AppLists(d, h, vm, nav, issueF) { issueF = it } },
+                right = { AppLists(d, h, vm, nav, issueF, issueSort) { issueF = it } },
             )
         }
     } else {
         KScreen(top = { bar(); AppHero(d) }) {
             AppNumbers(d, h, vm, pkg, days, { days = it }) { task = true }
-            AppLists(d, h, vm, nav, issueF) { issueF = it }
+            AppLists(d, h, vm, nav, issueF, issueSort) { issueF = it }
         }
     }
     if (task) TaskSheet(h, vm, nav, pkg) { task = false }
+}
+
+/** Play Store kholo: pehle Play Store app (market://), wo na ho to browser me play.google.com. */
+private fun openPlay(ctx: Context, pkg: String) {
+    val ok = runCatching {
+        ctx.startActivity(
+            Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$pkg")).setPackage("com.android.vending").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
+    }.isSuccess
+    if (!ok) openUrl(ctx, "https://play.google.com/store/apps/details?id=$pkg")
+}
+
+/**
+ * Bar me "Play" pill (naam ke baad, + se pehle; App page jaisa): Play Store icon + shabd, brand-soft + brand
+ * (Brand band par halka safed + safed). 48dp touch, tap = Play Store. Chhoti screen (< 400dp) par sirf icon.
+ */
+@Composable
+private fun HPlayButton(pkg: String) {
+    val c = Mfc.c
+    val ctx = LocalContext.current
+    val narrow = LocalConfiguration.current.screenWidthDp < 400
+    val says = "Open in Play Store".t()
+    Box(
+        Modifier.heightIn(min = 48.dp).widthIn(min = 48.dp).clip(RoundedCornerShape(24.dp))
+            .clickable(role = Role.Button, onClickLabel = says) { openPlay(ctx, pkg) },
+        contentAlignment = Alignment.Center,
+    ) {
+        Row(
+            Modifier.height(36.dp).clip(RoundedCornerShape(18.dp)).background(if (c.onBrand) c.pNBg else c.brandSoft)
+                .padding(start = if (narrow) 9.dp else 10.dp, end = if (narrow) 9.dp else 12.dp)
+                .clearAndSetSemantics { contentDescription = says },
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Icon(KIcons.PlayStore, null, tint = c.brand, modifier = Modifier.size(18.dp))
+            if (!narrow) Text("Play".t(), color = c.brand, style = hStyle(14.sp, FontWeight.SemiBold, 18.sp), maxLines = 1)
+        }
+    }
 }
 
 /** Rose hero: console + status pill, khule issues (bada), crash / ANR / aakhri scan. */
@@ -133,16 +228,17 @@ private fun AppHero(d: HAppDetail) {
             ),
             listOf(if (cr != null && cr >= CRASH_BAD) c.red else null, if (an != null && an >= ANR_BAD) c.red else null, null),
         )
+        // Google ka din (1-2 din purana), sab versions mila ke; version-wise neeche wale card me
         a.vitalsDay?.let { v ->
             Text(
-                "Vitals".t() + " · " + fmtDay(v), Modifier.padding(top = 8.dp), color = c.ink3, style = hStyle(13.sp, lh = 18.sp),
-                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                "Vitals".t() + " · " + "All versions".t() + " · " + fmtDay(v), Modifier.padding(top = 8.dp), color = c.ink3,
+                style = hStyle(13.sp, lh = 18.sp), maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
         }
     }
 }
 
-/** Scan / naya kaam, din chuno, number grid, chart, versions. */
+/** Scan / naya kaam, version-wise crash, din chuno, number grid, chart, versions. */
 @Composable
 private fun AppNumbers(d: HAppDetail, h: HState, vm: HealthVm, pkg: String, days: Int, onDays: (Int) -> Unit, onTask: () -> Unit) {
     val c = Mfc.c
@@ -150,6 +246,7 @@ private fun AppNumbers(d: HAppDetail, h: HState, vm: HealthVm, pkg: String, days
         KButton("Scan".t(), { vm.scan(pkg) }, Modifier.weight(1f), kind = KBtn.SOFT, icon = KIcons.Refresh, busy = "scan$pkg" in h.busy)
         KButton("New task".t(), onTask, Modifier.weight(1f), icon = KIcons.Plus)
     }
+    VersionVitals(d.app)
     KSegTabs(DAYS.map { tf("%s days", it) }, DAYS.indexOf(days).coerceAtLeast(0), { onDays(DAYS[it]) })
     KCard {
         HGrid(
@@ -181,16 +278,81 @@ private fun AppNumbers(d: HAppDetail, h: HState, vm: HealthVm, pkg: String, days
     }
 }
 
+/** Version ke hisaab se crash / ANR (Google ka wahi din): naya version upar, Play ki seema se upar = laal. vitals_ver na ho to kuch nahi. */
+@Composable
+private fun VersionVitals(a: HApp) {
+    val vv = a.vitalsVer ?: return
+    KSection("Version-wise".t(), trailing = { HSecNote(fmtDay(vv.day)) })
+    KCard(list = true) {
+        vv.rows.take(5).forEachIndexed { i, r ->
+            if (i > 0) KListDivider()
+            VerRow(verLabel(r, a), r, newest = i == 0)
+        }
+    }
+}
+
+/** Tracker ka live version yahi code ho to "v1.2.3", warna "vc 63". */
+private fun verLabel(r: HVerRow, a: HApp): String {
+    val tv = a.trackerVer
+    return if (!tv.isNullOrBlank() && a.trackerVc != null && r.vc == a.trackerVc.toString()) "v" + tv.removePrefix("v") else "vc " + r.vc
+}
+
+/** Ek version: naam (+ Naya), users; daayein Crash / ANR %. */
+@Composable
+private fun VerRow(label: String, r: HVerRow, newest: Boolean) {
+    val c = Mfc.c
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Column(Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    label, Modifier.weight(1f, fill = false), color = c.ink, style = hStyle(15.sp, FontWeight.SemiBold, 20.sp),
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                )
+                if (newest) KPill("Newest".t(), KKind.ASK, icon = null)
+            }
+            r.users?.let {
+                Text(tf("%s users", num(it.toDouble())), Modifier.padding(top = 2.dp), color = c.ink3, style = hStyle(13.sp, lh = 18.sp), maxLines = 1)
+            }
+        }
+        Column(horizontalAlignment = Alignment.End) {
+            VerRate("Crash".t(), r.crash, CRASH_BAD)
+            VerRate("ANR", r.anr, ANR_BAD)
+        }
+    }
+}
+
+/** "Crash 0.42%": seema se upar = laal (shape + rang), warna sada. */
+@Composable
+private fun VerRate(label: String, v: Double?, bad: Double) {
+    val text = label + " " + (v?.let { pct(it, 2) } ?: "–")
+    if (v != null && v >= bad) KStatus(text, KKind.BAD)
+    else Text(text, color = Mfc.c.ink2, style = hStyle(13.sp, lh = 18.sp), maxLines = 1)
+}
+
 /** Issues (status chips + list), builds, haal ke scans, automation switches. */
 @Composable
-private fun AppLists(d: HAppDetail, h: HState, vm: HealthVm, nav: NavHostController, issueF: String, onIssueF: (String) -> Unit) {
+private fun AppLists(
+    d: HAppDetail, h: HState, vm: HealthVm, nav: NavHostController, issueF: String, sort: KSortState, onIssueF: (String) -> Unit,
+) {
     val a = d.app
     val n = d.counts
+    val sortOpts = listOf("last" to "Last seen".t(), "severity" to "Severity".t(), "users" to "Users".t(), "events" to "Events".t())
+    val sortKinds = mapOf("last" to KSortKind.DATE)
     KSection("Issues".t(), trailing = {
-        HSecNote(
-            listOf("Crash".t() to n.optInt("crash"), "ANR" to n.optInt("anr"), "Ad issue".t() to n.optInt("ad"), "Task".t() to n.optInt("task"))
-                .filter { it.second > 0 }.joinToString(" · ") { "${it.first} ${it.second}" },
-        )
+        // lambi ginti (Crash · ANR · Ad issue · Kaam) "..." ho jaye, Sort button aur "Issues" title ko jagah mile (360dp)
+        Row(Modifier.widthIn(max = 220.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Box(Modifier.weight(1f, fill = false)) {
+                HSecNote(
+                    listOf("Crash".t() to n.optInt("crash"), "ANR" to n.optInt("anr"), "Ad issue".t() to n.optInt("ad"), "Task".t() to n.optInt("task"))
+                        .filter { it.second > 0 }.joinToString(" · ") { "${it.first} ${it.second}" },
+                )
+            }
+            KSortButton(sort, sortOpts, sortKinds)
+        }
     })
     ChipRow {
         listOf("open" to "Open", "fixed" to "Fixed", "rejected" to "Rejected", "resolved" to "Resolved", "all" to "All").forEach { (k, l) ->
@@ -205,7 +367,16 @@ private fun AppLists(d: HAppDetail, h: HState, vm: HealthVm, nav: NavHostControl
             "resolved" -> it.status == "RESOLVED"
             else -> true
         }
+    }.let { l ->
+        when {
+            sort.isDefault -> l
+            sort.key == "severity" -> l.kSorted(sort.desc) { hSevRank(it.severity) }
+            sort.key == "users" -> l.kSorted(sort.desc) { it.users }
+            sort.key == "events" -> l.kSorted(sort.desc) { it.events }
+            else -> l.kSorted(sort.desc) { tsMs(it.lastSeen) }
+        }
     }
+    KSortPill(sort, sortOpts, sortKinds)
     if (shown.isEmpty()) KCard { KEmpty("No match".t(), KIcons.Ok) }
     else KCard(list = true) {
         shown.forEachIndexed { i, x ->
@@ -257,7 +428,13 @@ fun HealthRunScreen(vm: HealthVm, nav: NavHostController, id: Long) {
         )
     }
     if (d == null) {
-        KScreen(top = bar) { if (h.error != null) HProblem(h) { vm.loadRun(id) } else Loading() }
+        // pehli baar: hero + run ki jaankari | log ka dhaancha
+        HDetailWait(h, bar, { vm.loadRun(id) }, left = {
+            KSkelCard(8, title = false)
+        }, right = {
+            KSkelSection(width = 50.dp)
+            KSkelCard(6, title = false)
+        })
         return
     }
     val (r, ev) = d

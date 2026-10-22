@@ -46,4 +46,16 @@ return [
 
     // Ek issue par AI fix ki max koshish (phir NEEDS_HUMAN_REVIEW)
     'max_fix_attempts' => 2,
+
+    // (optional) Play Console ki emails -> app alerts (review reject, policy warning, "update live" ...). Google iska API nahi deta, isliye mail padhte hain.
+    // 1) Plesk me sirf isi kaam ka naya mailbox banao (jaise playmail@YOUR-DOMAIN). Yeh har nayi mail ko "read" (\Seen) kar deta hai: is mailbox me apni normal mail mat rakhna.
+    // 2) Har Gmail (jisme Play Console ki mails aati hain): Settings > Forwarding and POP/IMAP > "Add a forwarding address" = yeh mailbox.
+    //    Google ki confirmation mail ka link app ke Alerts me aa jaayega (ya webmail me kholo). Phir Gmail filter: From "google.com" + "Google Play" -> Forward to is mailbox.
+    // 3) host = mail server ka naam jiska SSL certificate sahi ho (Plesk > Mail > "Secure mail with Let's Encrypt"), port 993 (IMAP SSL). Password sirf yahin.
+    // 4) forwarders (optional, par rakhna behtar): haath se forward ki gayi mails sirf in Gmail addresses se maani jaayengi. Khali = koi bhi (seedhi google.com wali mails hamesha).
+    // 5) Nakli "google.com" mail se bachne ke liye incoming mail ka DKIM check on rakho (Plesk: Tools & Settings > Mail Server Settings > DKIM spam protection, incoming verify):
+    //    server ka Authentication-Results header dkim=fail kahe to mail skip (Health logs me warn). Header hi na ho to check nahi ho paata.
+    // host / user / pass khali = feature band. Health cron (har 5 min) mailbox check karta hai; app me status: health.php?action=playmail_status
+    'play_mail' => ['host' => '', 'port' => 993, 'user' => '', 'pass' => '', 'forwarders' => []],
+    // example: 'play_mail' => ['host' => 'mail.example.com', 'port' => 993, 'user' => 'playmail@example.com', 'pass' => '...', 'forwarders' => ['you@gmail.com']],
 ];

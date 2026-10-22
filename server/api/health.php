@@ -1,7 +1,7 @@
 <?php
 /**
  * MFC Dash app — "AI App Health & Auto Fix" module ki API (sirf app ke liye; web page nahi).
- * Upload: mfc_dash/api/health.php  +  mfc_dash/lib/health.php  (+ mfc_dash/health_config.php, sample: server/health_config.sample.php)
+ * Upload: mfc_dash/api/health.php  +  mfc_dash/lib/health.php  (+ mfc_dash/lib/playmail.php)  (+ mfc_dash/health_config.php, sample: server/health_config.sample.php)
  *
  * Cron (har 5 min):  php mfc_dash/api/health.php cron   ya URL  api/health.php?cron=1&key=CRON_KEY
  *
@@ -10,12 +10,15 @@
  *   POST ?action=scan {pkg?, type?} | investigate {id} | autofix {id} | reject {id, reason} | reopen {id} | fixed {id}
  *        | task {pkg, title, details} | app_setting {pkg, field, value} | setting {key, value} | verify {pkg}
  *        | link {kind: aab|apk, id} | build_status {id, status} | publish {id, track, rollout} | test_email
+ *        | playmail_test  -> Play Console mailbox abhi check karo (lib/playmail.php + config 'play_mail')
+ *   GET  ?action=playmail_status -> {configured, last_check, last_ok, last_error, last_count, last_mails, unseen_left, mailbox}
  * Bina login (signed / harmless):
  *   GET ?open=issue/12   -> chhota page jo app kholta hai (email ke deep link)
  *   GET ?s=aab|apk|csv&a=..&exp=..&sig=..  -> 15 min ka signed download
  */
 declare(strict_types=1);
 require_once __DIR__ . '/../lib/health.php';
+if (is_file(__DIR__ . '/../lib/playmail.php')) require_once __DIR__ . '/../lib/playmail.php';   // Play Console emails -> alerts (optional)
 
 $isCli = PHP_SAPI === 'cli';
 $pdo = db();
@@ -28,6 +31,8 @@ if (($isCli && in_array('cron', $argv ?? [], true)) || isset($_GET['cron'])) {
     $log = function (string $m) { echo gmdate('H:i:s') . "  $m\n"; };
     $q = h_schedule($pdo, $log);
     $log('queued: ' . count($q));
+    // Play Console emails (config 'play_mail' ho tabhi; apna lock + time limit)
+    if (function_exists('pm_cron')) { try { pm_cron($pdo, $log); } catch (Throwable $e) { $log('play mail ERROR: ' . $e->getMessage()); } }
     $n = h_work($pdo, 240.0);
     $log("runs executed: $n");
     exit;
@@ -171,12 +176,26 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                 if (!$ok) throw new RuntimeException('send failed: ' . (kv_get('h_mail_err') ?? '?'));
                 $resp = ['ok' => true];
                 break;
+            case 'playmail_test':
+                if (!function_exists('pm_run')) throw new RuntimeException('lib/playmail.php not uploaded');
+                if (!pm_cfg()) throw new RuntimeException("'play_mail' not set in health_config.php");
+                @set_time_limit(180);
+                $r = pm_run($pdo, 'manual · ' . $me);
+                if (!$r['ok']) throw new RuntimeException($r['error']);
+                $resp = ['ok' => true, 'result' => $r, 'status' => pm_status_out()];
+                break;
             default: json_out(['ok' => false, 'error' => 'unknown action'], 400);
         }
     } catch (Throwable $e) {
         json_out(['ok' => false, 'error' => $e->getMessage()], 400);
     }
     h_respond_then_work($pdo, $resp, $bg);
+}
+
+// ---------------------------------------------------------------- GET actions
+if ($action === 'playmail_status') {
+    json_out(['ok' => true] + (function_exists('pm_status_out') ? pm_status_out()
+        : ['configured' => false, 'last_check' => null, 'last_ok' => null, 'last_error' => '', 'last_count' => 0, 'last_mails' => 0, 'unseen_left' => 0, 'mailbox' => '']));
 }
 
 // ---------------------------------------------------------------- GET views
@@ -230,15 +249,27 @@ function h_respond_then_work(PDO $pdo, array $out, bool $work): void
 
 function h_dec(?string $j) { $v = $j === null ? null : json_decode($j, true); return $v; }
 
+/** MFC tracker ka har app ka sabse naya live version (alerts.php ka new_version rule kv al_live_ver me rakhta hai): pkg => {ver, vc}. */
+function h_tracker_live(): array
+{
+    static $m = null;
+    if ($m === null) { $m = json_decode((string)(kv_get('al_live_ver') ?? ''), true); if (!is_array($m)) $m = []; }
+    return $m;
+}
+
 function h_app_row(array $a): array
 {
     $verified = (int)$a['repo_verified'] === 1 && (int)$a['signing_verified'] === 1;
+    $vv = h_dec($a['vitals_ver'] ?? null);
+    $tl = h_tracker_live()[$a['pkg']] ?? null;
     return ['pkg' => $a['pkg'], 'name' => $a['name'] !== '' ? $a['name'] : $a['pkg'], 'console_id' => $a['console_id'], 'icon' => $a['icon_url'],
         'in_dashboard' => (int)$a['in_dashboard'], 'status' => $a['status'], 'monitoring' => (int)$a['monitoring'], 'autofix' => (int)$a['autofix'],
         'autofix_effective' => (int)$a['autofix'] === 1 && $verified ? 1 : 0, 'email' => (int)$a['email'], 'publish_auto' => 0,
         'repo' => $a['repo'], 'repo_verified' => (int)$a['repo_verified'], 'signing_verified' => (int)$a['signing_verified'], 'verify_note' => $a['verify_note'],
         'crash_rate' => $a['crash_rate'] === null ? null : (float)$a['crash_rate'], 'anr_rate' => $a['anr_rate'] === null ? null : (float)$a['anr_rate'],
-        'vitals_day' => $a['vitals_day'], 'last_scan_at' => $a['last_scan_at'], 'discovered_at' => $a['discovered_at']];
+        'vitals_day' => $a['vitals_day'], 'vitals_ver' => is_array($vv) && isset($vv['rows']) ? $vv : null,
+        'tracker_ver' => is_array($tl) && ($tl['ver'] ?? '') !== '' ? (string)$tl['ver'] : null, 'tracker_vc' => is_array($tl) && !empty($tl['vc']) ? (int)$tl['vc'] : null,
+        'last_scan_at' => $a['last_scan_at'], 'discovered_at' => $a['discovered_at']];
 }
 
 function h_console_rows(PDO $pdo): array
@@ -337,6 +368,11 @@ function h_view_overview(PDO $pdo): array
     $integr[] = ['name' => 'Claude AI', 'kind' => 'ai', 'status' => h_ai_key() !== '' ? 'OK' : 'NOT_SET', 'detail' => h_ai_key() !== '' ? h_ai_model() : 'add key in Settings'];
     $integr[] = ['name' => 'Email', 'kind' => 'email', 'status' => h_email_on() ? 'OK' : 'NOT_SET', 'detail' => h_email_on() ? (empty((hcfg('smtp') ?? [])['host']) ? 'PHP mail()' : 'SMTP') : 'email_to not set'];
     $integr[] = ['name' => 'GitHub (AI fix worker)', 'kind' => 'github', 'status' => trim((string)(hcfg('github_token') ?? '')) !== '' ? 'OK' : 'NOT_SET', 'detail' => count((array)(hcfg('repos') ?? [])) . ' repos linked'];
+    if (function_exists('pm_cfg') && pm_cfg()) {   // sirf config ho tab (warna list pehle jaisi)
+        $pm = pm_status_out();
+        $integr[] = ['name' => 'Play Console emails', 'kind' => 'playmail', 'status' => $pm['last_error'] !== '' ? 'ERROR' : ($pm['last_check'] ? 'OK' : 'NOT_SET'),
+            'detail' => $pm['last_error'] !== '' ? $pm['last_error'] : ($pm['last_check'] ? 'last check ' . $pm['last_check'] . ' UTC · ' . $pm['last_count'] . ' new alerts' : 'waiting for the first cron check')];
+    }
     return [
         'consoles' => count($cons), 'consoles_ok' => count(array_filter($cons, fn($c) => $c['status'] === 'OK')),
         'apps' => (int)$apps['n'], 'apps_monitored' => (int)$apps['mon'], 'healthy' => (int)$apps['ok'], 'with_problems' => (int)$apps['bad'],
@@ -470,10 +506,11 @@ function h_view_settings(PDO $pdo): array
         $mail[] = ['key' => $k, 'label' => $l, 'on' => kv_get($k) !== '0'];
     $to = (string)(hcfg('email_to') ?? '');
     return ['apps' => array_map('h_app_row', h_apps($pdo, '', false)), 'email' => ['configured' => h_email_on(), 'to_hint' => $to === '' ? '' : preg_replace('/(?<=.).(?=[^@]*@)/', '•', $to), 'toggles' => $mail],
-        'schedule' => [['label' => 'Critical health (tracker crashes)', 'every' => '15 min'], ['label' => 'Play crash / ANR issues', 'every' => '1 hour'], ['label' => 'Ad network / ad unit checks', 'every' => '1 hour'],
+        'schedule' => array_merge([['label' => 'Critical health (tracker crashes)', 'every' => '15 min'], ['label' => 'Play crash / ANR issues', 'every' => '1 hour'], ['label' => 'Ad network / ad unit checks', 'every' => '1 hour'],
             ['label' => 'Play vitals (crash / ANR rate)', 'every' => '6 hours (Google data is 1-2 days late)'], ['label' => 'App discovery', 'every' => 'daily'],
             ['label' => 'Full portfolio audit', 'every' => 'daily ' . H_AUDIT_HOUR . ':00'], ['label' => 'Email summary', 'every' => 'daily ' . H_SUMMARY_HOUR . ':00'],
             ['label' => 'AI investigation', 'every' => 'on new P0/P1 crash / ANR'], ['label' => 'Max fix attempts per issue', 'every' => (string)h_max_attempts()]],
+            function_exists('pm_cfg') && pm_cfg() ? [['label' => 'Play Console emails (mailbox)', 'every' => '5 min']] : []),
         'production_publish' => 'manual approval only', 'ai' => ['enabled' => h_ai_key() !== '', 'model' => h_ai_model()],
         'github' => trim((string)(hcfg('github_token') ?? '')) !== '', 'consoles' => h_console_rows($pdo), 'cron_ok' => (int)(kv_get('h_cron_last') ?? 0) > time() - 900];
 }

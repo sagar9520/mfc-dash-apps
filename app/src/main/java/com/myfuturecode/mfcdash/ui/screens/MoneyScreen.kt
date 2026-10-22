@@ -60,10 +60,22 @@ import com.myfuturecode.mfcdash.ui.kit.KRow
 import com.myfuturecode.mfcdash.ui.kit.KScreen
 import com.myfuturecode.mfcdash.ui.kit.KSection
 import com.myfuturecode.mfcdash.ui.kit.KSegTabs
+import com.myfuturecode.mfcdash.ui.kit.KSkelBars
+import com.myfuturecode.mfcdash.ui.kit.KSkelCard
+import com.myfuturecode.mfcdash.ui.kit.KSkelHero
+import com.myfuturecode.mfcdash.ui.kit.KSkelLine
+import com.myfuturecode.mfcdash.ui.kit.KSkelRows
+import com.myfuturecode.mfcdash.ui.kit.KSkelSection
+import com.myfuturecode.mfcdash.ui.kit.KSkeleton
+import com.myfuturecode.mfcdash.ui.kit.KSortButton
+import com.myfuturecode.mfcdash.ui.kit.KSortKind
 import com.myfuturecode.mfcdash.ui.kit.KTwoPane
 import com.myfuturecode.mfcdash.ui.kit.isWide
 import com.myfuturecode.mfcdash.ui.kit.kRoasColor
 import com.myfuturecode.mfcdash.ui.kit.kRoasKind
+import com.myfuturecode.mfcdash.ui.kit.kSortLead
+import com.myfuturecode.mfcdash.ui.kit.kSorted
+import com.myfuturecode.mfcdash.ui.kit.rememberKSort
 import com.myfuturecode.mfcdash.ui.theme.Mfc
 import com.myfuturecode.mfcdash.util.fmtDay
 import com.myfuturecode.mfcdash.util.inr
@@ -87,12 +99,13 @@ fun MoneyScreen(vm: DashVm, st: UiState, nav: NavHostController) {
     BackHandler(enabled = page.isNotEmpty()) { page = "" }
     val pkg = st.appFilter
     LaunchedEffect(pkg, st.range, st.from, st.to, st.lastOk) { if (pkg != null) vm.loadApp(pkg, force = true) }
+    val first = dashFirstFrame(pkg, st.range, st.from, st.to, st.lastOk)
     val d = if (pkg == null) st.data else st.appData[pkg]
     val v = if (d == null) null else View(d, if (pkg == null) st.extra else st.appExtra[pkg], st.extraMissing, if (pkg == null) st.cp else st.appCp[pkg], pkg)
     val ctx = PaisaCtx(
         vm, st, nav, v,
         appName = pkg?.let { p -> st.data?.appName(p) ?: p },
-        loading = st.loading || (pkg != null && st.appLoading == pkg),
+        loading = st.loading || (pkg != null && (st.appLoading == pkg || first)),
         retry = { if (pkg != null) vm.loadApp(pkg, force = true) else vm.refresh() },
     )
     when (page) {
@@ -122,9 +135,12 @@ private fun PaisaMain(x: PaisaCtx, openApps: () -> Unit, go: (String) -> Unit) {
             DashRangeIcon(x.vm, st)
         })
         DashPeriodTabs(x.vm, st, Modifier.padding(start = 16.dp, end = 16.dp, top = 2.dp, bottom = 6.dp))
-        if (v != null && !wide) MoneyHero(v.d, st, moneyProfitLabel(st.range))
+        if (!wide) {
+            if (v != null) MoneyHero(v.d, st, moneyProfitLabel(st.range))
+            else if (x.loading) KSkelHero()   // pehli baar: hero ki jagah skeleton (brand band par bhi)
+        }
     }) {
-        if (v == null) DashNoData(st, x.loading, x.retry)
+        if (v == null) DashNoData(st, x.loading, { PaisaSkel(wide) }, x.retry)
         else if (wide) KTwoPane(
             left = {
                 MoneyHero(v.d, st, moneyProfitLabel(st.range))
@@ -140,6 +156,46 @@ private fun PaisaMain(x: PaisaCtx, openApps: () -> Unit, go: (String) -> Unit) {
             PaisaSources(v.d)
             PaisaLinks(v, x.nav, go)
         }
+    }
+}
+
+/** Paisa ka skeleton (data aane tak): 7 din bars, kamai / kharcha ke do hisse, "Aur" ki list. Fold: hero baayein. */
+@Composable
+private fun PaisaSkel(wide: Boolean) {
+    KSkeleton {
+        val week: @Composable ColumnScope.() -> Unit = {
+            KSkelSection()
+            KSkelBars()
+        }
+        val rest: @Composable ColumnScope.() -> Unit = {
+            KSkelSection(width = 160.dp)
+            PaisaSplitSkel()
+            KSkelSection(width = 150.dp)
+            PaisaSplitSkel()
+            KSkelSection(width = 60.dp)
+            KSkelRows(6, value = false)
+        }
+        if (wide) KTwoPane(left = { KSkelHero(); week() }, right = rest) else { week(); rest() }
+    }
+}
+
+/** PaisaSplit jaisa skeleton: do hisse (label, bada number, caption) + patti. */
+@Composable
+private fun PaisaSplitSkel() {
+    val c = Mfc.c
+    KCard {
+        Row(Modifier.fillMaxWidth()) {
+            repeat(2) { i ->
+                val m = if (i == 0) Modifier.weight(1f).padding(end = 6.dp)
+                else Modifier.weight(1f).drawBehind { drawLine(c.line, Offset(0f, 0f), Offset(0f, size.height), 1.dp.toPx()) }.padding(start = 18.dp)
+                Column(m) {
+                    KSkelLine(if (i == 0) 72.dp else 84.dp, 12.dp)
+                    KSkelLine(if (i == 0) 110.dp else 96.dp, 22.dp, Modifier.padding(top = 10.dp))
+                    KSkelLine(60.dp, 10.dp, Modifier.padding(top = 10.dp))
+                }
+            }
+        }
+        KSkelLine(1f, 10.dp, Modifier.padding(top = 14.dp))
     }
 }
 
@@ -291,7 +347,10 @@ private fun PaisaCampaigns(x: PaisaCtx, back: () -> Unit) {
     val v = x.v
     var status by rememberSaveable { mutableStateOf("") }
     var account by rememberSaveable { mutableStateOf("") }
-    var sort by rememberSaveable { mutableStateOf("cost") }
+    // sort: bar ka Sort button (default kharcha zyada -> kam, aaj jaisa); cost / conv pehle kam -> zyada
+    val sort = rememberKSort("cost")
+    val sortOpts = listOf("cost" to "Cost".t(), "cpi" to "Cost/conv".t(), "conv" to "Conv".t(), "ctr" to "CTR", "name" to "Name".t())
+    val sortKinds = mapOf("cpi" to KSortKind.NUM_LOW)
     val box = remember { FilterBox() }
     val upd = v?.d?.kpi?.gadsUpdated.orEmpty()
     val sub = listOfNotNull(x.appName, if (v == null) null else if (upd.isNotBlank()) "update".t() + " " + tOnly(upd) else "no script data".t())
@@ -299,18 +358,23 @@ private fun PaisaCampaigns(x: PaisaCtx, back: () -> Unit) {
     KScreen(top = {
         KDetailBar("Campaigns".t(), back, sub = sub, actions = {
             if (box.rows.isNotEmpty()) KBarIcon(KIcons.Filter, "Filters".t(), { box.open = true }, badge = box.active.size, badgeUrgent = false)
+            KSortButton(sort, sortOpts, sortKinds)
             KBarIcon(KIcons.Refresh, "Refresh".t(), { x.vm.refresh() }, spinning = st.loading)
         })
     }) {
-        if (v == null) DashNoData(st, x.loading, x.retry)
+        if (v == null) DashNoData(st, x.loading, {
+            KSkeleton {
+                KSkelSection(width = 190.dp)
+                KSkelRows(6, lead = false)
+            }
+        }, x.retry)
         else {
             val d = v.d
             CompositionLocalProvider(LocalFilterBox provides box) {
                 FilterChips("Campaigns".t(), listOf("" to "All".t(), "ENABLED" to "Enabled".t(), "PAUSED" to "Paused".t(), "spend" to "With spend".t(), "noconv" to "0 conv".t()), status) { status = it }
                 if (d.gadsAccounts.size > 1) FilterChips("Account".t(), listOf("" to "All".t()) + d.gadsAccounts.map { it.name to it.name }, account) { account = it }
-                FilterChips("Sort".t(), listOf("cost" to "Cost".t(), "cpi" to "Cost/conv".t(), "conv" to "Conv".t(), "ctr" to "CTR"), sort) { sort = it }
             }
-            FilterSummary(box)
+            FilterSummary(box, lead = kSortLead(sort, sortOpts, sortKinds))
             val cs = d.campaigns.filter { c ->
                 (account.isBlank() || c.account == account) && when (status) {
                     "ENABLED" -> c.status.equals("ENABLED", true)
@@ -320,11 +384,13 @@ private fun PaisaCampaigns(x: PaisaCtx, back: () -> Unit) {
                     else -> true
                 }
             }.let { list ->
-                when (sort) {
-                    "cpi" -> list.sortedBy { it.cpi ?: Double.MAX_VALUE }
-                    "conv" -> list.sortedByDescending { it.conversions }
-                    "ctr" -> list.sortedByDescending { it.ctr ?: 0.0 }
-                    else -> list.sortedByDescending { it.cost }
+                // bina cost/conv ya CTR wali campaigns dono taraf aakhir me
+                when (sort.key) {
+                    "cpi" -> list.kSorted(sort.desc) { it.cpi }
+                    "conv" -> list.kSorted(sort.desc) { it.conversions }
+                    "ctr" -> list.kSorted(sort.desc) { it.ctr }
+                    "name" -> list.kSorted(sort.desc) { it.campaign.lowercase() }
+                    else -> list.kSorted(sort.desc) { it.cost }
                 }
             }
             val left: @Composable ColumnScope.() -> Unit = {
@@ -335,7 +401,7 @@ private fun PaisaCampaigns(x: PaisaCtx, back: () -> Unit) {
                 else KCard(list = true) {
                     cs.forEachIndexed { i, c ->
                         if (i > 0) KListDivider()
-                        PaisaCampRow(c, d, sort) {
+                        PaisaCampRow(c, d, sort.key) {
                             // CampaignScreen sab-apps list ka index padhta hai
                             val idx = dashCampaignIdx(st, c)
                             if (idx >= 0) x.nav.navigate("campaign/$idx")
@@ -345,9 +411,9 @@ private fun PaisaCampaigns(x: PaisaCtx, back: () -> Unit) {
             }
             val right: @Composable ColumnScope.() -> Unit = {
                 PaisaAccounts(d, account)
-                KSection("ROAS cohort: by campaign".t())
+                KSection("ROAS cohort: by campaign".t(), trailing = cohortTrailing(v.extra))
                 val ex2 = v.extra
-                if (ex2 == null) ExtraMissingCard("Campaign-wise ROAS cohort".t())
+                if (ex2 == null) ExtraMissingCard("Campaign-wise ROAS cohort".t(), v.extraPending)
                 else KCard {
                     RoasCohortTable(ex2.campaignRoas, st.data ?: d, st.roasTarget) { cr ->
                         val idx = st.data?.campaigns?.indexOfFirst { it.campaign.equals(cr.campaign, true) } ?: -1
@@ -359,7 +425,7 @@ private fun PaisaCampaigns(x: PaisaCtx, back: () -> Unit) {
                     }
                 }
                 KSection("Change log".t())
-                if (ex2 == null) ExtraMissingCard("Change log".t()) else NotesSection(x.vm, ex2.notes, "", "")
+                if (ex2 == null) ExtraMissingCard("Change log".t(), v.extraPending) else NotesSection(x.vm, ex2.notes, "", "")
             }
             if (isWide()) KTwoPane(left = left, right = right) else { left(); right() }
         }
@@ -426,12 +492,24 @@ private fun PaisaMore(x: PaisaCtx, back: () -> Unit) {
     val st = x.st
     val v = x.v
     var pay by rememberSaveable { mutableIntStateOf(0) }   // 0 sab | 1 paid | 2 failed | 3 started
+    // do list, har ek ka apna Sort button section ke daayein (default = aaj ka order)
+    val paySort = rememberKSort("amt")
+    val daySort = rememberKSort("day")
     KScreen(top = {
         KDetailBar("Full report".t(), back, sub = x.appName ?: v?.let { periodText(it.d) }, actions = {
             KBarIcon(KIcons.Refresh, "Refresh".t(), { x.vm.refresh() }, spinning = st.loading)
         })
     }) {
-        if (v == null) DashNoData(st, x.loading, x.retry)
+        if (v == null) DashNoData(st, x.loading, {
+            KSkeleton {
+                KSkelSection(width = 170.dp)
+                KSkelCard(6, title = false)
+                KSkelSection(width = 160.dp)
+                KSkelBars(14)
+                KSkelSection(width = 100.dp)
+                KSkelRows(4, lead = false)
+            }
+        }, x.retry)
         else {
             val d = v.d
             val k = d.kpi
@@ -498,13 +576,13 @@ private fun PaisaMore(x: PaisaCtx, back: () -> Unit) {
             }
             val right: @Composable ColumnScope.() -> Unit = {
                 // ---- payments
-                KSection("Payments".t(), trailing = {
+                SortSection("Payments".t(), paySort, paySortOpts(), trailing = {
                     DashText(num(k.purchases) + " " + "paid".t() + " · " + num(k.purchaseFailed) + " " + "failed".t(), 13.sp, c.ink3)
                 })
                 KSegTabs(listOf("All".t(), "Paid".t(), "Failed".t(), "Started".t()), pay, { pay = it })
                 val evs = listOf("", "purchase_done", "purchase_failed", "purchase_start")
                 val ev = evs.getOrElse(pay) { "" }
-                val ps = d.purchases.filter { ev.isBlank() || it.ev == ev }.sortedByDescending { it.amt ?: 0.0 }
+                val ps = d.purchases.filter { ev.isBlank() || it.ev == ev }.paySorted(paySort.key, paySort.desc) { d.appName(it.pkg) + " · " + it.plan }
                 if (ps.isEmpty()) KCard { KEmpty("No payments".t(), KIcons.Card) }
                 else KCard(list = true) {
                     ps.forEachIndexed { i, p ->
@@ -521,11 +599,11 @@ private fun PaisaMore(x: PaisaCtx, back: () -> Unit) {
                     }
                 }
                 // ---- roz ka hisaab (cron)
-                KSection("Daily summary".t())
+                SortSection("Daily summary".t(), daySort, historySortOpts(), HISTORY_SORT_KINDS)
                 KCard {
                     Table(
                         listOf("Date".t(), "Installs".t(), "DAU", "Revenue".t(), "Pay".t(), "Spend".t(), "Profit".t(), "Uninst".t()),
-                        d.history.sortedByDescending { it.day }.map {
+                        d.history.historySorted(daySort.key, daySort.desc, r).map {
                             listOf(fmtDay(it.day), num(it.installs), num(it.dau), inr(it.revUsd * r), inr(it.purchaseInr), inr(it.gadsCostInr), inr(it.profit(r)), num(it.uninstalls))
                         },
                         empty = "No data yet".t(),

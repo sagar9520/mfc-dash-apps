@@ -80,6 +80,7 @@ import com.myfuturecode.mfcdash.data.GAccount
 import com.myfuturecode.mfcdash.data.GAlert
 import com.myfuturecode.mfcdash.data.GEvent
 import com.myfuturecode.mfcdash.data.GRun
+import com.myfuturecode.mfcdash.data.PageLoad
 import com.myfuturecode.mfcdash.data.checks
 import com.myfuturecode.mfcdash.ui.DashVm
 import com.myfuturecode.mfcdash.ui.GState
@@ -94,7 +95,9 @@ import com.myfuturecode.mfcdash.ui.kit.KIconTile
 import com.myfuturecode.mfcdash.ui.kit.KIcons
 import com.myfuturecode.mfcdash.ui.kit.KKind
 import com.myfuturecode.mfcdash.ui.kit.KListDivider
-import com.myfuturecode.mfcdash.ui.kit.KLoading
+import com.myfuturecode.mfcdash.ui.kit.KSkelRows
+import com.myfuturecode.mfcdash.ui.kit.KSkelSection
+import com.myfuturecode.mfcdash.ui.kit.KSkeleton
 import com.myfuturecode.mfcdash.ui.kit.KPill
 import com.myfuturecode.mfcdash.ui.kit.KPageTokens
 import com.myfuturecode.mfcdash.ui.kit.KStatus
@@ -266,7 +269,8 @@ fun shareText(ctx: Context, subject: String, text: String) {
     }
 }
 
-fun updatedText(g: GState) = if (g.lastOk == 0L) "Loading…".t() else "Updated".t() + " " + agoText(g.lastOk)
+/** "Updated 2 min pehle". Pehli baar (abhi kuch nahi aaya) khaali: neeche skeleton dikh raha hai. */
+fun updatedText(g: GState) = if (g.lastOk == 0L) "" else "Updated".t() + " " + agoText(g.lastOk)
 
 /** Back: stack khali ho to Home. */
 internal fun gBack(nav: NavHostController): () -> Unit = { if (!nav.popBackStack()) nav.navigate("home") }
@@ -317,7 +321,8 @@ internal fun gPaceLimits(g: GState): Pair<Double, Double> {
 internal fun gPoll(ms: Long, vararg keys: Any?, tick: () -> Unit) {
     val t by rememberUpdatedState(tick)
     val life = LocalLifecycleOwner.current.lifecycle
-    LaunchedEffect(life, *keys) { life.repeatOnLifecycle(Lifecycle.State.STARTED) { while (true) { t(); delay(ms) } } }
+    // har tick = dikh rahi screen ka sync: upar ki line, par 15 s me ek hi baar (PageLoad.startAuto; tez job poll chup)
+    LaunchedEffect(life, *keys) { life.repeatOnLifecycle(Lifecycle.State.STARTED) { while (true) { PageLoad.startAuto(); t(); delay(ms) } } }
 }
 
 /** Data kitna purana: "Data 4 ghante late". */
@@ -390,11 +395,23 @@ fun GProblem(g: GState, onRetry: () -> Unit) {
     }
 }
 
-/** View ka data ya loading / error. */
+/** View ka data, ya pehli baar skeleton (screen jaisa dhaancha), ya error. */
 @Composable
-fun GLoad(g: GState, j: JSONObject?, retry: () -> Unit, content: @Composable (JSONObject) -> Unit) {
-    if (j == null) { if (g.error != null) GProblem(g, retry) else KLoading(); return }
+fun GLoad(g: GState, j: JSONObject?, retry: () -> Unit, skeleton: @Composable () -> Unit = { GSkel() }, content: @Composable (JSONObject) -> Unit) {
+    if (j == null) { if (g.error != null) GProblem(g, retry) else skeleton(); return }
     content(j)
+}
+
+/** View abhi aa raha (koi error nahi): hero / list ki jagah skeleton dikhao. */
+fun gSkelOn(g: GState, j: JSONObject?) = j == null && g.error == null
+
+/** Aam skeleton: section heading + rows (account / alert / campaign list jaisa). */
+@Composable
+fun GSkel(rows: Int = 4, lead: Boolean = true) {
+    KSkeleton {
+        KSkelSection()
+        KSkelRows(rows, lead = lead)
+    }
 }
 
 /** Neeche chhoti line: monitor Google Ads me kuch nahi badalta. */

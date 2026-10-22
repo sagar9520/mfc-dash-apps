@@ -32,6 +32,8 @@ import com.myfuturecode.mfcdash.ui.kit.KSplit
 import com.myfuturecode.mfcdash.ui.kit.KTint
 import com.myfuturecode.mfcdash.ui.kit.KTwoPane
 import com.myfuturecode.mfcdash.ui.kit.isWide
+import com.myfuturecode.mfcdash.ui.kit.kSorted
+import com.myfuturecode.mfcdash.ui.kit.rememberKSort
 import com.myfuturecode.mfcdash.ui.theme.Mfc
 import com.myfuturecode.mfcdash.util.inr
 import com.myfuturecode.mfcdash.util.minutes
@@ -41,17 +43,18 @@ import com.myfuturecode.mfcdash.util.t
 import com.myfuturecode.mfcdash.util.tf
 import com.myfuturecode.mfcdash.util.usd
 
-/** Users: abhi active (hero), active / installs numbers, retention, sources, countries, versions, live countries. Filters: country sort, rows, source sort. */
+/** Users: abhi active (hero), active / installs numbers, retention, sources, countries, versions, live countries. Filters: rows, source sort; Sort button = countries. */
 @Composable
 fun UsersScreen(vm: DashVm, st: UiState, nav: NavHostController) {
-    var ccSort by rememberSaveable { mutableStateOf("rev") }     // rev | installs | users | imps
+    // bar ka Sort button = Countries list (default kamai zyada -> kam, aaj jaisa); Sources apne chips rakhta hai
+    val ccSort = rememberKSort("rev")
+    val ccOpts = listOf("rev" to "Revenue".t(), "installs" to "Installs".t(), "users" to "Users".t(), "imps" to "Impressions".t(), "name" to "Country".t())
     var rows by rememberSaveable { mutableStateOf("10") }        // 10 | all
     var srcSort by rememberSaveable { mutableStateOf("installs") } // installs | rev
-    TabScreen("Users".t(), vm, st, nav, back = true, filters = {
-        FilterChips("Countries".t(), listOf("rev" to "Revenue".t(), "installs" to "Installs".t(), "users" to "Users".t(), "imps" to "Impressions".t()), ccSort) { ccSort = it }
+    TabScreen("Users".t(), vm, st, nav, back = true, skeleton = { DashSkel(stats = 6) }, filters = {
         FilterChips("Rows".t(), listOf("10" to "Top 10".t(), "all" to "All".t()), rows) { rows = it }
         FilterChips("Sources".t(), listOf("installs" to "Installs".t(), "rev" to "Revenue".t()), srcSort) { srcSort = it }
-    }) { v ->
+    }, sort = ccSort, sortOptions = ccOpts) { v ->
         val d = v.d
         val c = Mfc.c
         val k = d.kpi
@@ -64,14 +67,15 @@ fun UsersScreen(vm: DashVm, st: UiState, nav: NavHostController) {
         val left: @Composable ColumnScope.() -> Unit = {
             // hero: abhi kitne log app me
             KHero(KTint.Green) {
-                KHeroHead("Active now".t(), trailing = { KLive(tf("last %s min", lm)) })
+                KHeroHead("Active now".t(), trailing = { if (!d.cached) KLive(tf("last %s min", lm)) })   // disk wala copy = Live nahi
                 KBigNum(num(d.liveTotal), size = 48.sp)
                 KSplit(listOf("30 min" to num(d.live30), "DAU" to num(k.dau), "Installs".t() to num(k.installs)))
             }
             TileGrid(
                 listOf(
-                    Triple("1 hour".t(), num(ax?.live1h), if (ax == null) "needs app.php".t() else "active".t()),
-                    Triple("24 hours".t(), num(ax?.live24h), if (ax == null) "needs app.php".t() else "active".t()),
+                    // app.php ka jawab abhi raste me (pending): "needs app.php" chetavni nahi, bas khaali
+                    Triple("1 hour".t(), num(ax?.live1h), if (ax != null) "active".t() else if (v.extraPending) null else "needs app.php".t()),
+                    Triple("24 hours".t(), num(ax?.live24h), if (ax != null) "active".t() else if (v.extraPending) null else "needs app.php".t()),
                     Triple("WAU", num(ax?.wau), "7 days".t()),
                     Triple("MAU", num(ax?.mau), if (ax?.dauMau == null) "30 days".t() else "DAU/MAU " + pct(ax.dauMau, 0)),
                     Triple("Installed".t(), num(ax?.installedTotal), if (ax == null) null else tf("%s uninstalled (total)", num(ax.uninstalledTotal))),
@@ -83,8 +87,8 @@ fun UsersScreen(vm: DashVm, st: UiState, nav: NavHostController) {
                 ),
                 cols = 2,
             )
-            KSection("Retention".t(), trailing = { DashText("D1 / D3 / D7 / D14", 13.sp, c.ink3) })
-            if (ex2 == null) ExtraMissingCard("Retention".t()) else KCard { RetentionTable(ex2) }
+            KSection("Retention".t(), trailing = cohortTrailing(ex2, "D1 / D3 / D7 / D14"))
+            if (ex2 == null) ExtraMissingCard("Retention".t(), v.extraPending) else KCard { RetentionTable(ex2) }
             if (ex2 != null && ex2.retentionDays.size > 1) {
                 KSection("Retention by day".t())
                 KCard { RetentionDaysTable(ex2) }
@@ -121,11 +125,12 @@ fun UsersScreen(vm: DashVm, st: UiState, nav: NavHostController) {
                 DashText(tf("%s of %s", num(minOf(limit, d.byCountry.size).toDouble()), num(d.byCountry.size.toDouble())), 13.sp, c.ink3)
             })
             KCard {
-                val cc = when (ccSort) {
-                    "installs" -> d.byCountry.sortedByDescending { it.installs }
-                    "users" -> d.byCountry.sortedByDescending { it.users }
-                    "imps" -> d.byCountry.sortedByDescending { it.imps }
-                    else -> d.byCountry.sortedByDescending { it.rev }
+                val cc = when (ccSort.key) {
+                    "installs" -> d.byCountry.kSorted(ccSort.desc) { it.installs }
+                    "users" -> d.byCountry.kSorted(ccSort.desc) { it.users }
+                    "imps" -> d.byCountry.kSorted(ccSort.desc) { it.imps }
+                    "name" -> d.byCountry.kSorted(ccSort.desc) { it.cc.lowercase() }
+                    else -> d.byCountry.kSorted(ccSort.desc) { it.rev }
                 }
                 Table(
                     listOf("Country".t(), "Installs".t(), "Users".t(), "Impr".t(), "Revenue".t(), "eCPM"),

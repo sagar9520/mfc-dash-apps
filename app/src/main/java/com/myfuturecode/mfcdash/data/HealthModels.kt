@@ -10,13 +10,29 @@ data class HApp(
     val autofixEffective: Boolean, val email: Boolean, val repo: String, val repoVerified: Boolean, val signingVerified: Boolean, val verifyNote: String,
     val crashRate: Double?, val anrRate: Double?, val vitalsDay: String?, val lastScanAt: String?, val discoveredAt: String, val inDashboard: Boolean,
     val openIssues: Int, val topSeverity: String?, val consoleName: String,
+    // version-wise vitals (usi Google din ka) + MFC tracker ka sabse naya live version (naam + code)
+    val vitalsVer: HVitalsVer? = null, val trackerVer: String? = null, val trackerVc: Long? = null,
 ) {
     companion object {
         fun of(j: JSONObject) = HApp(
             j.s("pkg"), j.s("name"), j.s("console_id"), j.s("icon"), j.s("status"), j.b("monitoring"), j.b("autofix"), j.b("autofix_effective"), j.b("email"),
             j.s("repo"), j.b("repo_verified"), j.b("signing_verified"), j.s("verify_note"), j.dn("crash_rate"), j.dn("anr_rate"), j.sn("vitals_day"),
             j.sn("last_scan_at"), j.s("discovered_at"), j.b("in_dashboard"), j.d("open_issues").toInt(), j.sn("top_severity"), j.s("console_name"),
+            HVitalsVer.of(j.optJSONObject("vitals_ver")), j.sn("tracker_ver"), j.dn("tracker_vc")?.toLong(),
         )
+    }
+}
+
+/** Ek versionCode ka Play vitals: crash / anr fraction (0.0042 = 0.42%), dono null ho sakte hain. */
+data class HVerRow(val vc: String, val crash: Double?, val anr: Double?, val users: Long?) {
+    companion object { fun of(j: JSONObject) = HVerRow(j.s("vc"), j.dn("crash"), j.dn("anr"), j.dn("users")?.toLong()) }
+}
+
+/** vitals_ver: Google ka din + top 5 versions (versionCode ulte kram me, naya pehle). Rows khali = null. */
+data class HVitalsVer(val day: String, val rows: List<HVerRow>) {
+    companion object {
+        fun of(j: JSONObject?): HVitalsVer? =
+            j?.let { HVitalsVer(it.s("day"), it.arr("rows").mapObj(HVerRow::of).filter { r -> r.vc.isNotBlank() }) }?.takeIf { it.rows.isNotEmpty() }
     }
 }
 
@@ -200,6 +216,30 @@ data class HAppDetail(
             return HAppDetail(HApp.of(j.obj("app")), j.d("days").toInt(), t.l("installs"), t.l("uninstalls"), t.l("crashes"), t.d("rev_usd"), t.l("dau_avg"),
                 t.dn("crash_per_1k_sessions"), t.dn("uninstall_rate"), j.arr("series").mapObj(HDay::of), j.obj("issue_counts"), j.arr("issues").mapObj(HIssue::of),
                 j.arr("runs").mapObj(HRun::of), j.arr("builds").mapObj(HBuild::of), j.arr("versions").mapObj { it.s("ver") to it.l("users") }, j.d("inr_per_usd", 95.0))
+        }
+    }
+}
+
+/** api/health.php?action=playmail_status: Play Console mailbox ka haal. last_check UTC. Purana server = configured false. */
+data class HPlayMail(
+    val configured: Boolean, val lastCheck: String?, val lastOk: String?, val lastError: String, val lastCount: Int, val lastMails: Int,
+    val unseenLeft: Int, val mailbox: String,
+) {
+    companion object {
+        fun of(j: JSONObject) = HPlayMail(
+            j.b("configured"), j.sn("last_check"), j.sn("last_ok"), j.s("last_error"), j.d("last_count").toInt(), j.d("last_mails").toInt(),
+            j.d("unseen_left").toInt(), j.s("mailbox"),
+        )
+    }
+}
+
+/** playmail_test ka jawab: kitni mail padhi, kitne naye alert; status = naya haal (na aaye to null). */
+data class HPlayMailTest(val mails: Int, val alerts: Int, val duplicates: Int, val skipped: Int, val ms: Long, val status: HPlayMail?) {
+    companion object {
+        fun of(j: JSONObject): HPlayMailTest {
+            val r = j.obj("result")
+            return HPlayMailTest(r.d("mails").toInt(), r.d("alerts").toInt(), r.d("duplicates").toInt(), r.d("skipped").toInt(), r.l("ms"),
+                j.optJSONObject("status")?.let(HPlayMail::of))
         }
     }
 }

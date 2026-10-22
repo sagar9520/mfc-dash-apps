@@ -25,10 +25,16 @@ class StudioVm(app: App) : ViewModel() {
 
     fun load(view: String, p: Map<String, String> = emptyMap()) {
         val k = gkey(view, p)
+        val q = p.filterValues { it.isNotBlank() }
+        // pehli baar (app khuli): disk wala pichhla jawab turant (abhi sirf overview rakha jaata hai), phir network
+        if (k !in _s.value.views) viewModelScope.launch {
+            val c = runCatching { api.sGetCached(view, q) }.getOrNull() ?: return@launch
+            _s.update { it.withCached(k, c) }
+        }
         viewModelScope.launch {
             try {
-                val j = api.sGet(view, p.filterValues { it.isNotBlank() })
-                _s.update { it.copy(views = it.views + (k to j), error = null, missing = false, lastOk = System.currentTimeMillis()) }
+                val j = api.sGet(view, q)
+                _s.update { it.copy(views = it.views + (k to j), cached = it.cached - k, error = null, missing = false, lastOk = System.currentTimeMillis()) }
             } catch (e: Exception) {
                 val m = e.message ?: "error"
                 _s.update { it.copy(error = m, missing = m.contains("404")) }

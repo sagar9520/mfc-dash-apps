@@ -1,8 +1,10 @@
 package com.myfuturecode.mfcdash.widget
 
 import androidx.compose.ui.graphics.Color
+import com.myfuturecode.mfcdash.data.TopZone
+import com.myfuturecode.mfcdash.data.budgetZone
+import com.myfuturecode.mfcdash.data.roasZone
 import com.myfuturecode.mfcdash.ui.kit.KKind
-import com.myfuturecode.mfcdash.ui.kit.kRoasKind
 import com.myfuturecode.mfcdash.ui.theme.ThemeStyle
 import com.myfuturecode.mfcdash.ui.theme.mfcColors
 import com.myfuturecode.mfcdash.util.agoText
@@ -15,26 +17,50 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.abs
+import kotlin.math.floor
+import kotlin.math.max
+import kotlin.math.min
 
-// Widget ka roop: data + options se "cells" (label, number, pill). Glance (home screen) aur
-// Compose (Widgets screen ka preview) dono isi se bante hain, isliye dono ek jaise dikhte hain.
+// Widget ka roop: data + options se har widget ka "view" (likhai, rang ka zone, bar ki jagah) aur jagah ka hisaab (plan).
+// Glance (home screen, WidgetUi.kt) aur Compose (Widgets screen ka preview, WidgetPreview.kt) dono isi se bante hain,
+// isliye dono ek jaise dikhte hain. Mockup: scratchpad ui_w2/w.html (px = dp, 172dp ka ek cell).
 
 internal const val W_DASH = "—"
 
 internal enum class WTone { INK, SOFT, GOOD, BAD, MUTED }
 
+/** Pill: shabd + haal (icon aur rang KKind se). */
 internal class WPillM(val text: String, val kind: KKind)
 
-/** Ek khana: label upar, number (value) neeche; sub = number ke baad chhota text; of = "/25". */
-internal class WCell(
-    val label: String,
-    val value: String,
-    val tone: WTone = WTone.INK,
-    val sub: String? = null,
-    val pill: WPillM? = null,
-    val strong: Boolean = false,
-    val of: String? = null,
+// ---------------------------------------------------------------- har widget ka view
+
+/** Paisa ki neeche wali line ka ek khana (Live par hara dot). */
+internal class WStat(val label: String, val value: String, val live: Boolean = false)
+
+/** Paisa: bada munafa, ROAS (% + Loss/Profit pill), meter par dot (0..1 = 0..200%, null = kharcha nahi), 3 khane. */
+internal class WPaisaV(
+    val big: String, val bigTone: WTone, val roas: String, val zone: TopZone, val pill: WPillM?, val pos: Float?,
+    val stats: List<WStat>,
 )
+
+/** Ads ki ek line: kharcha (apni currency) + account; budget bar (fill 0..1; null = budget pata nahi, sirf track). */
+internal class WAcctV(val amount: String, val name: String, val fill: Float?, val pct: String, val zone: TopZone)
+
+/** Live ki ek line: 6 min, app, 30 min; ROAS line par jagah (0..1 = 0..200%; null = kharcha nahi, sirf track). */
+internal class WAppV(val n6: String, val name: String, val n30: String, val pos: Float?, val roas: String, val zone: TopZone)
+
+/** Ads + Live: 3-3 line (null = "—" wali line). set = false: Google Ads set nahi. */
+internal class WTopV(val set: Boolean, val accs: List<WAcctV?>, val apps: List<WAppV?>)
+
+/** Health ki ek line: badge (khule issue) + app. ok = "Sab theek" wali hari line. */
+internal class WIssueV(val count: String, val name: String, val ok: Boolean = false)
+
+internal class WHealthV(val total: String, val bad: String, val fine: String, val rows: List<WIssueV>)
+
+internal class WAlertV(val kind: KKind, val name: String, val label: String)
+
+/** Alerts: header ki "3 naye" pill (0 = null) + 3 line. */
+internal class WAlertsV(val unread: String?, val rows: List<WAlertV>)
 
 internal class WView(
     val kind: WKind,
@@ -42,8 +68,11 @@ internal class WView(
     val title: String,
     val time: String,
     val stale: Boolean,
-    val cells: List<WCell>,
     val login: Boolean,
+    val paisa: WPaisaV? = null,
+    val top: WTopV? = null,
+    val health: WHealthV? = null,
+    val alerts: WAlertsV? = null,
 )
 
 /** Widget ka theme: "app" = app ka roop (Settings), warna chuna hua. */
@@ -55,27 +84,31 @@ internal fun wStyle(theme: String, appTheme: String): ThemeStyle = when (theme) 
 }
 
 internal fun wView(
-    kind: WKind, o: WOpts, snap: JSONObject?, loggedIn: Boolean, appTheme: String, target: Double,
+    kind: WKind, o: WOpts, snap: JSONObject?, loggedIn: Boolean, appTheme: String,
     busy: Boolean = false, failed: Boolean = false, now: Long = System.currentTimeMillis(),
 ): WView {
     val style = wStyle(o.theme, appTheme)
-    if (!loggedIn) return WView(kind, style, kind.title(), "", false, emptyList(), login = true)
+    val title = when (kind) {
+        WKind.PAISA -> wProfitLabel(o.range)
+        WKind.ADS -> "Ads + Live".t()
+        WKind.HEALTH -> "App Health".t()
+        WKind.ALERTS -> "Alerts".t()
+    }
+    if (!loggedIn) return WView(kind, style, title, "", false, login = true)
     val at = snap?.optLong("at", 0L) ?: 0L
     val stale = at > 0L && (failed || now - at > (o.every + 10) * 60_000L)
     val time = when {
         busy -> "…"
         at <= 0L -> W_DASH
         stale -> agoText(at)
-        // Google Ads = "9:34 check" (mockup), baaki "9:41 update"
-        kind == WKind.ADS -> tf("%s check", wClock(at))
-        else -> tf("%s update", wClock(at))
+        else -> wClock(at)
     }
-    val cells = when (kind) {
-        WKind.PAISA -> paisaCells(o, PaisaSnap.of(snap), target)
-        WKind.ADS -> adsCells(o, AdsSnap.of(snap))
-        WKind.HEALTH -> healthCells(o, HealthSnap.of(snap))
+    return when (kind) {
+        WKind.PAISA -> WView(kind, style, title, time, stale, false, paisa = paisaV(PaisaSnap.of(snap)))
+        WKind.ADS -> WView(kind, style, title, time, stale, false, top = topV(AdsSnap.of(snap)))
+        WKind.HEALTH -> WView(kind, style, title, time, stale, false, health = healthV(HealthSnap.of(snap)))
+        WKind.ALERTS -> WView(kind, style, title, time, stale, false, alerts = alertsV(AlertsSnap.of(snap)))
     }
-    return WView(kind, style, kind.title(), time, stale, cells, login = false)
 }
 
 /** "9:41". Taaza data kuch ghante se purana nahi hota (purana = "5 ghante pehle"), isliye tareekh nahi. */
@@ -91,195 +124,157 @@ internal fun wSignedInr(v: Double?): String = when {
 
 private fun wInr(v: Double?): String = if (v == null || !v.isFinite()) W_DASH else inr(v)
 
+private fun wNum(v: Double?): String = if (v == null || !v.isFinite()) W_DASH else num(v, 0)
+
 /** ROAS ratio -> "142%". */
 private fun wPct(v: Double?): String = if (v == null || !v.isFinite()) W_DASH else num(v * 100, 0) + "%"
 
-/** "+12%" / "−12%" / "0%". */
-private fun wSignedPct(v: Double?): String = when {
-    v == null || !v.isFinite() -> W_DASH
-    v > 0 -> "+" + num(v, 0) + "%"
-    v < 0 -> "−" + num(-v, 0) + "%"
-    else -> "0%"
-}
+/** ROAS ratio -> meter par jagah (0..200% = 0..1). */
+private fun wRoasPos(r: Double?): Float? = if (r == null || !r.isFinite()) null else (r / 2.0).coerceIn(0.0, 1.0).toFloat()
 
-private fun tone(v: Double?): WTone = when {
-    v == null || !v.isFinite() -> WTone.INK
-    v > 0 -> WTone.GOOD
-    v < 0 -> WTone.BAD
-    else -> WTone.INK
-}
-
-// ---------------------------------------------------------------- Paisa
-
-private fun paisaCells(o: WOpts, s: PaisaSnap?, target: Double): List<WCell> = o.items.map { item ->
-    when (item) {
-        "profit" -> WCell(wProfitLabel(o.range), wSignedInr(s?.profit), tone(s?.profit))
-        "roas" -> {
-            val r = s?.roas
-            val k = kRoasKind(r, target)
-            val pill = when (k) {
-                KKind.OK -> WPillM("Great".t(), k)
-                KKind.WARN -> WPillM("A bit low".t(), k)
-                KKind.BAD -> WPillM("Loss".t(), k)
-                else -> null
-            }
-            WCell("ROAS", if (s == null) W_DASH else if (r == null) "No spend".t() else wPct(r), if (r == null) WTone.MUTED else WTone.INK, pill = pill)
-        }
-        "earned" -> WCell("Earnings".t(), wInr(s?.earned))
-        "spend" -> WCell("All ads spend".t(), wInr(s?.spend))
-        "pl" -> WCell("Profit / loss apps".t(), if (s == null) W_DASH else "${s.wins} / ${s.losses}")
-        "top" -> {
-            val n = s?.topName
-            if (s != null && n == null) WCell("Top profit app".t(), "None".t(), WTone.MUTED)
-            else WCell(n?.let { tf("Top: %s", it) } ?: "Top profit app".t(), wSignedInr(s?.topProfit), tone(s?.topProfit))
-        }
-        "loss" -> {
-            val n = s?.lossName
-            if (s != null && n == null) WCell("Top loss app".t(), "None".t(), WTone.MUTED)
-            else WCell(n?.let { tf("Loss: %s", it) } ?: "Top loss app".t(), wSignedInr(s?.lossProfit), tone(s?.lossProfit))
-        }
-        "count" -> WCell(if (s == null) "Apps".t() else tf("Apps · %s with ads", s.withAds), if (s == null) W_DASH else num(s.apps.toDouble()))
-        else -> WCell(item, W_DASH)
-    }
-}
-
-// ---------------------------------------------------------------- Google Ads
-
-/** Account ki currency ka nishaan. */
+/** Account ki currency: ₹ INR, $ USD, baaki code ("EUR 120"). */
 private fun wSym(cur: String): String = when (cur) {
     "INR" -> "₹"
     "USD" -> "\$"
-    "EUR" -> "€"
-    "GBP" -> "£"
     "" -> ""
     else -> "$cur "
 }
 
 private fun wCash(v: Double, cur: String): String = (if (v < 0) "−" else "") + wSym(cur) + num(abs(v), 0)
 
-private fun adsCells(o: WOpts, s: AdsSnap?): List<WCell> = o.items.map { item ->
-    when (item) {
-        "spend" -> {
-            val main = s?.spend?.firstOrNull()
-            val rest = s?.spend?.drop(1).orEmpty().filter { it.second != 0.0 }
-            WCell(
-                "Google Ads spend".t(), if (main == null) W_DASH else wCash(main.second, main.first),
-                sub = if (rest.isEmpty()) null else tf("and %s", rest.joinToString(" + ") { wCash(it.second, it.first) }),
-                strong = true,
-            )
-        }
-        "watch" -> {
-            if (s == null) WCell("Accounts".t(), W_DASH)
-            else if (s.accounts == 0) WCell("Accounts".t(), "No accounts".t(), WTone.MUTED)
-            else if (s.watch.isEmpty()) WCell(tf("%s accounts", s.accounts), "", pill = WPillM("All fine".t(), KKind.OK))
-            else {
-                val n = s.watch.size
-                val k = if (s.bad > 0) KKind.BAD else KKind.WARN
-                WCell(s.watch.joinToString(", "), "", pill = WPillM(if (s.bad > 0) tf("%s act now", n) else tf("%s to watch", n), k))
-            }
-        }
-        "pace" -> {
-            val p = s?.pace
-            val pill = when {
-                p == null -> null
-                p < -40.0 -> WPillM("Below normal".t(), KKind.WARN)
-                p > 60.0 -> WPillM("Above normal".t(), KKind.WARN)
-                else -> WPillM("Normal".t(), KKind.OK)
-            }
-            WCell("Spend pace".t(), wSignedPct(p), pill = pill)
-        }
-        "total" -> {
-            val t = s?.totalInr
-            val mixed = (s?.spend?.size ?: 0) > 1 || s?.spend?.firstOrNull()?.first.let { it != null && it != "INR" }
-            WCell("Total, \$ included".t(), if (t == null) W_DASH else (if (mixed) "≈ " else "") + wInr(t))
-        }
-        "accounts" -> WCell(
-            "Accounts".t(), if (s == null) W_DASH else num(s.accounts.toDouble()),
-            pill = if (s == null || s.accounts == 0) null else WPillM(tf("%s fine", s.fine), if (s.fine == s.accounts) KKind.OK else KKind.WARN),
-        )
-        else -> WCell(item, W_DASH)
+private fun paisaV(s: PaisaSnap?): WPaisaV {
+    val p = s?.profit
+    val r = s?.roas
+    val z = if (s == null) TopZone.NONE else roasZone(r)
+    // ROAS < 100% = loss (amber zone bhi loss hi hai, bas kam)
+    val pill = when (z) {
+        TopZone.RED -> WPillM("Loss".t(), KKind.BAD)
+        TopZone.AMBER -> WPillM("Loss".t(), KKind.WARN)
+        TopZone.GREEN -> WPillM("Profit".t(), KKind.OK)
+        TopZone.NONE -> null
     }
+    val tone = when {
+        p == null || !p.isFinite() -> WTone.INK
+        p > 0 -> WTone.GOOD
+        p < 0 -> WTone.BAD
+        else -> WTone.INK
+    }
+    return WPaisaV(
+        wSignedInr(p), tone, wPct(r), z, pill, wRoasPos(r),
+        listOf(
+            WStat("Earnings".t(), wInr(s?.earned)),
+            WStat("Ads spend".t(), wInr(s?.spend)),
+            WStat("Live".t(), wNum(s?.live), live = true),
+        ),
+    )
 }
 
-// ---------------------------------------------------------------- App Health
+private fun <T> pad3(l: List<T>): List<T?> = List(3) { l.getOrNull(it) }
 
-private fun healthCells(o: WOpts, s: HealthSnap?): List<WCell> {
-    val hero = WCell(
-        "fine".t(), if (s == null) W_DASH else num(s.fine.toDouble()),
-        of = if (s == null) null else "/" + num(s.total.toDouble()),
-    )
-    return listOf(hero) + o.items.map { item ->
-        when (item) {
-            "p0" -> when {
-                s == null -> WCell("", W_DASH)
-                s.p0 > 0 -> WCell("", "", pill = WPillM(tf("%s P0 act now", s.p0), KKind.BAD))
-                else -> WCell("", "", pill = WPillM("No P0".t(), KKind.OK))
-            }
-            "worst" -> {
-                val w = s?.worst.orEmpty()
-                when {
-                    s == null -> WCell("", W_DASH, WTone.SOFT)
-                    w.isEmpty() -> WCell("", "All fine".t(), WTone.SOFT)
-                    // naam lamba ho to naam kategi, "+1 aur" nahi (wJoinFit)
-                    else -> WCell("", w[0], WTone.SOFT, sub = if (w.size > 1) tf("+%s more", w.size - 1) else null)
-                }
-            }
-            "fixes" -> when {
-                s == null -> WCell("", W_DASH)
-                s.fixes > 0 -> WCell("", "", pill = WPillM(tf("%s AI fixes ready", s.fixes), KKind.ASK))
-                else -> WCell("", tf("%s AI fixes ready", 0), WTone.MUTED)
-            }
-            "issues" -> WCell("", if (s == null) W_DASH else tf("%s issues open", s.issues), WTone.SOFT)
-            else -> WCell("", W_DASH)
-        }
+private fun topV(s: AdsSnap?): WTopV {
+    if (s == null) return WTopV(true, pad3(emptyList()), pad3(emptyList()))
+    val accs = s.accs.map { a ->
+        val pct = a.budgetPct
+        WAcctV(
+            wCash(a.spend, a.currency), a.name, pct?.let { (it / 100.0).coerceIn(0.0, 1.0).toFloat() },
+            pct?.let { num(it, 0) + "%" } ?: "", budgetZone(pct),
+        )
     }
+    val apps = s.apps.map { a ->
+        WAppV(wNum(a.live6), a.name, wNum(a.live30), wRoasPos(a.roas), if (a.roas == null) "" else wPct(a.roas), roasZone(a.roas))
+    }
+    return WTopV(s.set, pad3(accs), pad3(apps))
+}
+
+private fun healthV(s: HealthSnap?): WHealthV {
+    if (s == null) return WHealthV(W_DASH, W_DASH, W_DASH, List(3) { WIssueV(W_DASH, W_DASH) })
+    val rows = if (s.top.isEmpty()) listOf(WIssueV("0", "All fine".t(), ok = true))
+    else s.top.map { WIssueV(num(it.open.toDouble()), it.name) }
+    return WHealthV(num(s.total.toDouble()), num(s.bad.toDouble()), num(s.fine.toDouble()), rows)
+}
+
+private fun alertsV(s: AlertsSnap?): WAlertsV {
+    if (s == null || s.missing) return WAlertsV(null, List(3) { WAlertV(KKind.NEUTRAL, W_DASH, "") })
+    val unread = if (s.unread > 0) tf("%s new", num(s.unread.toDouble())) else null
+    if (s.items.isEmpty()) return WAlertsV(unread, listOf(WAlertV(KKind.OK, "No alerts".t(), "All fine".t())))
+    return WAlertsV(unread, s.items.map { a -> WAlertV(a.kind, a.nameL(), a.arg?.let { tf(a.label, it) } ?: a.label.t()) })
 }
 
 // ---------------------------------------------------------------- rang (Glance + preview dono)
 
-/** Widget ke rang. Card / band / text kit ke tokens se; band ka halka rang har widget ka apna. */
+/** Widget ke rang = mockup ke .t1 (Ujla) / .t2 (Brand gradient) / .t3 (Dark) tokens. */
 internal class WPal(
-    val brand: Boolean,
-    val bg: Color, val band: Color,
-    val ink: Color, val ink2: Color, val ink3: Color,
-    val good: Color, val bad: Color, val warn: Color,
+    val style: ThemeStyle,
+    val bg: Color,
+    val ink: Color, val ink2: Color, val ink3: Color, val line: Color, val track: Color,
+    val red: Color, val green: Color, val amber: Color, val link: Color,
+    val zr: Color, val za: Color, val zg: Color, val ring: Color, val live: Color,
     private val pills: Map<KKind, Pair<Color, Color>>,
 ) {
+    val brand: Boolean get() = style == ThemeStyle.BRAND
+    val dark: Boolean get() = style == ThemeStyle.DARK
+
     /** Pill ka (bg, text) rang. */
     fun pill(k: KKind): Pair<Color, Color> = pills[k] ?: (Color.Transparent to ink2)
 
     fun tone(t: WTone): Color = when (t) {
         WTone.INK -> ink
         WTone.SOFT -> ink2
-        WTone.GOOD -> good
-        WTone.BAD -> bad
+        WTone.GOOD -> green
+        WTone.BAD -> red
         WTone.MUTED -> ink3
+    }
+
+    /** Bar / meter ka rang. */
+    fun zone(z: TopZone): Color = when (z) {
+        TopZone.RED -> zr
+        TopZone.AMBER -> za
+        TopZone.GREEN -> zg
+        TopZone.NONE -> track
+    }
+
+    /** Number ka rang (ROAS %). */
+    fun zoneText(z: TopZone): Color = when (z) {
+        TopZone.RED -> red
+        TopZone.AMBER -> amber
+        TopZone.GREEN -> green
+        TopZone.NONE -> ink3
+    }
+
+    /** Bar par chhoti pill (bg, text): amber / hare par gehra text, laal par safed. */
+    fun barPill(z: TopZone): Pair<Color, Color> = zone(z) to when (z) {
+        TopZone.RED -> Color.White
+        TopZone.AMBER -> Color(0xFF2B1D00)
+        else -> Color(0xFF062012)
+    }
+
+    /** Paisa meter ka dot (brand par zone ka rang, baaki number wala). */
+    fun dot(z: TopZone): Color = if (brand) zone(z) else zoneText(z)
+
+    /** Alerts ki line ka nishaan. */
+    fun mark(k: KKind): Color = when (k) {
+        KKind.BAD -> red
+        KKind.WARN -> amber
+        KKind.OK -> green
+        else -> link
     }
 }
 
-internal fun wPal(style: ThemeStyle, kind: WKind): WPal {
+internal fun wPal(style: ThemeStyle): WPal {
     val brand = style == ThemeStyle.BRAND
+    val dark = style == ThemeStyle.DARK
     val c = mfcColors(style, top = brand)
-    val band = when (style) {
-        ThemeStyle.BRAND -> Color(0x24FFFFFF)
-        ThemeStyle.DARK -> when (kind) {
-            WKind.PAISA -> Color(0xFF3A311C)
-            WKind.ADS -> Color(0xFF1D2B4A)
-            WKind.HEALTH -> Color(0xFF3D1F36)
-        }
-        ThemeStyle.LIGHT -> when (kind) {
-            WKind.PAISA -> Color(0xFFFFF1CC)
-            WKind.ADS -> Color(0xFFE1EBFF)
-            WKind.HEALTH -> Color(0xFFFBE2F2)
-        }
-    }
     return WPal(
-        brand = brand,
-        bg = if (brand) Color(0xFF4A1FC4) else c.card,
-        band = band,
-        ink = c.ink, ink2 = c.ink2, ink3 = c.ink3,
-        // brand gradient par number safed (mockup); haal pill batati hai
-        good = if (brand) c.ink else c.green, bad = if (brand) c.ink else c.red, warn = c.amber,
+        style = style,
+        bg = when (style) {
+            ThemeStyle.BRAND -> Color(0xFF4A1FC4)
+            ThemeStyle.DARK -> Color(0xFF16131F)
+            ThemeStyle.LIGHT -> Color.White
+        },
+        ink = c.ink, ink2 = c.ink2, ink3 = if (brand) Color.White.copy(alpha = .78f) else c.ink3,
+        line = c.line, track = c.zTrack,
+        red = c.red, green = c.green, amber = c.amber, link = c.brand,
+        zr = c.zRed, za = c.zAmber, zg = c.zGreen, ring = if (dark) Color(0xFF16131F) else c.dotRing, live = c.live,
         pills = mapOf(
             KKind.OK to (c.pOkBg to c.pOkFg),
             KKind.WARN to (c.pWarnBg to c.pWarnFg),
@@ -290,141 +285,332 @@ internal fun wPal(style: ThemeStyle, kind: WKind): WPal {
     )
 }
 
+/**
+ * Ujla theme me card ka upar wala halka rang (neeche safed tak gradient): Paisa munafa = hara, loss = laal;
+ * Ads + Live ret; Health gulabi; Alerts lavender. Dark / Brand = null (saada / brand gradient).
+ */
+internal enum class WTint(val top: Color, val stop: Float) {
+    RED(Color(0xFFFDECEA), .46f), GREEN(Color(0xFFE7F5EC), .46f), SAND(Color(0xFFFFF0D6), .5f),
+    ROSE(Color(0xFFFCE9E6), .5f), LAV(Color(0xFFEEE9FD), .5f),
+}
+
+internal fun wTint(v: WView): WTint? {
+    if (v.style != ThemeStyle.LIGHT) return null
+    return when (v.kind) {
+        WKind.PAISA -> if (v.paisa?.bigTone == WTone.BAD) WTint.RED else WTint.GREEN
+        WKind.ADS -> WTint.SAND
+        WKind.HEALTH -> WTint.ROSE
+        WKind.ALERTS -> WTint.LAV
+    }
+}
+
 // ---------------------------------------------------------------- naap (text kitni jagah lega)
 
-/** Text ki andaazan chaudai (dp): Roboto ka ek akshar ~0.56 em; kuch phones ke font chaude, isliye 0.6. */
-internal fun wTextW(s: String, sp: Float, scale: Float): Float = s.length * sp * 0.6f * scale
+/** Ek line ki oonchai (dp): Android TextView font padding samet ~1.32 em. */
+internal fun wLine(sp: Float, scale: Float): Float = sp * 1.32f * scale
+
+/** Text ki andaazan chaudai (dp), Roboto ke akshar ke hisaab se (patle i / l, chaude m / w). */
+internal fun wTextW(s: String, sp: Float, scale: Float, bold: Boolean = false): Float {
+    var em = 0f
+    for (ch in s) em += when {
+        ch == ' ' -> .26f
+        ch in "il.,:;'|!Ijí" -> .27f
+        ch in "frt()[]›-" -> .36f
+        ch in "mwMW%" -> .84f
+        ch == '…' -> .8f
+        ch == '—' -> 1f
+        ch.isDigit() -> .57f
+        ch.isUpperCase() -> .66f
+        ch.isLowerCase() -> .54f
+        else -> .62f
+    }
+    return em * sp * scale * (if (bold) 1.06f else 1f)
+}
+
+/** Jagah me na aaye to "…" se chhota (widget me ellipsis bharose ka nahi). */
+internal fun wFit(s: String, room: Float, sp: Float, scale: Float, bold: Boolean = false): String {
+    if (wTextW(s, sp, scale, bold) <= room) return s
+    var n = s.length - 1
+    while (n > 1 && wTextW(s.take(n).trimEnd() + "…", sp, scale, bold) > room) n--
+    return if (n <= 1) s.take(1) + "…" else s.take(n).trimEnd() + "…"
+}
 
 /** Bada (bold) number kitna bada (sp) ho ki jagah me aa jaye (kabhi "..." nahi). */
 internal fun wFitSp(s: String, room: Float, max: Float, min: Float, scale: Float): Float {
-    if (s.isEmpty() || room <= 0f) return max
-    val fit = room / (s.length * 0.64f * scale)
-    return fit.coerceIn(min, max)
+    val w1 = wTextW(s, 1f, scale, bold = true)
+    if (s.isEmpty() || w1 <= 0f || room <= 0f) return if (room <= 0f) min else max
+    return floor(room / w1).coerceIn(min, max)
 }
-
-/** "AI Pedometer +1 aur": jagah kam ho to naam chhota, "+1 aur" hamesha dikhe. */
-internal fun wJoinFit(main: String, tail: String?, room: Float, sp: Float, scale: Float): String {
-    if (tail == null) return main
-    val full = "$main $tail"
-    if (wTextW(full, sp, scale) <= room) return full
-    val keep = ((room - wTextW("… $tail", sp, scale)) / (sp * 0.6f * scale)).toInt()
-    return main.take(keep.coerceAtLeast(1)).trimEnd() + "… " + tail
-}
-
-/** Pill ki chaudai (dp): icon + text + padding. */
-internal fun wPillW(p: WPillM, scale: Float): Float = 6f + 16f + 4f + wTextW(p.text, 13f, scale) + 10f
 
 // ---------------------------------------------------------------- jagah ka hisaab (Glance + preview dono)
 
-internal const val W_BAND = 40f    // upar ka band (dp)
-internal const val W_PAD = 16f     // side padding
-internal const val W_TOP = 8f      // band ke neeche
-internal const val W_BOTTOM = 6f   // neeche
-internal const val W_GAP = 6f      // do line ke beech
-internal const val W_COL_GAP = 12f // do column ke beech
+internal const val W_PV = 14f   // upar / neeche padding
+internal const val W_PH = 16f   // side padding
+internal const val W_PH2 = 14f  // Ads + Live ki side padding
+internal const val W_SEP = 12f  // patli line ke dono taraf
 
-/** Ek line ki oonchai (dp) har sp par (font padding samet). */
-internal fun wLineK(scale: Float): Float = 1.32f * scale
+/** Header ki line (22dp, bade font par zyada). */
+internal fun wHdr(scale: Float): Float = max(22f, wLine(14f, scale))
 
-/** Label (13sp) ki line. */
-internal fun wLabelH(scale: Float): Float = 18f * scale
+/** Header: MFC nishaan (Paisa), naam (kata hua), refresh + samay (Paisa). */
+internal class WHeadPlan(val mark: Boolean, val title: String, val refresh: Boolean, val time: Boolean)
 
-/** Chhota number (18sp) ya pill (26dp) wali line. */
-internal fun wSmallH(scale: Float): Float = maxOf(24f * scale, 26f)
-
-/** Band: MFC nishaan dikhe? samay dikhe? (jagah kam ho to pehle samay, phir nishaan hatta hai) */
-internal class WBandPlan(val mark: Boolean, val time: Boolean, val refresh: Boolean)
-
-internal fun wBandPlan(v: WView, w: Float, scale: Float): WBandPlan {
-    val titleW = wTextW(v.title, 14f, scale)
-    if (v.login) return WBandPlan(14f + 24f + 18f + 8f + titleW + 14f <= w, time = false, refresh = false)
-    // pehle samay (purana data = "5 ghante pehle" zaroori), phir nishaan
-    val left = 14f + 18f + 8f + titleW + 8f
-    val timeW = 10f + 14f + 6f + wTextW(v.time, 13f, scale) + 14f
-    val time = v.time.isNotEmpty() && left + timeW <= w
-    val mark = left + 24f + (if (time) timeW else 48f) <= w
-    return WBandPlan(mark, time = time, refresh = true)
-}
-
-/** Bade number ke saath "aur $120" tabhi jab number kam se kam 20sp rahe. */
-internal fun wShowSub(c: WCell, room: Float, scale: Float): Boolean {
-    val sub = c.sub ?: return false
-    if (c.value.isEmpty()) return true
-    return room - 6f - wTextW(sub, 14f, scale) >= wTextW(c.value, 20f, scale)
-}
-
-/** Number kitna bada ho ki sub + pill (kam se kam icon) ke saath jagah me aa jaye. */
-internal fun wValueSp(c: WCell, room: Float, max: Float, min: Float, scale: Float): Float {
-    if (c.value.isEmpty()) return max
-    var r = room
-    val sub = c.sub
-    if (sub != null && wShowSub(c, room, scale)) r -= 6f + wTextW(sub, 14f, scale)
-    if (c.pill != null) r -= 8f + 26f
-    return wFitSp(c.value, r, max, min, scale)
-}
-
-/** Pill poori (icon + shabd) aayegi ya sirf icon. */
-internal fun wPillFull(c: WCell, room: Float, sp: Float, scale: Float): Boolean {
-    val pill = c.pill ?: return false
-    if (c.value.isEmpty()) return true
-    return wTextW(c.value, sp, scale) + 8f + wPillW(pill, scale) <= room
+/** Paisa header: jagah kam ho to pehle samay hatta (data purana ho to pehle nishaan), phir naam katta. */
+internal fun wHeadPlan(v: WView, inner: Float, scale: Float): WHeadPlan {
+    val titleW = wTextW(v.title, 14f, scale, bold = true)
+    if (v.login) return WHeadPlan(27f + titleW <= inner, wFit(v.title, inner, 14f, scale, true), refresh = false, time = false)
+    val right = 8f + 16f
+    val timeW = 5f + wTextW(v.time, 12f, scale)
+    val mark = 27f
+    return when {
+        mark + titleW + right + timeW <= inner -> WHeadPlan(true, v.title, true, true)
+        v.stale && titleW + right + timeW <= inner -> WHeadPlan(false, v.title, true, true)
+        mark + titleW + right <= inner -> WHeadPlan(true, v.title, true, false)
+        titleW + right <= inner -> WHeadPlan(false, v.title, true, false)
+        else -> WHeadPlan(false, wFit(v.title, inner - right, 14f, scale, true), true, false)
+    }
 }
 
 /**
- * Paisa / Google Ads: chaudi (>= 250dp) me do column (bada + 3 chhote), patli me ek column (bada + chhoti lines).
- * heroSp = bade number ka size, two = doosri line dikhe, rows = patli me kitni chhoti lines.
+ * Paisa. Chauda (>= 250dp): bada munafa + daayein ROAS, meter, neeche 3 khane (jagah kam ho to pehle meter hatta,
+ * phir number chhota, phir khane). Patla (2x2): bada munafa, ROAS line, khane chhoti lines me.
+ * pill: 0 = nahi, 1 = sirf icon, 2 = icon + shabd.
  */
-internal class WGridPlan(val narrow: Boolean, val c2: Float, val heroRoom: Float, val heroSp: Float, val two: Boolean, val rows: Int)
+internal class WPaisaPlan(
+    val narrow: Boolean, val head: WHeadPlan, val bigSp: Float, val roasLabel: Boolean, val roasLine: Boolean, val pill: Int,
+    val meter: Boolean, val stats: Int, val statSp: Float,
+)
 
-internal fun wGridPlan(v: WView, w: Float, bodyH: Float, scale: Float): WGridPlan {
-    val inner = w - 2 * W_PAD
-    val k = wLineK(scale)
-    val label = wLabelH(scale)
-    val hero = v.cells.firstOrNull()
-    if (w < 250f) {
-        val rowH = wSmallH(scale) + 4f
-        var n = (v.cells.size - 1).coerceAtLeast(0)
-        while (n > 0 && W_TOP + label + 22f * k + n * rowH + W_BOTTOM > bodyH) n--
-        val fit = if (hero == null) 32f else wValueSp(hero, inner, 32f, 18f, scale)
-        val sp = minOf(fit, (bodyH - W_TOP - W_BOTTOM - label - n * rowH) / k).coerceIn(16f, 32f)
-        return WGridPlan(true, 0f, inner, sp, false, n)
+internal fun wPillW(text: String, sp: Float, scale: Float, full: Boolean): Float =
+    if (full) 6f + 14f + 4f + wTextW(text, sp, scale, true) + 9f else 6f + 14f + 6f
+
+internal fun wPaisaPlan(v: WView, w: Float, h: Float, scale: Float): WPaisaPlan {
+    val pv = v.paisa!!
+    val inner = w - 2 * W_PH
+    val ih = h - 2 * W_PV
+    val head = wHeadPlan(v, inner, scale)
+    val hdr = wHdr(scale)
+    val pillM = pv.pill
+    // 3 khane: har ek (inner - 2 line) / 3 chauda. 12sp par bhi koi number na aaye (bada font / lakhon ka mahina)
+    // to "₹22,9…" jaisa kata number nahi: patla roop, jisme har khana apni poori line me
+    val colW = (inner - 2 * (2 * W_SEP + 1f)) / 3f
+    val statsTight = pv.stats.any { wTextW(it.value, 12f, scale, true) > colW }
+    if (w < 250f || statsTight) {
+        // patla: ROAS ek line me, khane label-number lines
+        var big = wFitSp(pv.big, inner / 1.04f, 34f, 18f, scale)
+        val roasW = wTextW("ROAS", 12f, scale) + 6f + wTextW(pv.roas, 17f, scale, true)
+        val pill = when {
+            pillM == null -> 0
+            roasW + 6f + wPillW(pillM.text, 12.5f, scale, true) <= inner -> 2
+            roasW + 6f + wPillW(pillM.text, 12.5f, scale, false) <= inner -> 1
+            else -> 0
+        }
+        val roasH = max(wLine(17f, scale), 24f)
+        var roasLine = true
+        fun base() = hdr + 2f + wLine(big, scale) + (if (roasLine) 2f + roasH else 0f)
+        while (base() > ih && big > 16f) big -= 1f
+        if (base() > ih) roasLine = false
+        val rowH = wLine(13f, scale) + 2f
+        val n = floor((ih - base() - 4f) / rowH).toInt().coerceIn(0, 3)
+        val meter = roasLine && n == 3 && ih - base() - 4f - 3 * rowH >= 16f
+        return WPaisaPlan(true, head, big, false, roasLine, pill, meter, n, 13f)
     }
-    // daayan column utna chauda jitna uske number + pill ko chahiye (36%..50%), baaki bade number ko
-    val avail = inner - W_COL_GAP
-    val want = maxOf(wSmallNeed(v.cells.getOrNull(1), scale), wSmallNeed(v.cells.getOrNull(3), scale))
-    val c2 = want.coerceIn(avail * 0.36f, avail * 0.5f).coerceAtMost(190f)
-    val heroRoom = avail - c2
-    val fit = if (hero == null) 32f else wValueSp(hero, heroRoom, 32f, 18f, scale)
-    val twoSp = minOf(fit, (bodyH - W_TOP - W_BOTTOM - label - W_GAP - label - wSmallH(scale)) / k)
-    val two = v.cells.size > 2 && twoSp >= 20f
-    val sp = if (two) twoSp else minOf(fit, (bodyH - W_TOP - W_BOTTOM - label) / k)
-    return WGridPlan(false, c2, heroRoom, sp.coerceIn(16f, 32f), two, 0)
+    val roasValW = wTextW(pv.roas, 22f, scale, true)
+    val roasLblW = wTextW("ROAS", 12f, scale)
+    // ROAS ka hissa: label upar (label = true) ya number ke saath ek line me ("ROAS 27%")
+    fun roasW(p: Int, label: Boolean): Float {
+        val v = roasValW + when (p) {
+            2 -> 6f + wPillW(pillM?.text.orEmpty(), 12.5f, scale, true)
+            1 -> 6f + wPillW("", 12.5f, scale, false)
+            else -> 0f
+        }
+        return if (label) max(roasLblW, v) else roasLblW + 6f + v
+    }
+    // bada number kabhi "…" na ho: font ki chaudai me 4% chhoot
+    fun bigFit(p: Int, label: Boolean = true): Float = wFitSp(pv.big, (inner - roasW(p, label) - 12f) / 1.04f, 38f, 18f, scale)
+    var pill = if (pillM == null) 0 else 2
+    if (pill == 2 && bigFit(2) < 30f) pill = 1
+    val fit = bigFit(pill)
+    // lamba number ho to sab khano ka font chhota
+    val statSp = pv.stats.minOf { wFitSp(it.value, colW, 17f, 12f, scale) }
+    val statsH = wLine(12f, scale) + wLine(statSp, scale)
+    fun midH(b: Float, label: Boolean) = max(wLine(b, scale), (if (label) wLine(12f, scale) else 0f) + max(wLine(22f, scale), 24f))
+    fun need(b: Float, meter: Boolean, stats: Boolean, label: Boolean) =
+        hdr + 2f + midH(b, label) + (if (meter) 4f + 12f else 0f) + (if (stats) 6f + statsH else 0f)
+    if (need(fit, true, true, true) <= ih) return WPaisaPlan(false, head, fit, true, true, pill, true, 3, statSp)
+    if (need(fit, false, true, true) <= ih) return WPaisaPlan(false, head, fit, true, true, pill, false, 3, statSp)
+    // ROAS ek line me ho to number ki jagah kam: tab bhi tang ho to pill hatao
+    val pillIn = if (pill > 0 && bigFit(pill, false) < 24f) 0 else pill
+    for (label in listOf(true, false)) {
+        val pl = if (label) pill else pillIn
+        var b = if (label) fit else min(fit, bigFit(pl, false))
+        while (b > 24f && need(b, false, true, label) > ih) b -= 1f
+        if (need(b, false, true, label) <= ih) return WPaisaPlan(false, head, b, label, true, pl, false, 3, statSp)
+    }
+    // bahut neecha: sirf header + bada number + ROAS (ek line)
+    var b = min(fit, bigFit(pillIn, false))
+    while (b > 18f && need(b, false, false, false) > ih) b -= 1f
+    return WPaisaPlan(false, head, b, false, true, pillIn, false, 0, statSp)
 }
 
-/** Chhote khane ko kitni chaudai chahiye: number (18sp) + pill. */
-private fun wSmallNeed(c: WCell?, scale: Float): Float {
-    if (c == null) return 0f
-    val v = if (c.value.isEmpty()) 0f else wTextW(c.value, 18f, scale)
-    val p = c.pill?.let { (if (v > 0f) 8f else 0f) + wPillW(it, scale) } ?: 0f
-    return v + p
+/**
+ * Ads + Live. Chauda: do column (baayan ~47%), patla (2x2 tak): sirf Ads wala aadha (liveOnly = Ads set nahi, to Live wala).
+ * labels = "aaj / budget %" wali chhoti line; rows = kitni lines (3 tak); more = "View more ›" poora (warna sirf "›").
+ */
+internal class WTopPlan(
+    val two: Boolean, val liveOnly: Boolean, val leftW: Float, val rightW: Float, val labels: Boolean, val rows: Int,
+    val moreL: Boolean, val moreR: Boolean,
+)
+
+/** Bar / ROAS line ki oonchai (pill samet): 13dp, bade font par utni ki pill ka "72%" na kate. */
+internal fun wBarH(scale: Float): Float = max(13f, wLine(9.5f, scale))
+
+/** Paisa ki Loss / Profit pill: 24dp, bade font par text ke hisaab se. */
+internal fun wPillH(scale: Float): Float = max(24f, wLine(12.5f, scale))
+
+internal fun wTopRowH(scale: Float): Float = wLine(14f, scale) + 2f + wBarH(scale)
+
+/**
+ * set = Google Ads monitor set hai. Patla widget sirf Ads wala aadha dikhata hai; Ads set na ho to (khaali "Set nahi"
+ * ki jagah) poori chaudai me Live users wala aadha (liveOnly).
+ */
+internal fun wTopPlan(w: Float, h: Float, scale: Float, set: Boolean = true): WTopPlan {
+    val inner = w - 2 * W_PH2
+    val ih = h - 2 * W_PV
+    val two = inner >= 268f
+    val liveOnly = !two && !set
+    val avail = inner - (2 * W_SEP + 1f)
+    val leftW = if (two) avail * .47f else if (liveOnly) 0f else inner
+    val rightW = if (two) avail - leftW else if (liveOnly) inner else 0f
+    val more = wTextW("View more".t() + " ›", 11f, scale, true)
+    val moreL = wTextW("Ads spend".t(), 12.5f, scale, true) + 6f + more <= leftW
+    val moreR = (two || liveOnly) && wTextW("Live users".t(), 12.5f, scale, true) + 6f + more <= rightW
+    val hdr = wHdr(scale)
+    val labH = wLine(10.5f, scale) + 1f
+    val rowH = wTopRowH(scale)
+    for (rows in 3 downTo 1) {
+        for (labels in listOf(true, false)) {
+            if (hdr + (if (labels) labH else 0f) + rows * rowH <= ih) return WTopPlan(two, liveOnly, leftW, rightW, labels, rows, moreL, moreR)
+        }
+    }
+    return WTopPlan(two, liveOnly, leftW, rightW, false, 1, moreL, moreR)
 }
 
-/** App Health: bada "21/25 theek" + kitni chhoti lines aayengi. */
-internal class WHealthPlan(val heroSp: Float, val lines: Int)
+/** App Health: 3 number (labels ke saath ya bina) + kitni issue lines. icon = header me dhadkan ka nishaan (jagah ho to). */
+internal class WHealthPlan(val tri: Boolean, val triLabels: Boolean, val rows: Int, val triSp: Float, val icon: Boolean)
 
-internal fun wLineH(c: WCell, scale: Float): Float = if (c.pill != null) wSmallH(scale) else 19f * scale
+/** 2x2 header ka nishaan tabhi jab naam (aur daayein ka hissa) poora aa jaye. */
+internal fun wHeadIcon(title: String, inner: Float, end: Float, scale: Float): Boolean =
+    16f + 7f + wTextW(title, 14f, scale, true) + end <= inner
 
-internal fun wHealthPlan(v: WView, w: Float, bodyH: Float, scale: Float): WHealthPlan {
-    val hero = v.cells.firstOrNull() ?: return WHealthPlan(32f, 0)
-    val inner = w - 2 * W_PAD
-    val k = wLineK(scale)
-    val ofW = hero.of?.let { wTextW(it, 18f, scale) } ?: 0f
-    val capW = 6f + wTextW(hero.label, 13f, scale)
-    val fit = wFitSp(hero.value, inner - ofW - capW, 40f, 20f, scale)
-    val lines = v.cells.drop(1)
-    fun used(m: Int): Float = lines.take(m).sumOf { (wLineH(it, scale) + W_GAP).toDouble() }.toFloat()
-    var n = lines.size
-    while (n > 0 && W_TOP + 24f * k + used(n) + W_BOTTOM > bodyH) n--
-    val sp = minOf(fit, (bodyH - W_TOP - W_BOTTOM - used(n)) / k).coerceIn(20f, 40f)
-    return WHealthPlan(sp, n)
+internal fun wBadgeH(scale: Float): Float = max(19f, wLine(12.5f, scale))
+
+internal fun wHealthPlan(v: WView, w: Float, h: Float, scale: Float): WHealthPlan {
+    val hv = v.health!!
+    val inner = w - 2 * W_PH
+    val ih = h - 2 * W_PV
+    val hdr = wHdr(scale)
+    val cell = (inner - 2 * 10f) / 3f
+    val triSp = listOf(hv.total, hv.bad, hv.fine).minOf { wFitSp(it, cell - 9f, 22f, 14f, scale) }
+    val icon = wHeadIcon(v.title, inner, 0f, scale)
+    // "apps / issue / theek" tabhi jab poore aayein (kate hue shabd nahi)
+    val labelsFit = listOf("apps".t(), "issue".t(), "fine".t()).all { wTextW(it, 11.5f, scale) <= cell - 9f }
+    val triH = 2f + wLine(triSp, scale) + (if (labelsFit) wLine(11.5f, scale) else 0f)
+    val rowH = wBadgeH(scale)
+    val most = hv.rows.size.coerceAtMost(3)
+    for (n in most downTo 0) {
+        val list = if (n == 0) 0f else 4f + n * rowH + (n - 1) * 5f
+        if (hdr + triH + list <= ih) return WHealthPlan(true, labelsFit, n, triSp, icon)
+    }
+    val small = hdr + 2f + wLine(triSp, scale) <= ih
+    return WHealthPlan(small, false, 0, triSp, icon)
+}
+
+/** Alerts: kitni lines, har line ke neeche kism dikhe ya nahi, header ki "naye" pill aayegi ya nahi, ghanti ka nishaan. */
+internal class WAlertsPlan(val rows: Int, val sub: Boolean, val pill: Boolean, val icon: Boolean)
+
+internal fun wAlertsPlan(v: WView, w: Float, h: Float, scale: Float): WAlertsPlan {
+    val av = v.alerts!!
+    val inner = w - 2 * W_PH
+    val ih = h - 2 * W_PV
+    val hdr = wHdr(scale)
+    val u = av.unread
+    val pill = u != null && wHeadIcon(v.title, inner, 8f + wTextW(u, 12f, scale, true) + 16f, scale)
+    val icon = wHeadIcon(v.title, inner, 0f, scale)
+    val most = av.rows.size.coerceAtMost(3)
+    for (sub in listOf(true, false)) {
+        val item = wLine(13f, scale) + (if (sub) wLine(12f, scale) else 0f)
+        for (n in most downTo 1) {
+            if (hdr + 4f + n * item + (n - 1) * 5f <= ih) return WAlertsPlan(n, sub, pill, icon)
+        }
+    }
+    return WAlertsPlan(1, false, pill, icon)
+}
+
+// ---------------------------------------------------------------- bar / meter ke tukde
+
+/** Bar ka ek tukda (bayein se daayein): chaudai (dp), rang (null = khaali, card dikhe), mark = yahan pill / dot. */
+internal class WSeg(val w: Float, val color: Color?, val mark: Boolean = false)
+
+/**
+ * Tukde bana do: parts = (shuru, ant, rang). mark (beech ki jagah, dp) par markW chaudi pill / dot,
+ * uske dono taraf ring dp khaali (card ka rang = mockup ki safed ring). Sab ek Row me, bina overlay.
+ */
+internal fun wSegs(width: Float, parts: List<Triple<Float, Float, Color>>, mark: Float?, markW: Float, ring: Float): List<WSeg> {
+    class P(val s: Float, val e: Float, val c: Color?, val m: Boolean)
+    val ps = ArrayList<P>()
+    if (mark == null) {
+        parts.forEach { (s, e, c) -> if (e - s > .3f) ps += P(s, e, c, false) }
+    } else {
+        val ms = (mark - markW / 2f).coerceIn(0f, max(0f, width - markW))
+        val me = ms + markW
+        parts.forEach { (s, e, c) ->
+            val a = min(e, ms - ring)
+            if (a - s > .3f) ps += P(s, a, c, false)
+            val b = max(s, me + ring)
+            if (e - b > .3f) ps += P(b, e, c, false)
+        }
+        ps += P(ms, me, null, true)
+    }
+    ps.sortBy { it.s }
+    val out = ArrayList<WSeg>()
+    var x = 0f
+    for (p in ps) {
+        if (p.s - x > .05f) out += WSeg(p.s - x, null)
+        out += WSeg(p.e - p.s, p.c, p.m)
+        x = p.e
+    }
+    return out
+}
+
+/** 3 zone (laal 0-80%, amber 80-100%, hara 100-200%), beech me gap. */
+internal fun wZoneParts(width: Float, gap: Float, p: WPal): List<Triple<Float, Float, Color>> {
+    val u = (width - 2 * gap) / 200f
+    val a = 80f * u
+    val b = a + gap + 20f * u
+    return listOf(Triple(0f, a, p.zr), Triple(a + gap, b, p.za), Triple(b + gap, width, p.zg))
+}
+
+/** Bar par pill ki chaudai (9.5sp, dono taraf 4dp). */
+internal fun wBarPillW(text: String, scale: Float): Float = wTextW(text, 9.5f, scale, true) + 8f
+
+/** Budget bar: fill tak zone ka rang, baaki track; budget % ki pill fill ke sire par. Budget pata nahi = sirf track. */
+internal fun wBudgetSegs(width: Float, a: WAcctV?, p: WPal, scale: Float): List<WSeg> {
+    val f = a?.fill
+    if (a == null || f == null) return listOf(WSeg(width, p.track))
+    val x = width * f
+    return wSegs(width, listOf(Triple(0f, x, p.zone(a.zone)), Triple(x, width, p.track)), x, wBarPillW(a.pct, scale), 2f)
+}
+
+/** ROAS line (Live users): 3 zone, ROAS ki pill uski jagah par. Kharcha nahi = sirf track. */
+internal fun wRoasSegs(width: Float, a: WAppV?, p: WPal, scale: Float): List<WSeg> {
+    val pos = a?.pos
+    if (a == null || pos == null) return listOf(WSeg(width, p.track))
+    return wSegs(width, wZoneParts(width, 2f, p), width * pos, wBarPillW(a.roas, scale), 2f)
+}
+
+/** Paisa meter: 3 zone, dot (10dp) ROAS ki jagah, dono taraf 3dp ring. */
+internal fun wMeterSegs(width: Float, pv: WPaisaV, p: WPal): List<WSeg> {
+    val pos = pv.pos ?: return listOf(WSeg(width, p.track))
+    return wSegs(width, wZoneParts(width, 3f, p), width * pos, 10f, 3f)
 }

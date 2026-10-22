@@ -8,8 +8,9 @@ val HI_UI_HOME: Map<String, String> = mapOf(
     // aaj ka haal
     "Today's status" to "Aaj ka haal", "%s to watch" to "%s dhyan do", "See now" to "Turant dekho", "Not set up" to "Setup nahi",
     // App Health
-    "App Health" to "App Health", "apps fine" to "apps theek", "%s AI fixes ready" to "%s AI fix taiyaar",
-    "fine" to "theek", "problem" to "problem", "scan pending" to "scan baaki",
+    "App Health" to "App Health", "fine" to "theek", "problem" to "problem", "scan pending" to "scan baaki",
+    // Alerts module: kitni der pehle
+    "1 day" to "1 din",
     // Google Ads
     "Google Ads" to "Google Ads", "accounts to watch" to "accounts dhyan do", "No accounts" to "Koi account nahi",
     "Spend %s lower" to "Kharcha %s kam", "Spend %s higher" to "Kharcha %s zyada", "Data %s late" to "Data %s late",

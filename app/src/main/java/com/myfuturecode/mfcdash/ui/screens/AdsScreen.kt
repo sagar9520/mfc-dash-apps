@@ -32,6 +32,8 @@ import com.myfuturecode.mfcdash.ui.kit.KSplit
 import com.myfuturecode.mfcdash.ui.kit.KTint
 import com.myfuturecode.mfcdash.ui.kit.KTwoPane
 import com.myfuturecode.mfcdash.ui.kit.isWide
+import com.myfuturecode.mfcdash.ui.kit.kSorted
+import com.myfuturecode.mfcdash.ui.kit.rememberKSort
 import com.myfuturecode.mfcdash.ui.theme.Mfc
 import com.myfuturecode.mfcdash.util.inr
 import com.myfuturecode.mfcdash.util.num
@@ -45,14 +47,15 @@ import com.myfuturecode.mfcdash.util.usd
 fun AdsScreen(vm: DashVm, st: UiState, nav: NavHostController) {
     var med by rememberSaveable { mutableStateOf("") }
     var fmt by rememberSaveable { mutableStateOf("") }
-    var sort by rememberSaveable { mutableStateOf("rev") }   // rev | imps | ecpm
-    TabScreen("Ads".t(), vm, st, nav, back = true, filters = { v ->
+    // sort: bar ka Sort button (network / format / unit tables), default kamai zyada -> kam (aaj jaisa)
+    val sort = rememberKSort("rev")
+    val sortOpts = listOf("rev" to "Revenue".t(), "imps" to "Impressions".t(), "ecpm" to "eCPM")
+    TabScreen("Ads".t(), vm, st, nav, back = true, skeleton = { DashSkel(KTint.Sand, stats = 3, cols = 3) }, filters = { v ->
         val meds = optionsOf(v.d.byFormat.map { it.med } + v.d.byNetwork.map { it.med })
         val fmts = optionsOf(v.d.byFormat.map { it.fmt } + v.d.byUnit.map { it.fmt })
         if (meds.size > 2) FilterChips("Via".t(), meds, med) { med = it }
         if (fmts.size > 2) FilterChips("Format".t(), fmts, fmt) { fmt = it }
-        FilterChips("Sort".t(), listOf("rev" to "Revenue".t(), "imps" to "Impressions".t(), "ecpm" to "eCPM"), sort) { sort = it }
-    }) { v ->
+    }, sort = sort, sortOptions = sortOpts) { v ->
         val d = v.d
         val c = Mfc.c
         val k = d.kpi
@@ -64,10 +67,10 @@ fun AdsScreen(vm: DashVm, st: UiState, nav: NavHostController) {
         val crs = d.creatives.filter { fmt.isBlank() || it.fmt == fmt }
         val filtered = med.isNotBlank() || fmt.isNotBlank()
 
-        fun <T> List<T>.sortedAds(rev: (T) -> Double, imps: (T) -> Double, ecpm: (T) -> Double?): List<T> = when (sort) {
-            "imps" -> sortedByDescending(imps)
-            "ecpm" -> sortedByDescending { ecpm(it) ?: 0.0 }
-            else -> sortedByDescending(rev)
+        fun <T> List<T>.sortedAds(rev: (T) -> Double, imps: (T) -> Double, ecpm: (T) -> Double?): List<T> = when (sort.key) {
+            "imps" -> kSorted(sort.desc, by = imps)
+            "ecpm" -> kSorted(sort.desc, by = ecpm)
+            else -> kSorted(sort.desc, by = rev)
         }
 
         val left: @Composable ColumnScope.() -> Unit = {

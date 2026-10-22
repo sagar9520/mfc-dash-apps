@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Dark widget: #16131F, patli #2A2640 kinaari (mockup t3) -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="#FF16131F" />
+    <stroke
+        android:width="1dp"
+        android:color="#FF2A2640" />
+    <corners android:radius="24dp" />
+</shape>

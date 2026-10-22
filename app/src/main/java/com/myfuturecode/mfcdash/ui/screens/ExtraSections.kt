@@ -17,6 +17,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -27,11 +28,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import com.myfuturecode.mfcdash.data.CampaignRoas
 import com.myfuturecode.mfcdash.data.DashData
 import com.myfuturecode.mfcdash.data.ExtraData
+import com.myfuturecode.mfcdash.data.HistoryRow
 import com.myfuturecode.mfcdash.data.Note
+import com.myfuturecode.mfcdash.data.PurchaseRow
 import com.myfuturecode.mfcdash.data.ROAS_TARGET_CURVE
 import com.myfuturecode.mfcdash.ui.DashVm
 import com.myfuturecode.mfcdash.ui.components.DashText
@@ -48,8 +52,15 @@ import com.myfuturecode.mfcdash.ui.kit.KIconTile
 import com.myfuturecode.mfcdash.ui.kit.KIcons
 import com.myfuturecode.mfcdash.ui.kit.KKind
 import com.myfuturecode.mfcdash.ui.kit.KRow
+import com.myfuturecode.mfcdash.ui.kit.KSection
+import com.myfuturecode.mfcdash.ui.kit.KSkelCard
+import com.myfuturecode.mfcdash.ui.kit.KSortButton
+import com.myfuturecode.mfcdash.ui.kit.KSortKind
+import com.myfuturecode.mfcdash.ui.kit.KSortState
+import com.myfuturecode.mfcdash.ui.kit.KT
 import com.myfuturecode.mfcdash.ui.kit.kRoasColor
 import com.myfuturecode.mfcdash.ui.kit.kRoasKind
+import com.myfuturecode.mfcdash.ui.kit.kSorted
 import com.myfuturecode.mfcdash.ui.theme.Mfc
 import com.myfuturecode.mfcdash.util.fmtDay
 import com.myfuturecode.mfcdash.util.inr
@@ -58,10 +69,88 @@ import com.myfuturecode.mfcdash.util.pct
 import com.myfuturecode.mfcdash.util.roasPct
 import com.myfuturecode.mfcdash.util.t
 import com.myfuturecode.mfcdash.util.tFull
+import com.myfuturecode.mfcdash.util.tf
+import kotlinx.coroutines.delay
 
-/** api/app.php abhi server par nahi: chhota card (kya chahiye). */
+/**
+ * Section heading + daayein us section ki list ka Sort button (detail pages jahan kai list hain: App, Campaign,
+ * Pura hisaab). trailing (label / pill) pehle, phir button. Button default se alag ho to brand rang me.
+ */
 @Composable
-fun ExtraMissingCard(what: String) {
+fun SortSection(
+    title: String, sort: KSortState, options: List<Pair<String, String>>, kinds: Map<String, KSortKind> = emptyMap(),
+    trailing: (@Composable () -> Unit)? = null,
+) {
+    // KSection jaisa hi (18sp bold, 12dp gap), par title 2 line tak: 360dp par total pill + Sort ke saath kata nahi
+    // (jaise "Google Ads campaigns" + ₹ pill)
+    val c = Mfc.c
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 30.dp).padding(start = 4.dp, end = 4.dp, top = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        KT(title, 18.sp, c.ink, Modifier.weight(1f), weight = FontWeight.Bold, lh = 24.sp, ls = (-0.01).em, maxLines = 2)
+        trailing?.invoke()
+        KSortButton(sort, options, kinds)
+    }
+}
+
+/**
+ * Retention / ROAS cohort section ka daayan label: server ne chhoti range (aaj) par cohort pichhle N din ke installs se
+ * banaya ho to "pichhle 14 din", warna [fallback] (jaise "D1 / D3 / D7 / D14"; D columns card ki table me bhi hain).
+ */
+fun cohortTrailing(ex: ExtraData?, fallback: String? = null): (@Composable () -> Unit)? {
+    val n = ex?.cohortDays()
+    if (n == null && fallback == null) return null
+    return { DashText(if (n != null) tf("last %s days", n) else fallback.orEmpty(), 13.sp, Mfc.c.ink3) }
+}
+
+/** ROAS cohort list ke sort options (default kharcha zyada -> kam = server ka order). */
+fun roasCohortSortOpts(): List<Pair<String, String>> = listOf(
+    "spend" to "Spend".t(), "roas" to "ROAS", "profit" to "Profit".t(), "installs" to "Installs".t(), "name" to "Name".t(),
+)
+
+/** ROAS cohort rows sort; "spend" desc = server ka order (spend, phir installs). ROAS na ho to aakhir me. */
+fun List<CampaignRoas>.roasCohortSorted(key: String, desc: Boolean): List<CampaignRoas> = when (key) {
+    "roas" -> kSorted(desc) { it.roasTotal }
+    "profit" -> kSorted(desc) { it.profit }
+    "installs" -> kSorted(desc) { it.installs }
+    "name" -> kSorted(desc) { it.campaign.lowercase() }
+    else -> kSorted(desc) { it.spend }
+}
+
+/** Roz ka hisaab (history table) ke sort options: default tareekh naya -> purana (aaj jaisa). */
+fun historySortOpts(): List<Pair<String, String>> =
+    listOf("day" to "Date".t(), "profit" to "Profit".t(), "spend" to "Spend".t(), "installs" to "Installs".t())
+val HISTORY_SORT_KINDS = mapOf("day" to KSortKind.DATE)
+
+/** History rows sort (r = USD -> INR rate, munafa ke liye). */
+fun List<HistoryRow>.historySorted(key: String, desc: Boolean, r: Double): List<HistoryRow> = when (key) {
+    "profit" -> kSorted(desc) { it.profit(r) }
+    "spend" -> kSorted(desc) { it.gadsCostInr }
+    "installs" -> kSorted(desc) { it.installs }
+    else -> kSorted(desc) { it.day }
+}
+
+/** Payments list ke sort options: default rakam zyada -> kam (aaj jaisa). */
+fun paySortOpts(): List<Pair<String, String>> = listOf("amt" to "Amount".t(), "n" to "Count".t(), "name" to "Name".t())
+
+/** Payments sort. Rakam: zyada -> kam me bina rakam = 0 (aaj jaisa), kam -> zyada me bina rakam aakhir me. */
+fun List<PurchaseRow>.paySorted(key: String, desc: Boolean, name: (PurchaseRow) -> String = { it.plan }): List<PurchaseRow> = when (key) {
+    "n" -> kSorted(desc) { it.n }
+    "name" -> kSorted(desc) { name(it).lowercase() }
+    else -> kSorted(desc) { it.amt ?: (if (desc) 0.0 else null) }
+}
+
+/**
+ * api/app.php abhi server par nahi: chhota card (kya chahiye).
+ * pending = data aa gaya par app.php ka jawab abhi raste me: tab tak skeleton (8 sec tak; jawab na aaye to yahi card).
+ */
+@Composable
+fun ExtraMissingCard(what: String, pending: Boolean = false) {
+    var wait by remember(pending) { mutableStateOf(pending) }
+    if (pending) LaunchedEffect(Unit) { delay(8_000); wait = false }
+    if (wait) { KSkelCard(3); return }
     KCard(list = true) {
         KRow(what, sub = "Needs api/app.php".t(), subKind = KKind.WARN, lead = { KIconTile(KIcons.Info, KKind.WARN) }, titleLines = 2)
     }

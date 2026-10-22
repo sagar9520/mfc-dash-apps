@@ -97,6 +97,8 @@ object WidgetSync {
     }
 
     private suspend fun fetchAll(app: App, force: Boolean) {
+        // ek sync me data.php (aaj, sab apps) ek hi baar: Paisa aur Ads + Live dono isi se
+        val f = WFetch(app)
         // dataKey -> (kind, options); ek key ke kai widgets ho to sabse chhota interval
         val jobs = LinkedHashMap<String, Pair<WKind, WOpts>>()
         for (k in WKind.entries) {
@@ -113,7 +115,7 @@ object WidgetSync {
             if (!force && WidgetStore.age(app, key) < o.every * 60_000L - 2 * 60_000L) continue
             WidgetStore.markTry(app, key)
             try {
-                WidgetStore.saveSnap(app, key, WidgetData.fetch(app, k, o))
+                WidgetStore.saveSnap(app, key, WidgetData.fetch(app, k, o, f))
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {

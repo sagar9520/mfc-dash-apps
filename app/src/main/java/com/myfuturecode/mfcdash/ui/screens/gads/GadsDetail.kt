@@ -59,12 +59,22 @@ import com.myfuturecode.mfcdash.ui.kit.KIconTile
 import com.myfuturecode.mfcdash.ui.kit.KIcons
 import com.myfuturecode.mfcdash.ui.kit.KKind
 import com.myfuturecode.mfcdash.ui.kit.KListDivider
+import com.myfuturecode.mfcdash.ui.kit.KLoadOnChange
 import com.myfuturecode.mfcdash.ui.kit.KPaceMeter
 import com.myfuturecode.mfcdash.ui.kit.KPill
 import com.myfuturecode.mfcdash.ui.kit.KRow
 import com.myfuturecode.mfcdash.ui.kit.KScreen
 import com.myfuturecode.mfcdash.ui.kit.KSection
+import com.myfuturecode.mfcdash.ui.kit.KSkelCard
+import com.myfuturecode.mfcdash.ui.kit.KSkelHero
+import com.myfuturecode.mfcdash.ui.kit.KSkelRows
+import com.myfuturecode.mfcdash.ui.kit.KSkelSection
+import com.myfuturecode.mfcdash.ui.kit.KSkeleton
 import com.myfuturecode.mfcdash.ui.kit.KSmallAction
+import com.myfuturecode.mfcdash.ui.kit.KSortButton
+import com.myfuturecode.mfcdash.ui.kit.KSortKind
+import com.myfuturecode.mfcdash.ui.kit.KSortPill
+import com.myfuturecode.mfcdash.ui.kit.KSortState
 import com.myfuturecode.mfcdash.ui.kit.KSplit
 import com.myfuturecode.mfcdash.ui.kit.KStatus
 import com.myfuturecode.mfcdash.ui.kit.KSwitch
@@ -72,6 +82,8 @@ import com.myfuturecode.mfcdash.ui.kit.KTint
 import com.myfuturecode.mfcdash.ui.kit.KTwoPane
 import com.myfuturecode.mfcdash.ui.kit.isWide
 import com.myfuturecode.mfcdash.ui.kit.kRoasColor
+import com.myfuturecode.mfcdash.ui.kit.kSorted
+import com.myfuturecode.mfcdash.ui.kit.rememberKSort
 import com.myfuturecode.mfcdash.ui.theme.Mfc
 import com.myfuturecode.mfcdash.util.Lang
 import com.myfuturecode.mfcdash.util.arr
@@ -116,7 +128,7 @@ fun GadsAlertScreen(vm: GadsVm, nav: NavHostController, id: Long) {
     }
     if (isWide()) {
         KScreen(top = bar) {
-            GLoad(g, j, retry) { r ->
+            GLoad(g, j, retry, { GDetailSkel(true) }) { r ->
                 val a = GAlert.of(r.obj("alert"))
                 KTwoPane(
                     left = { AlertHero(a); AlertMain(r, a, g, vm, id, aiRunning, onAsk) },
@@ -125,12 +137,27 @@ fun GadsAlertScreen(vm: GadsVm, nav: NavHostController, id: Long) {
             }
         }
     } else {
-        KScreen(top = { bar(); if (a0 != null) AlertHero(a0) }) {
-            GLoad(g, j, retry) { r ->
+        KScreen(top = { bar(); if (a0 != null) AlertHero(a0) else if (gSkelOn(g, j)) KSkelHero(KTint.Sand) }) {
+            GLoad(g, j, retry, { GDetailSkel(false) }) { r ->
                 val a = GAlert.of(r.obj("alert"))
                 AlertMain(r, a, g, vm, id, aiRunning, onAsk)
                 AlertSide(r, a, nav)
             }
+        }
+    }
+}
+
+/** Detail screen (alert / campaign / run) ka skeleton, hero ke neeche: bada card + section + rows. Fold: hero baayein. */
+@Composable
+private fun GDetailSkel(wide: Boolean) {
+    KSkeleton {
+        if (wide) KTwoPane(
+            left = { KSkelHero(KTint.Sand); KSkelCard(5) },
+            right = { KSkelSection(); KSkelRows(3, lead = false) },
+        ) else {
+            KSkelCard(5)
+            KSkelSection()
+            KSkelRows(3, lead = false)
         }
     }
 }
@@ -311,7 +338,11 @@ fun GadsAccountScreen(vm: GadsVm, nav: NavHostController, cid: String) {
             KBarIcon(KIcons.Refresh, "Refresh".t(), { reload++ })
         })
     }
-    KScreen(top = { bar(); if (!wide && j != null) KHero(KTint.Sand) { AcctSummary(j, g, usdInr) } }) {
+    KScreen(top = {
+        bar()
+        if (!wide && j != null) KHero(KTint.Sand) { AcctSummary(j, g, usdInr) }
+        else if (!wide && gSkelOn(g, j)) KSkelHero(KTint.Sand)
+    }) {
         AccountContent(g, vm, nav, cid, wide = wide, heroHere = wide, usdInr = usdInr)
     }
 }
@@ -333,7 +364,21 @@ private fun AccountContent(
     var token by remember { mutableStateOf<String?>(null) }
     var newTok by remember { mutableStateOf(false) }
     var th by remember { mutableStateOf<Triple<String, String, String>?>(null) }
-    GLoad(g, g.view("account", p), { vm.load("account", p) }) { j ->
+    val skel: @Composable () -> Unit = {
+        KSkeleton {
+            val head: @Composable () -> Unit = { if (asCard) KSkelCard(3) else KSkelHero(KTint.Sand) }
+            if (wide) KTwoPane(
+                left = { if (heroHere) head(); KSkelSection(); KSkelRows(3) },
+                right = { KSkelCard(4) },
+            ) else {
+                if (heroHere) head()
+                KSkelSection()
+                KSkelRows(3)
+                KSkelCard(4)
+            }
+        }
+    }
+    GLoad(g, g.view("account", p), { vm.load("account", p) }, skel) { j ->
         val a = GAccount.of(j.obj("account"))
         val side: @Composable () -> Unit = {
             AcctSide(j, a, g, vm, cid, onEdit = { edit = true }, onNewTok = { newTok = true }, onToken = { token = it }, onTh = { th = it })
@@ -420,8 +465,19 @@ private fun AcctMain(j: JSONObject, a: GAccount, nav: NavHostController, cid: St
     val alerts = j.arr("alerts").mapObj(GAlert::of)
     KSection("Open alerts".t(), trailing = if (alerts.isNotEmpty()) { { KPill(alerts.size.toString(), KKind.NEUTRAL, icon = null) } } else null)
     GAlertList(alerts, nav, "No open alerts".t(), showAccount = false)
-    val camps = j.arr("campaigns").mapObj { it }
-    KSection("Campaigns".t(), trailing = if (cur.isNotBlank()) { { KPill(cur, KKind.NEUTRAL, icon = null) } } else null)
+    // sort: default = server ka order (chalu pehle, phir kal ka kharcha)
+    val sort = rememberKSort("status")
+    val opts = listOf("status" to "Status".t(), "today" to "Spend today".t(), "installs" to "Installs".t(), "name" to "Name".t())
+    val camps = j.arr("campaigns").mapObj { it }.let { l ->
+        when {
+            sort.isDefault -> l
+            sort.key == "today" -> l.kSorted(sort.desc) { it.dn("spend_today") }
+            sort.key == "installs" -> l.kSorted(sort.desc) { it.dn("installs_yesterday") }
+            sort.key == "name" -> l.kSorted(sort.desc) { it.s("name").ifBlank { it.s("campaign_id") }.lowercase() }
+            else -> l.kSorted(sort.desc) { if (it.s("status") == "ENABLED") 1 else 0 }
+        }
+    }
+    GSortSection("Campaigns".t(), sort, opts, extra = if (cur.isNotBlank()) { { KPill(cur, KKind.NEUTRAL, icon = null) } } else null)
     KCard(list = true) {
         if (camps.isEmpty()) KEmpty("No campaign data".t())
         camps.forEachIndexed { i, cp ->
@@ -451,6 +507,30 @@ private fun AcctMain(j: JSONObject, a: GAccount, nav: NavHostController, cid: St
     val scan = a.lastScanAt
     KSection("Checks".t(), trailing = if (scan != null) { { GTxt("Scan".t() + " " + gWhen(scan), 13.sp, c.ink3, lh = 18.sp, maxLines = 1) } } else null)
     KCard(list = true) { ChecksList(j.optJSONObject("checks")) }
+}
+
+/** Ad group / desh table: default par server ka order (kharcha zyada -> kam). */
+private fun gSortTable(rows: List<JSONObject>, s: KSortState, name: (JSONObject) -> String): List<JSONObject> = when {
+    s.isDefault -> rows
+    s.key == "installs" -> rows.kSorted(s.desc) { it.dn("installs") }
+    s.key == "cpi" -> rows.kSorted(s.desc) { it.dn("cpi") }
+    s.key == "ctr" -> rows.kSorted(s.desc) { it.dn("ctr") }
+    s.key == "name" -> rows.kSorted(s.desc) { name(it).lowercase() }
+    else -> rows.kSorted(s.desc) { it.dn("cost") }
+}
+
+/** List section: heading + daayein (extra +) Sort button; sort default se alag ho to heading ke neeche pill (tap = wahi menu). */
+@Composable
+private fun GSortSection(
+    title: String, sort: KSortState, opts: List<Pair<String, String>>, kinds: Map<String, KSortKind> = emptyMap(), extra: (@Composable () -> Unit)? = null,
+) {
+    KSection(title, trailing = {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            extra?.invoke()
+            KSortButton(sort, opts, kinds)
+        }
+    })
+    KSortPill(sort, opts, kinds)
 }
 
 /** Data sources, Google Ads emails, account ki jankari, switches, limits. */
@@ -565,6 +645,7 @@ fun GadsCampaignScreen(vm: GadsVm, nav: NavHostController, cid: String, camp: St
     var range by rememberSaveable { mutableStateOf("7d") }
     val p = mapOf("cid" to cid, "campaign_id" to camp, "range" to range)
     gPoll(60_000L, p, reload) { vm.load("campaign", p) }
+    KLoadOnChange(range)   // range chip = upar ki line
     var th by remember { mutableStateOf<Triple<String, String, String>?>(null) }
     // range badalne par purana data dikhta rahe jab tak naya na aaye
     val j0 = g.view("campaign", p) ?: CAMP_RANGES.firstNotNullOfOrNull { g.view("campaign", p + ("range" to it.first)) }
@@ -578,7 +659,7 @@ fun GadsCampaignScreen(vm: GadsVm, nav: NavHostController, cid: String, camp: St
     }
     if (isWide()) {
         KScreen(top = bar) {
-            GLoad(g, j0, retry) { j ->
+            GLoad(g, j0, retry, { GDetailSkel(true) }) { j ->
                 KTwoPane(
                     left = { CampHero(j, g); CampMain(j) },
                     right = { CampSide(j, cid, camp, range, onRange, nav, onTh) },
@@ -586,8 +667,8 @@ fun GadsCampaignScreen(vm: GadsVm, nav: NavHostController, cid: String, camp: St
             }
         }
     } else {
-        KScreen(top = { bar(); if (j0 != null) CampHero(j0, g) }) {
-            GLoad(g, j0, retry) { j ->
+        KScreen(top = { bar(); if (j0 != null) CampHero(j0, g) else if (gSkelOn(g, j0)) KSkelHero(KTint.Sand) }) {
+            GLoad(g, j0, retry, { GDetailSkel(false) }) { j ->
                 CampMain(j)
                 CampSide(j, cid, camp, range, onRange, nav, onTh)
             }
@@ -687,8 +768,12 @@ private fun CampSide(
     }
     val rr = j.arr("range")
     val rangeTxt = if (rr.length() >= 2) fmtDay(rr.optString(0)) + " – " + fmtDay(rr.optString(1)) else null
-    KSection("Ad groups".t(), trailing = if (rangeTxt != null) { { GTxt(rangeTxt, 13.sp, c.ink3, lh = 18.sp, maxLines = 1) } } else null)
-    val ags = j.arr("ad_groups").mapObj { it }
+    // ad groups / desh: default = server ka order (kharcha zyada -> kam)
+    val agSort = rememberKSort("spend")
+    val agOpts = listOf("spend" to "Spend".t(), "installs" to "Installs".t(), "cpi" to "CPI", "ctr" to "CTR", "name" to "Name".t())
+    val tblKinds = mapOf("cpi" to KSortKind.NUM_LOW)
+    GSortSection("Ad groups".t(), agSort, agOpts, tblKinds, extra = if (rangeTxt != null) { { GTxt(rangeTxt, 13.sp, c.ink3, lh = 18.sp, maxLines = 1) } } else null)
+    val ags = gSortTable(j.arr("ad_groups").mapObj { it }, agSort) { it.s("name").ifBlank { it.s("ad_group_id") } }
     KCard(padding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
         GTable(
             listOf("Ad group".t(), "Spend".t(), "Installs".t(), "CPI", "CTR"),
@@ -697,13 +782,15 @@ private fun CampSide(
         )
     }
     val ccT = j.obj("country_targets")
-    val geo = j.arr("countries").mapObj { it }
+    val geoSort = rememberKSort("spend")
+    val geoOpts = listOf("spend" to "Spend".t(), "installs" to "Installs".t(), "cpi" to "CPI", "name" to "Country".t())
+    val geo = gSortTable(j.arr("countries").mapObj { it }, geoSort) { it.s("country") }
     val cpiCol = geo.map { r ->
         val tg = ccT.dn(r.s("country"))
         val v = r.dn("cpi")
         if (tg != null && v != null && v > tg) c.red else Color.Unspecified
     }
-    KSection("Countries".t())
+    GSortSection("Countries".t(), geoSort, geoOpts, tblKinds + ("name" to KSortKind.TEXT))
     KCard(padding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
         GTable(
             listOf("Country".t(), "Spend".t(), "Installs".t(), "CPI", "Target".t()),
@@ -772,14 +859,14 @@ fun GadsRunScreen(vm: GadsVm, nav: NavHostController, id: Long) {
     }
     if (isWide()) {
         KScreen(top = bar) {
-            GLoad(g, j0, retry) { j ->
+            GLoad(g, j0, retry, { GDetailSkel(true) }) { j ->
                 val r = GRun.of(j.obj("run"))
                 KTwoPane(left = { RunHero(r); RunMain(r, running) }, right = { RunSide(j, r, nav) })
             }
         }
     } else {
-        KScreen(top = { bar(); if (r0 != null) RunHero(r0) }) {
-            GLoad(g, j0, retry) { j ->
+        KScreen(top = { bar(); if (r0 != null) RunHero(r0) else if (gSkelOn(g, j0)) KSkelHero(KTint.Sand) }) {
+            GLoad(g, j0, retry, { GDetailSkel(false) }) { j ->
                 val r = GRun.of(j.obj("run"))
                 RunMain(r, running)
                 RunSide(j, r, nav)
@@ -869,7 +956,7 @@ fun SettingsTab(g: GState, vm: GadsVm, nav: NavHostController, reload: Int, onTo
     var num0 by remember { mutableStateOf<Pair<String, String>?>(null) }
     var simCid by remember { mutableStateOf("") }
     var add by remember { mutableStateOf(false) }
-    GLoad(g, g.view("settings"), { vm.load("settings") }) { j ->
+    GLoad(g, g.view("settings"), { vm.load("settings") }, { GSkel(5, lead = false) }) { j ->
         val c = Mfc.c
         val set = j.obj("settings")
         val setOn = { k: String -> set.s(k) == "1" }

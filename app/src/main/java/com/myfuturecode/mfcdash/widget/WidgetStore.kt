@@ -114,8 +114,7 @@ internal object WidgetStore {
         val o = opts(ctx, kind, wid)
         val loggedIn = app?.prefs?.hasLogin == true
         val appTheme = app?.prefs?.theme ?: "light"
-        val target = app?.prefs?.roasTarget ?: 1.5
         val key = o.dataKey(kind)
-        return wView(kind, o, snap(ctx, key), loggedIn, appTheme, target, busy, failed(ctx, key))
+        return wView(kind, o, snap(ctx, key), loggedIn, appTheme, busy, failed(ctx, key))
     }
 }

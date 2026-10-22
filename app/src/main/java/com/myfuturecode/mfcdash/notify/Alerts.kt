@@ -32,12 +32,14 @@ import java.util.concurrent.TimeUnit
  * Notifications: server (api/alerts.php) rules chalata hai, app sirf naye alerts uthakar notification dikhata hai.
  *  - App khuli ho: har refresh (20 sec) par check
  *  - App band ho: WorkManager har 15 min (Android ki minimum) — phone ki battery setting "unrestricted" rakho
- * 3 channels: Urgent (awaaz + vibration), Dhyan do (normal), Info (chup-chaap).
+ * 4 channels: Urgent (awaaz + vibration), Dhyan do (normal), Info (chup-chaap), Play Console (naya version live / Play mail, normal awaaz).
+ * Naye rules (new_version, play_mail) bhi isi app_alerts feed se aate hain; tap ka rasta AlertItem.route deta hai.
  */
 object Notify {
     const val CH_URGENT = "alerts_urgent"
     const val CH_WARN = "alerts_warn"
     const val CH_INFO = "alerts_info"
+    const val CH_PLAY = "alerts_play"
     private val BRAND = 0xFF4A1FC4.toInt()
 
     fun channels(ctx: Context) {
@@ -53,6 +55,9 @@ object Notify {
         nm.createNotificationChannel(NotificationChannel(CH_INFO, "Info", NotificationManager.IMPORTANCE_LOW).apply {
             description = "Daily brief, records, new campaign"
         })
+        nm.createNotificationChannel(NotificationChannel(CH_PLAY, "Play Console", NotificationManager.IMPORTANCE_DEFAULT).apply {
+            description = "New version live, Play Console emails"
+        })
     }
 
     fun allowed(ctx: Context): Boolean =
@@ -60,7 +65,9 @@ object Notify {
 
     fun show(ctx: Context, a: AlertItem) {
         if (!allowed(ctx)) return
-        val ch = when (a.level) { 3 -> CH_URGENT; 2 -> CH_WARN; else -> CH_INFO }
+        // Play wale info (naya version live, approve / live mail) chup-chaap nahi: apna channel
+        val play = a.rule == "new_version" || a.rule == "play_mail"
+        val ch = when (a.level) { 3 -> CH_URGENT; 2 -> CH_WARN; else -> if (play) CH_PLAY else CH_INFO }
         val prefix = when (a.level) { 3 -> "🔴 URGENT · "; 2 -> "🟠 "; else -> "" }
         val intent = Intent(ctx, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -80,7 +87,7 @@ object Notify {
             .setContentIntent(pi)
             .setAutoCancel(true)
             .setWhen(System.currentTimeMillis())
-            .setPriority(when (a.level) { 3 -> NotificationCompat.PRIORITY_MAX; 2 -> NotificationCompat.PRIORITY_DEFAULT; else -> NotificationCompat.PRIORITY_LOW })
+            .setPriority(when { a.level == 3 -> NotificationCompat.PRIORITY_MAX; a.level == 2 || play -> NotificationCompat.PRIORITY_DEFAULT; else -> NotificationCompat.PRIORITY_LOW })
         if (a.level == 3) b.setDefaults(NotificationCompat.DEFAULT_ALL).setCategory(NotificationCompat.CATEGORY_ALARM)
         if (a.appName.isNotBlank()) b.setSubText(a.appName)
         try { NotificationManagerCompat.from(ctx).notify((a.id % Int.MAX_VALUE).toInt(), b.build()) } catch (e: SecurityException) { }

@@ -21,12 +21,15 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Mail
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
@@ -74,6 +77,7 @@ import com.myfuturecode.mfcdash.data.HBuild
 import com.myfuturecode.mfcdash.data.HEvent
 import com.myfuturecode.mfcdash.data.HIssue
 import com.myfuturecode.mfcdash.data.HRun
+import com.myfuturecode.mfcdash.data.PageLoad
 import com.myfuturecode.mfcdash.ui.HState
 import com.myfuturecode.mfcdash.ui.HealthVm
 import com.myfuturecode.mfcdash.ui.components.AppIcon
@@ -89,17 +93,28 @@ import com.myfuturecode.mfcdash.ui.kit.KIcons
 import com.myfuturecode.mfcdash.ui.kit.KKind
 import com.myfuturecode.mfcdash.ui.kit.KKv
 import com.myfuturecode.mfcdash.ui.kit.KListDivider
-import com.myfuturecode.mfcdash.ui.kit.KLoading
+import com.myfuturecode.mfcdash.ui.kit.KSkelBlock
+import com.myfuturecode.mfcdash.ui.kit.KSkelCard
+import com.myfuturecode.mfcdash.ui.kit.KSkelCircle
+import com.myfuturecode.mfcdash.ui.kit.KSkelHero
+import com.myfuturecode.mfcdash.ui.kit.KSkelLine
+import com.myfuturecode.mfcdash.ui.kit.KSkelRows
+import com.myfuturecode.mfcdash.ui.kit.KSkeleton
 import com.myfuturecode.mfcdash.ui.kit.KPageTokens
 import com.myfuturecode.mfcdash.ui.kit.KPill
 import com.myfuturecode.mfcdash.ui.kit.KProgress
 import com.myfuturecode.mfcdash.ui.kit.KRow
+import com.myfuturecode.mfcdash.ui.kit.KScreen
 import com.myfuturecode.mfcdash.ui.kit.KStatus
 import com.myfuturecode.mfcdash.ui.kit.KSwitch
+import com.myfuturecode.mfcdash.ui.kit.KTint
+import com.myfuturecode.mfcdash.ui.kit.KTwoPane
 import com.myfuturecode.mfcdash.ui.kit.fg
+import com.myfuturecode.mfcdash.ui.kit.isWide
 import com.myfuturecode.mfcdash.ui.kit.shape
 import com.myfuturecode.mfcdash.ui.theme.Mfc
 import com.myfuturecode.mfcdash.util.agoText
+import com.myfuturecode.mfcdash.util.fmtDay
 import com.myfuturecode.mfcdash.util.num
 import com.myfuturecode.mfcdash.util.pct
 import com.myfuturecode.mfcdash.util.t
@@ -191,6 +206,7 @@ internal fun hIntegIcon(kind: String): ImageVector = when (kind) {
     "ai" -> KIcons.Spark
     "email" -> KIcons.Send
     "github" -> KIcons.Fix
+    "playmail" -> Icons.Outlined.Mail
     else -> KIcons.Info
 }
 
@@ -222,7 +238,8 @@ fun openUrl(ctx: Context, url: String) {
 fun Poll(ms: Long, vararg keys: Any?, tick: () -> Unit) {
     val t by rememberUpdatedState(tick)
     val life = LocalLifecycleOwner.current.lifecycle
-    LaunchedEffect(life, *keys) { life.repeatOnLifecycle(Lifecycle.State.STARTED) { while (true) { t(); delay(ms) } } }
+    // har tick = dikh rahi screen ka sync: upar ki line, par 15 s me ek hi baar (PageLoad.startAuto; tez job poll chup)
+    LaunchedEffect(life, *keys) { life.repeatOnLifecycle(Lifecycle.State.STARTED) { while (true) { PageLoad.startAuto(); t(); delay(ms) } } }
 }
 
 // ---------------------------------------------------------------- top bar / frame
@@ -236,7 +253,8 @@ fun HTopBar(title: String, sub: String?, nav: NavHostController, busy: Boolean, 
     })
 }
 
-fun updatedText(h: HState) = if (h.lastOk == 0L) "Loading…".t() else "Updated".t() + " " + agoText(h.lastOk)
+// pehli baar khaali (neeche skeleton dikhta hai), warna "Updated 2 min pehle"
+fun updatedText(h: HState) = if (h.lastOk == 0L) "" else "Updated".t() + " " + agoText(h.lastOk)
 
 /** api/health.php server par nahi mila (404) ya koi aur error. */
 @Composable
@@ -261,9 +279,40 @@ fun HProblem(h: HState, onRetry: () -> Unit) {
     }
 }
 
+/** Pehli baar data aa raha: list jaisa skeleton (spinner nahi). rows = kitni lines, lead = gol icon wali. */
 @Composable
-fun Loading() {
-    KLoading()
+fun Loading(rows: Int = 4, lead: Boolean = true) {
+    KSkelRows(rows, lead = lead)
+}
+
+/** Alag alag cards wali list (AI fixes, builds) aane tak: n cards, har ek me title + lines. */
+@Composable
+fun HSkelCards(n: Int = 3, lines: Int = 3) {
+    KSkeleton { repeat(n) { KSkelCard(lines) } }
+}
+
+/**
+ * Detail screen (app / issue / run) ka data nahi: error = app bar + HProblem; warna (aa raha) Rose hero ka
+ * dhaancha + body (left / right, Fold par do column; phone par hero band me, body neeche).
+ */
+@Composable
+fun HDetailWait(
+    h: HState, bar: @Composable ColumnScope.() -> Unit, onRetry: () -> Unit,
+    left: @Composable ColumnScope.() -> Unit, right: @Composable ColumnScope.() -> Unit,
+) {
+    if (h.error != null) {
+        KScreen(top = bar) { HProblem(h, onRetry) }
+        return
+    }
+    if (isWide()) {
+        KScreen(top = bar) {
+            KSkeleton {
+                KTwoPane(left = { KSkelHero(KTint.Rose); left() }, right = right)
+            }
+        }
+    } else {
+        KScreen(top = { bar(); KSkelHero(KTint.Rose) }) { KSkeleton { left(); right() } }
+    }
 }
 
 /** Kit button (48dp). outlined = OUTLINE; color = rangeen bg (jaise laal "Hatao"). busy = spinner. */
@@ -457,6 +506,8 @@ fun AppRow(a: HApp, nav: NavHostController) {
     val st = statusText(a.status) + if (a.openIssues > 0) " · " + tf("%s open", a.openIssues) else ""
     val note = listOfNotNull(
         a.crashRate?.let { "Crash".t() + " " + pct(it, 2) }, a.anrRate?.let { "ANR " + pct(it, 2) },
+        // Google ka din (rate 1-2 din purana hota hai)
+        a.vitalsDay?.takeIf { a.crashRate != null || a.anrRate != null }?.let { fmtDay(it) },
         if (!a.monitoring) "monitoring off".t() else null, a.lastScanAt?.let { "scan".t() + " " + ago(it) },
     ).joinToString(" · ").ifBlank { "not scanned yet".t() }
     HRow3(
@@ -683,6 +734,32 @@ fun PublishDialog(b: HBuild, onDismiss: () -> Unit, onConfirm: (String, Double) 
 
 // ---------------------------------------------------------------- "Naya kaam" (manual task → AI → test APK)
 
+/** Consoles aane tak sheet ka dhaancha: Console label + chips, App label + 3 app lines (logo + naam + haal). */
+@Composable
+private fun TaskSheetSkel() {
+    KSkeleton(Modifier.padding(top = 12.dp)) {
+        KSkelLine(72.dp, 12.dp)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf(88.dp, 72.dp, 96.dp).forEach { KSkelBlock(36.dp, RoundedCornerShape(18.dp), Modifier.width(it)) }
+        }
+        KSkelLine(40.dp, 12.dp, Modifier.padding(top = 4.dp))
+        repeat(3) { i ->
+            Row(
+                Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                KSkelCircle(36.dp)
+                Column(Modifier.weight(1f)) {
+                    KSkelLine(listOf(.55f, .68f, .46f)[i], 14.dp)
+                    KSkelLine(.4f, 11.dp, Modifier.padding(top = 7.dp))
+                }
+                KSkelCircle(20.dp)
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun TaskSheet(h: HState, vm: HealthVm, nav: NavHostController, prePkg: String?, onClose: () -> Unit) {
@@ -700,7 +777,7 @@ fun TaskSheet(h: HState, vm: HealthVm, nav: NavHostController, prePkg: String?, 
             Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(bottom = 12.dp)) {
                 Text("New task for AI".t(), color = c.ink, style = hStyle(20.sp, FontWeight.Bold, 26.sp))
                 if (data == null) {
-                    KLoading()
+                    TaskSheetSkel()
                     return@Column
                 }
                 val cons = data.consoles.map { it.id to it.name } +

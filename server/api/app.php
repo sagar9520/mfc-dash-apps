@@ -78,6 +78,11 @@ $liveMin = (int)cfg('live_minutes') ?: 6;
 $pf = $app === 'all' ? '' : ' AND pkg = :pkg';
 $pp = $app === 'all' ? [] : [':pkg' => $app];
 $gd = [':d1' => $d1, ':d2' => $d2];
+// Cohort window (retention + ROAS cohort): aaj / kal jaisi chhoti range me D1..D14 abhi bane hi nahi hote (sab khali dikhta tha),
+// isliye range 14 din se chhoti ho to range ke aakhri din tak ke pichhle 14 din ke installs lo. App ko cohort_from / cohort_to milta hai.
+$cd1 = $d1; $cd2 = $d2;
+if ((new DateTime($d1))->diff(new DateTime($d2))->days < 13) $cd1 = (new DateTime($d2))->modify('-13 day')->format('Y-m-d');
+$cg = [':d1' => $cd1, ':d2' => $cd2];
 
 function q(PDO $pdo, string $sql, array $p = []): array { $st = $pdo->prepare($sql); $st->execute($p); return $st->fetchAll(); }
 function q1(PDO $pdo, string $sql, array $p = []) { $st = $pdo->prepare($sql); $st->execute($p); $v = $st->fetchColumn(); return $v === false ? null : $v; }
@@ -110,7 +115,7 @@ $retSql = "SELECT i.day, IF(d.src='google_ads','paid','organic') grp, COUNT(DIST
   LEFT JOIN day_user u14 ON u14.pkg=i.pkg AND u14.did=i.did AND u14.day = DATE_ADD(i.day, INTERVAL 14 DAY)
   WHERE i.day >= :d1 AND i.day <= :d2" . ($app === 'all' ? '' : ' AND i.pkg = :pkg') . "
   GROUP BY i.day, grp ORDER BY i.day";
-$ret = q($pdo, $retSql, $gd + $pp);
+$ret = q($pdo, $retSql, $cg + $pp);
 $agg = ['all' => [], 'paid' => [], 'organic' => []];
 $days = [];
 $avail = fn(string $day, int $n) => (new DateTime($day))->modify("+$n day")->format('Y-m-d') <= $today;   // n-vaan din aa chuka?
@@ -133,6 +138,7 @@ foreach ($ret as $r) {
     unset($dd);
 }
 $pctOf = fn(array $a, int $n) => (($a["n$n"] ?? 0) > 0) ? $a["r$n"] / $a["n$n"] : null;
+$out['cohort_from'] = $cd1; $out['cohort_to'] = $cd2;
 $out['retention'] = [];
 foreach ($agg as $g => $a) {
     $out['retention'][] = ['cohort' => $g, 'installs' => (int)($a['installs'] ?? 0), 'd1' => $pctOf($a, 1), 'd3' => $pctOf($a, 3), 'd7' => $pctOf($a, 7), 'd14' => $pctOf($a, 14)];
@@ -142,15 +148,15 @@ $out['retention_days'] = array_values(array_map(fn($d) => ['day' => $d['day'], '
 
 // ---------------------------------------------------------------- campaign ROAS cohort (utm_campaign <-> Google Ads campaign naam)
 // 1) range mein install hue devices, campaign-wise (devices.utm_campaign; first_seen local din range mein)
-[$uf] = day_bounds_utc($d1);
-[, $ut] = day_bounds_utc($d2);
+[$uf] = day_bounds_utc($cd1);
+[, $ut] = day_bounds_utc($cd2);
 $camp = [];
 foreach (q($pdo, "SELECT pkg, utm_campaign c, COUNT(*) n FROM devices WHERE utm_campaign <> '' AND first_seen >= :f AND first_seen < :t$pf GROUP BY pkg, utm_campaign", [':f' => $uf, ':t' => $ut] + $pp) as $r) {
     $camp[$r['pkg'] . '|' . $r['c']] = ['campaign' => $r['c'], 'pkg' => $r['pkg'], 'installs' => (int)$r['n'], 'spend' => 0.0, 'gads_conv' => 0.0, 'gads_clicks' => 0,
         'rev_d0' => 0.0, 'rev_d1' => 0.0, 'rev_d3' => 0.0, 'rev_d7' => 0.0, 'rev_total' => 0.0, 'pay_total' => 0.0, 'active_d1' => 0, 'active_d7' => 0];
 }
 // 2) spend: Google Ads campaign jiska naam utm_campaign se match (case-insensitive)
-foreach (q($pdo, "SELECT pkg, LOWER(TRIM(campaign)) c, campaign cname, SUM($CX) cost, SUM(conversions) conv, SUM(clicks) clicks FROM gads_campaign_day WHERE day>=:d1 AND day<=:d2$pf GROUP BY pkg, LOWER(TRIM(campaign))", $gd + $pp) as $r) {
+foreach (q($pdo, "SELECT pkg, LOWER(TRIM(campaign)) c, campaign cname, SUM($CX) cost, SUM(conversions) conv, SUM(clicks) clicks FROM gads_campaign_day WHERE day>=:d1 AND day<=:d2$pf GROUP BY pkg, LOWER(TRIM(campaign))", $cg + $pp) as $r) {
     $hit = null;
     foreach ($camp as $k => $c) if ($c['pkg'] === $r['pkg'] && strtolower(trim($c['campaign'])) === $r['c']) { $hit = $k; break; }
     if ($hit === null) { $hit = $r['pkg'] . '|' . $r['cname']; $camp[$hit] = $camp[$hit] ?? ['campaign' => $r['cname'], 'pkg' => $r['pkg'], 'installs' => 0, 'spend' => 0.0, 'gads_conv' => 0.0, 'gads_clicks' => 0,

@@ -58,6 +58,9 @@ import com.myfuturecode.mfcdash.ui.kit.KRow
 import com.myfuturecode.mfcdash.ui.kit.KScreen
 import com.myfuturecode.mfcdash.ui.kit.KSection
 import com.myfuturecode.mfcdash.ui.kit.KSectionLink
+import com.myfuturecode.mfcdash.ui.kit.KSkelCard
+import com.myfuturecode.mfcdash.ui.kit.KSkelRows
+import com.myfuturecode.mfcdash.ui.kit.KSkelSection
 import com.myfuturecode.mfcdash.ui.kit.KSplit
 import com.myfuturecode.mfcdash.ui.kit.KTint
 import com.myfuturecode.mfcdash.ui.kit.KTwoPane
@@ -89,7 +92,16 @@ fun HealthIssueScreen(vm: HealthVm, nav: NavHostController, id: Long) {
         )
     }
     if (d == null) {
-        KScreen(top = bar) { if (h.error != null) HProblem(h) { vm.loadIssue(id) } else Loading() }
+        // pehli baar: hero + app, jaankari, actions | AI / timeline ka dhaancha
+        HDetailWait(h, bar, { vm.loadIssue(id) }, left = {
+            KSkelRows(1, value = false)
+            KSkelCard(4, title = false)
+            KSkelSection(width = 70.dp)
+            KSkelCard(2, title = false)
+        }, right = {
+            KSkelSection(width = 110.dp)
+            KSkelCard(5)
+        })
     } else if (isWide()) {
         // Fold: baayein hero + app + actions + AI, daayein devices / stack / fixes / builds / timeline
         KScreen(top = bar) {

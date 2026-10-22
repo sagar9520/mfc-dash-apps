@@ -1,6 +1,20 @@
 package com.myfuturecode.mfcdash.widget
 
 import com.myfuturecode.mfcdash.App
+import com.myfuturecode.mfcdash.data.AlertCard
+import com.myfuturecode.mfcdash.data.ApiException
+import com.myfuturecode.mfcdash.data.DashData
+import com.myfuturecode.mfcdash.data.GAccount
+import com.myfuturecode.mfcdash.data.IssueApp
+import com.myfuturecode.mfcdash.data.TopAccount
+import com.myfuturecode.mfcdash.data.TopLiveApp
+import com.myfuturecode.mfcdash.data.alertsTop
+import com.myfuturecode.mfcdash.data.healthTop
+import com.myfuturecode.mfcdash.data.monitoredAccounts
+import com.myfuturecode.mfcdash.data.topAccountName
+import com.myfuturecode.mfcdash.data.topAccounts
+import com.myfuturecode.mfcdash.data.topLiveApps
+import com.myfuturecode.mfcdash.data.withLive30
 import com.myfuturecode.mfcdash.ui.kit.KKind
 import com.myfuturecode.mfcdash.util.arr
 import com.myfuturecode.mfcdash.util.b
@@ -8,6 +22,11 @@ import com.myfuturecode.mfcdash.util.d
 import com.myfuturecode.mfcdash.util.dn
 import com.myfuturecode.mfcdash.util.mapObj
 import com.myfuturecode.mfcdash.util.s
+import com.myfuturecode.mfcdash.util.sn
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import org.json.JSONArray
 import org.json.JSONObject
 import java.text.SimpleDateFormat
@@ -16,78 +35,104 @@ import java.util.Locale
 
 // Widget ka data: server se laao, chhota "snap" banao (sirf numbers + naam), JSON me cache.
 // Label / rang render ke waqt bante hain, isliye bhasha ya theme badle to purana snap bhi chalta hai.
+// Top 3 ka hisaab data/TopCards.kt me (Home bhi wahi use kare).
 
-/** Paisa widget: chune samay + apps ka munafa, kamai, kharcha, ROAS, top / loss app. */
+/** Paisa widget: chune samay + apps ka munafa, kamai, kharcha, ROAS, abhi live users. allApps = picker ki list. */
 internal class PaisaSnap(
-    val at: Long, val profit: Double, val earned: Double, val spend: Double, val roas: Double?,
-    val wins: Int, val losses: Int, val apps: Int, val withAds: Int,
-    val topName: String?, val topProfit: Double?, val lossName: String?, val lossProfit: Double?,
+    val at: Long, val profit: Double, val earned: Double, val spend: Double, val roas: Double?, val live: Double?,
     val allApps: List<Pair<String, String>>,
 ) {
     fun toJson(): JSONObject = JSONObject().put("at", at).putD("profit", profit).putD("earned", earned).putD("spend", spend)
-        .putD("roas", roas).put("wins", wins).put("losses", losses).put("apps", apps).put("with_ads", withAds)
-        .putS("top_name", topName).putD("top_profit", topProfit).putS("loss_name", lossName).putD("loss_profit", lossProfit)
-        .put("all", pairs(allApps))
+        .putD("roas", roas).putD("live", live).put("all", pairs(allApps))
 
     companion object {
         fun of(j: JSONObject?): PaisaSnap? {
             if (j == null || !j.has("at")) return null
             return PaisaSnap(
                 j.optLong("at"), j.d("profit"), j.d("earned"), j.d("spend"), j.dn("roas")?.takeIf { it.isFinite() },
-                j.d("wins").toInt(), j.d("losses").toInt(), j.d("apps").toInt(), j.d("with_ads").toInt(),
-                j.s("top_name").ifBlank { null }, j.dn("top_profit"), j.s("loss_name").ifBlank { null }, j.dn("loss_profit"),
-                unpairs(j.optJSONArray("all")),
+                j.dn("live")?.takeIf { it.isFinite() }, unpairs(j.optJSONArray("all")),
             )
         }
     }
 }
 
-/** Google Ads widget: aaj ka kharcha (har currency alag), dhyan wale accounts, pace, kul ₹. */
+/**
+ * Ads + Live widget: aaj ke top 3 Google Ads accounts (budget %), top 3 live apps (30 min + ROAS).
+ * set = false: Google Ads monitor server par set nahi. all = picker ke accounts.
+ */
 internal class AdsSnap(
-    val at: Long, val spend: List<Pair<String, Double>>, val watch: List<String>, val bad: Int, val pace: Double?,
-    val accounts: Int, val fine: Int, val totalInr: Double?, val all: List<Pair<String, String>>,
+    val at: Long, val set: Boolean, val accs: List<TopAccount>, val apps: List<TopLiveApp>, val all: List<Pair<String, String>>,
 ) {
     fun toJson(): JSONObject {
-        val sp = JSONArray()
-        spend.forEach { (c, v) -> if (v.isFinite()) sp.put(JSONArray().put(c).put(v)) }
-        return JSONObject().put("at", at).put("spend", sp).put("watch", JSONArray(watch)).put("bad", bad).putD("pace", pace)
-            .put("accounts", accounts).put("fine", fine).putD("total_inr", totalInr).put("all", pairs(all))
+        val a = JSONArray()
+        accs.forEach { x ->
+            a.put(JSONObject().put("cid", x.cid).put("name", x.name).put("cur", x.currency).putD("spend", x.spend)
+                .putD("inr", x.spendInr).putD("budget", x.budget).putD("pct", x.budgetPct))
+        }
+        val p = JSONArray()
+        apps.forEach { x ->
+            p.put(JSONObject().put("pkg", x.pkg).put("name", x.name).putD("l6", x.live6).putD("l30", x.live30).putD("roas", x.roas))
+        }
+        return JSONObject().put("at", at).put("set", set).put("accs", a).put("apps", p).put("all", pairs(all))
     }
 
     companion object {
         fun of(j: JSONObject?): AdsSnap? {
             if (j == null || !j.has("at")) return null
-            val sp = j.optJSONArray("spend")
-            val spend = if (sp == null) emptyList() else (0 until sp.length()).mapNotNull { i ->
-                sp.optJSONArray(i)?.let { a -> a.optString(0) to a.optDouble(1, 0.0) }
+            val accs = j.arr("accs").mapObj { x ->
+                TopAccount(x.s("cid"), x.s("name"), x.s("cur"), x.d("spend"), x.fin("inr"), x.fin("budget"), x.fin("pct"))
             }
-            val w = j.optJSONArray("watch")
-            return AdsSnap(
-                j.optLong("at"), spend, if (w == null) emptyList() else (0 until w.length()).map { w.optString(it) },
-                j.d("bad").toInt(), j.dn("pace")?.takeIf { it.isFinite() }, j.d("accounts").toInt(), j.d("fine").toInt(),
-                j.dn("total_inr")?.takeIf { it.isFinite() }, unpairs(j.optJSONArray("all")),
+            val apps = j.arr("apps").mapObj { x -> TopLiveApp(x.s("pkg"), x.s("name"), x.d("l6"), x.fin("l30"), x.fin("roas")) }
+            return AdsSnap(j.optLong("at"), !j.has("set") || j.b("set"), accs, apps, unpairs(j.optJSONArray("all")))
+        }
+    }
+}
+
+/** App Health widget: kul / issue wale / theek apps + sabse zyada issue wale 3 apps. consoles = picker ki list. */
+internal class HealthSnap(
+    val at: Long, val total: Int, val bad: Int, val fine: Int, val top: List<IssueApp>, val consoles: List<Pair<String, String>>,
+) {
+    fun toJson(): JSONObject {
+        val a = JSONArray()
+        top.forEach { x -> a.put(JSONObject().put("pkg", x.pkg).put("name", x.name).put("open", x.open).put("p0", x.p0)) }
+        return JSONObject().put("at", at).put("total", total).put("bad", bad).put("fine", fine).put("top", a).put("consoles", pairs(consoles))
+    }
+
+    companion object {
+        fun of(j: JSONObject?): HealthSnap? {
+            if (j == null || !j.has("at")) return null
+            return HealthSnap(
+                j.optLong("at"), j.d("total").toInt(), j.d("bad").toInt(), j.d("fine").toInt(),
+                j.arr("top").mapObj { x -> IssueApp(x.s("pkg"), x.s("name"), x.d("open").toInt(), x.b("p0")) },
+                unpairs(j.optJSONArray("consoles")),
             )
         }
     }
 }
 
-/** App Health widget: theek / kul apps, P0, problem wale apps, AI fix, khule issues. */
-internal class HealthSnap(
-    val at: Long, val fine: Int, val total: Int, val p0: Int, val worst: List<String>, val fixes: Int, val issues: Int,
-    val consoles: List<Pair<String, String>>,
-) {
-    fun toJson(): JSONObject = JSONObject().put("at", at).put("fine", fine).put("total", total).put("p0", p0)
-        .put("worst", JSONArray(worst)).put("fixes", fixes).put("issues", issues).put("consoles", pairs(consoles))
+/** Alerts widget: naye (unread) kitne + sabse naye 3 khule alerts. missing = server par alerts.php nahi. */
+internal class AlertsSnap(val at: Long, val unread: Int, val open: Int, val items: List<AlertCard>, val missing: Boolean) {
+    fun toJson(): JSONObject {
+        val a = JSONArray()
+        items.forEach { x ->
+            a.put(
+                JSONObject().put("id", x.id).put("kind", x.kind.name).put("app", x.app).put("campaign", x.campaign)
+                    .put("title", x.title).put("title_hi", x.titleHi).put("label", x.label).putS("arg", x.arg),
+            )
+        }
+        return JSONObject().put("at", at).put("unread", unread).put("open", open).put("items", a).put("missing", missing)
+    }
 
     companion object {
-        fun of(j: JSONObject?): HealthSnap? {
+        fun of(j: JSONObject?): AlertsSnap? {
             if (j == null || !j.has("at")) return null
-            val w = j.optJSONArray("worst")
-            return HealthSnap(
-                j.optLong("at"), j.d("fine").toInt(), j.d("total").toInt(), j.d("p0").toInt(),
-                if (w == null) emptyList() else (0 until w.length()).map { w.optString(it) },
-                j.d("fixes").toInt(), j.d("issues").toInt(), unpairs(j.optJSONArray("consoles")),
-            )
+            val items = j.arr("items").mapObj { x ->
+                AlertCard(
+                    x.optLong("id"), KKind.entries.firstOrNull { it.name == x.s("kind") } ?: KKind.NEUTRAL,
+                    x.s("app"), x.s("campaign"), x.s("title"), x.s("title_hi"), x.s("label"), x.sn("arg"),
+                )
+            }
+            return AlertsSnap(j.optLong("at"), j.d("unread").toInt(), j.d("open").toInt(), items, j.b("missing"))
         }
     }
 }
@@ -95,6 +140,7 @@ internal class HealthSnap(
 // JSONObject.put(Double) NaN / Infinity par exception deta hai: aise number chhod do
 private fun JSONObject.putD(k: String, v: Double?): JSONObject = if (v != null && v.isFinite()) put(k, v) else this
 private fun JSONObject.putS(k: String, v: String?): JSONObject = if (v != null) put(k, v) else this
+private fun JSONObject.fin(k: String): Double? = dn(k)?.takeIf { it.isFinite() }
 
 private fun pairs(l: List<Pair<String, String>>): JSONArray {
     val a = JSONArray()
@@ -105,29 +151,45 @@ private fun pairs(l: List<Pair<String, String>>): JSONArray {
 private fun unpairs(a: JSONArray?): List<Pair<String, String>> =
     if (a == null) emptyList() else (0 until a.length()).mapNotNull { i -> a.optJSONArray(i)?.let { it.optString(0) to it.optString(1) } }
 
+/**
+ * Ek sync ka chhota cache: data.php (sab apps, aaj) Paisa aur Ads + Live dono ko chahiye, ek hi baar laao.
+ * Ek ke baad ek chalta hai (thread-safe nahi).
+ */
+internal class WFetch(private val app: App) {
+    private val dash = HashMap<String, DashData>()
+
+    suspend fun data(range: String, from: String? = null, to: String? = null): DashData {
+        val k = "$range|$from|$to"
+        dash[k]?.let { return it }
+        val d = app.api.data("all", range, from, to)
+        if (d.r > 0 && d.r.isFinite()) WidgetStore.saveRate(app, d.r)
+        dash[k] = d
+        return d
+    }
+}
+
 /** Server se ek widget ka data. Fail ho to exception (cache wala snap rehta hai). */
 internal object WidgetData {
 
-    /** lists = Widgets screen ke liye consoles ki list bhi (Health). */
-    suspend fun fetch(app: App, kind: WKind, o: WOpts, lists: Boolean = false): JSONObject = when (kind) {
-        WKind.PAISA -> paisa(app, o).toJson()
-        WKind.ADS -> ads(app, o).toJson()
-        WKind.HEALTH -> health(app, o, lists).toJson()
+    suspend fun fetch(app: App, kind: WKind, o: WOpts, f: WFetch = WFetch(app)): JSONObject = when (kind) {
+        WKind.PAISA -> paisa(o, f).toJson()
+        WKind.ADS -> ads(app, o, f).toJson()
+        WKind.HEALTH -> health(app, o).toJson()
+        WKind.ALERTS -> alerts(app, o).toJson()
     }
 
     // ---- Paisa (api/data.php, sab apps; chune apps phone par jode jaate hain)
 
-    private suspend fun paisa(app: App, o: WOpts): PaisaSnap {
+    private suspend fun paisa(o: WOpts, f: WFetch): PaisaSnap {
         val (range, from, to) = rangeArgs(o.range)
-        val d = app.api.data("all", range, from, to)
+        val d = f.data(range, from, to)
         val r = d.r
-        if (r > 0 && r.isFinite()) WidgetStore.saveRate(app, r)
         val chosen = o.pick.toSet()
-        val per = if (chosen.isEmpty()) d.perApp else d.perApp.filter { it.pkg in chosen }
         val earned: Double
         val spend: Double
         val profit: Double
         val roas: Double?
+        val live: Double
         if (chosen.isEmpty()) {
             // Home jaisa: Kamai = ad revenue + payments, kharcha = Google Ads
             val k = d.kpi
@@ -135,29 +197,21 @@ internal object WidgetData {
             spend = k.gadsCostInr
             profit = k.profitInr
             roas = k.roasTotal ?: (if (spend > 0) earned / spend else null)
+            live = d.liveTotal
         } else {
+            val per = d.perApp.filter { it.pkg in chosen }
             earned = per.sumOf { it.revInr(r) + it.purchaseInr }
             spend = per.sumOf { it.gadsCostInr }
             profit = earned - spend
             roas = if (spend > 0) earned / spend else null
+            live = chosen.sumOf { p -> d.liveByApp[p] ?: d.perApp.firstOrNull { it.pkg == p }?.live ?: 0.0 }
         }
-        val wins = per.filter { it.profit(r) > 0 }.sortedByDescending { it.profit(r) }
-        // loss app = kharcha > ₹50 aur ROAS < 100% (Home wala niyam)
-        val losses = per.filter { a -> a.gadsCostInr > 50 && (a.roas(r) ?: 1.0) < 1.0 }.sortedBy { it.profit(r) }
-        val top = wins.firstOrNull()
-        val loss = losses.firstOrNull()
         val all = (d.apps.map { it.pkg to it.name } + d.perApp.map { it.pkg to it.name })
             .filter { it.first.isNotBlank() }
             .map { (p, n) -> p to n.ifBlank { d.appName(p) } }
             .distinctBy { it.first }
             .sortedBy { it.second.lowercase() }
-        return PaisaSnap(
-            System.currentTimeMillis(), profit, earned, spend, roas?.takeIf { it.isFinite() },
-            wins.size, losses.size, per.size, per.count { it.gadsCostInr > 0 },
-            top?.let { it.name.ifBlank { d.appName(it.pkg) } }, top?.profit(r),
-            loss?.let { it.name.ifBlank { d.appName(it.pkg) } }, loss?.profit(r),
-            all,
-        )
+        return PaisaSnap(System.currentTimeMillis(), profit, earned, spend, roas?.takeIf { it.isFinite() }, live, all)
     }
 
     /** Widget ka samay -> data.php ka range (Is mahina = custom, 1 tareekh se aaj tak). */
@@ -174,97 +228,80 @@ internal object WidgetData {
         else -> Triple("today", null, null)
     }
 
-    // ---- Google Ads (api/gads_health.php?view=overview; sirf monitor wale accounts)
+    // ---- Ads + Live (gads_health.php?view=overview + data.php aaj + har top app ka app.php)
 
-    private suspend fun ads(app: App, o: WOpts): AdsSnap {
-        val j = app.api.gGet("overview")
-        val all = j.arr("accounts").mapObj { it }.filter { !it.has("monitoring") || it.b("monitoring") }
-        val chosen = o.pick.toSet()
-        val accs = if (chosen.isEmpty()) all else all.filter { it.s("cid") in chosen }
-        // har currency alag; ₹ pehle
-        val spend = accs.groupBy { cur(it) }
-            .map { (c, l) -> c to l.sumOf { a -> a.d("spend_today").takeIf { it.isFinite() } ?: 0.0 } }
-            .sortedWith(compareByDescending<Pair<String, Double>> { it.first == "INR" }.thenByDescending { it.second })
-        val kinds = accs.map { it to acctKind(it) }
-        val watch = kinds.filter { it.second != KKind.OK }.sortedBy { if (it.second == KKind.BAD) 0 else 1 }.map { name(it.first) }
-        // ₹ me kul: $ ho to dashboard ka rate (pehle se ho to wahi, warna ek baar data.php se)
-        val needRate = spend.any { it.first != "INR" }
-        val rate = if (!needRate) null else WidgetStore.rate(app, fresh = true)
-            ?: runCatching { app.api.data("all", "today").r }.getOrNull()?.takeIf { it > 0 && it.isFinite() }?.also { WidgetStore.saveRate(app, it) }
-            ?: WidgetStore.rate(app, fresh = false)
-        val inr = spend.map { (c, v) -> toInr(v, c, rate) }
-        val total = if (inr.isEmpty() || inr.any { it == null }) null else inr.sumOf { it ?: 0.0 }
-        return AdsSnap(
-            System.currentTimeMillis(), spend, watch, kinds.count { it.second == KKind.BAD }, pace(accs, rate),
-            accs.size, kinds.count { it.second == KKind.OK }, total, all.map { it.s("cid") to name(it) }.filter { it.first.isNotBlank() },
-        )
-    }
-
-    private fun cur(a: JSONObject): String = a.s("currency").trim().uppercase()
-
-    private fun name(a: JSONObject): String =
-        a.s("company").ifBlank { a.s("account_name") }.ifBlank { a.s("cid_fmt") }.ifBlank { a.s("cid") }
-
-    /** Account ka haal (Home ke Google Ads module jaisa). */
-    private fun acctKind(a: JSONObject): KKind {
-        val hl = a.s("health").uppercase()
-        return when {
-            a.d("critical") > 0 || hl == "CRITICAL" -> KKind.BAD
-            a.d("warning") > 0 || hl == "WARNING" || hl == "STALE" || hl == "NO_DATA" || (a.has("fresh") && !a.b("fresh")) -> KKind.WARN
-            else -> KKind.OK
+    private suspend fun ads(app: App, o: WOpts, f: WFetch): AdsSnap = coroutineScope {
+        // Google Ads monitor server par nahi (404, GadsVm jaisa) = "Set nahi"; net / login ki dikkat = exception (purana snap rahe).
+        // Server ki baaki galti (500 jaisi): pichhle snap ke accounts rakho, Live wala hissa phir bhi naya ("Set nahi" cache na ho)
+        var set = true
+        var accs: List<GAccount> = emptyList()
+        var old: AdsSnap? = null
+        try {
+            accs = monitoredAccounts(app.api.gGet("overview").arr("accounts").mapObj(GAccount::of))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: ApiException) {
+            if (e.network || e.unauthorized) throw e
+            if (e.message?.contains("404") == true) set = false
+            else old = AdsSnap.of(WidgetStore.snap(app, o.dataKey(WKind.ADS))) ?: throw e
+        }
+        if (old == null && accs.isEmpty()) set = false
+        val d = f.data("today")
+        val top = topLiveApps(d)
+        // 30 min ke active: sirf in 3 apps ka app.php, saath me; koi fail = "—"
+        val l30 = top.map { a ->
+            async {
+                a.pkg to try {
+                    app.api.extra(a.pkg, "today")?.active?.live30m
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    null
+                }
+            }
+        }.awaitAll().toMap()
+        val prev = old
+        if (prev != null) {
+            AdsSnap(System.currentTimeMillis(), prev.set, prev.accs, withLive30(top, l30), prev.all)
+        } else {
+            AdsSnap(
+                System.currentTimeMillis(), set, topAccounts(accs, d.r, o.pick.toSet()), withLive30(top, l30),
+                accs.map { it.cid to topAccountName(it) }.filter { it.first.isNotBlank() },
+            )
         }
     }
 
-    /**
-     * Sab accounts ka pace (% normal se), app ke Google Ads jaisa: Σ aaj / Σ aam − 1, sirf taaza data wale accounts;
-     * alag currency ho to ₹ me jod kar ($ = rate se, baaki chhod do). Na bane to null.
-     */
-    private fun pace(accs: List<JSONObject>, rate: Double?): Double? {
-        val mixed = accs.map { cur(it) }.filter { it.isNotBlank() }.distinct().size > 1
-        var now = 0.0
-        var usual = 0.0
-        for (a in accs) {
-            if (!a.b("fresh")) continue
-            val p = a.dn("pace_pct")?.takeIf { it.isFinite() } ?: continue
-            val u = a.dn("usual_by_now")?.takeIf { it > 0 && it.isFinite() } ?: continue
-            val k = if (mixed) toInr(1.0, cur(a), rate) ?: continue else 1.0
-            now += u * (1 + p / 100.0) * k
-            usual += u * k
-        }
-        return if (usual > 0) (now / usual - 1) * 100 else null
-    }
+    // ---- App Health (api/health.php: overview + consoles; 2 call)
 
-    private fun toInr(v: Double, cur: String, rate: Double?): Double? = when (cur) {
-        "INR" -> v
-        "USD" -> rate?.let { v * it }
-        else -> null
-    }
-
-    // ---- App Health (api/health.php: overview; consoles chune hon to consoles view se)
-
-    private suspend fun health(app: App, o: WOpts, lists: Boolean): HealthSnap {
+    private suspend fun health(app: App, o: WOpts): HealthSnap {
         val ov = app.api.hOverview()
         val chosen = o.pick.toSet()
-        val cons = when {
-            chosen.isNotEmpty() -> app.api.hConsoles()
-            lists -> runCatching { app.api.hConsoles() }.getOrNull()
-            else -> null
+        val cons = if (chosen.isNotEmpty()) {
+            app.api.hConsoles()
+        } else {
+            try {
+                app.api.hConsoles()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                null // list overview ke attention se ban jayegi
+            }
         }
+        val h = healthTop(ov, cons, chosen)
         val list = cons?.consoles?.map { it.id to it.name.ifBlank { it.id } }.orEmpty()
-        val now = System.currentTimeMillis()
-        if (chosen.isEmpty() || cons == null) {
-            val worst = ov.attention.distinctBy { it.pkg.ifBlank { it.app } }.map { it.app.ifBlank { it.pkg.substringAfterLast('.') } }
-            return HealthSnap(now, ov.healthy.coerceAtLeast(0), ov.apps.coerceAtLeast(0), ov.issuesP0, worst, ov.aabReady, ov.issuesOpen, list)
+        return HealthSnap(System.currentTimeMillis(), h.total, h.withIssues, h.fine, h.top, list)
+    }
+
+    // ---- Alerts (api/alerts.php, sirf khule; Alerts tab wahi feed)
+
+    private suspend fun alerts(app: App, o: WOpts): AlertsSnap {
+        val d = app.api.alerts(limit = 40, open = true)
+        if (d == null) {
+            // null = alerts.php nahi YA server ki koi galti (500): pehle sahi data tha to wahi rahe, warna "—"
+            if (AlertsSnap.of(WidgetStore.snap(app, o.dataKey(WKind.ALERTS)))?.missing == false) throw ApiException("alerts.php ne data nahi diya")
+            return AlertsSnap(System.currentTimeMillis(), 0, 0, emptyList(), missing = true)
         }
-        val apps = cons.apps.filter { it.consoleId in chosen }
-        val pk = apps.map { it.pkg }.toSet()
-        val attn = ov.attention.filter { it.consoleId in chosen || it.pkg in pk }
-        val worst = attn.distinctBy { it.pkg.ifBlank { it.app } }.map { it.app.ifBlank { it.pkg.substringAfterLast('.') } }
-        val fixes = runCatching { app.api.hBuilds() }.getOrNull()?.count { it.reviewable && it.pkg in pk } ?: 0
-        return HealthSnap(
-            now, apps.count { it.openIssues == 0 }, apps.size,
-            maxOf(attn.count { it.severity == "P0" }, apps.count { it.topSeverity == "P0" }),
-            worst, fixes, apps.sumOf { it.openIssues }, list,
-        )
+        val t = alertsTop(d)
+        return AlertsSnap(System.currentTimeMillis(), t.unread, t.open, t.items, missing = false)
     }
 }

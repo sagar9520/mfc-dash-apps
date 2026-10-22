@@ -53,6 +53,10 @@ import com.myfuturecode.mfcdash.ui.kit.KProgress
 import com.myfuturecode.mfcdash.ui.kit.KRow
 import com.myfuturecode.mfcdash.ui.kit.KScreen
 import com.myfuturecode.mfcdash.ui.kit.KSection
+import com.myfuturecode.mfcdash.ui.kit.KSkelHero
+import com.myfuturecode.mfcdash.ui.kit.KSkelRows
+import com.myfuturecode.mfcdash.ui.kit.KSkelStats
+import com.myfuturecode.mfcdash.ui.kit.KSkeleton
 import com.myfuturecode.mfcdash.ui.kit.KSmallAction
 import com.myfuturecode.mfcdash.ui.kit.KSplit
 import com.myfuturecode.mfcdash.ui.kit.KStatus
@@ -101,8 +105,9 @@ fun StudioOppScreen(vm: StudioVm, nav: NavHostController, id: Long) {
             actions = { RefreshIcon { vm.load("opp", p) } },
         )
         if (!wide && item != null) OppHero(item)
+        else if (!wide && sSkelOn(g, o)) KSkelHero(KTint.Lav)
     }) {
-        SLoad(g, o, { vm.load("opp", p) }) { oo ->
+        SLoad(g, o, { vm.load("opp", p) }, { SDetailSkel(wide) }) { oo ->
             val it0 = oo.obj("item")
             val pid = oo.dn("project_id")?.toLong()
             if (wide) KTwoPane(
@@ -415,7 +420,12 @@ fun StudioCompareScreen(vm: StudioVm, nav: NavHostController, ids: String) {
             actions = { RefreshIcon { vm.load("compare", p) } },
         )
     }) {
-        SLoad(g, o, { vm.load("compare", p) }) { oo ->
+        SLoad(g, o, { vm.load("compare", p) }, {
+            KSkeleton {
+                KSkelStats(6, 3)
+                KSkelRows(3)
+            }
+        }) { oo ->
             val items = oo.arr("items").objs()
             if (items.isEmpty()) KCard { KEmpty("No ideas".t(), KIcons.Bulb) }
             else {
@@ -497,8 +507,9 @@ fun StudioProjectScreen(vm: StudioVm, nav: NavHostController, id: Long) {
             actions = { RefreshIcon { vm.load("project", p) } },
         )
         if (!wide && pr != null) ProjectHero(pr)
+        else if (!wide && sSkelOn(g, o)) KSkelHero(KTint.Lav)
     }) {
-        SLoad(g, o, { vm.load("project", p) }) { oo ->
+        SLoad(g, o, { vm.load("project", p) }, { SDetailSkel(wide) }) { oo ->
             val item = oo.obj("item")
             val ft = item.optJSONObject("features")
             val onAsk: (String) -> Unit = { ask = it }
@@ -832,8 +843,9 @@ fun StudioRunScreen(vm: StudioVm, nav: NavHostController, id: Long) {
             actions = { RefreshIcon { vm.load("run", p) } },
         )
         if (!wide && r != null) RunHero(r)
+        else if (!wide && sSkelOn(g, o)) KSkelHero(KTint.Lav)
     }) {
-        SLoad(g, o, { vm.load("run", p) }) { oo ->
+        SLoad(g, o, { vm.load("run", p) }, { SDetailSkel(wide) }) { oo ->
             val item = oo.obj("item")
             if (wide) KTwoPane(
                 left = {

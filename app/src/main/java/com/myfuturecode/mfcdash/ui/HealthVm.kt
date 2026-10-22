@@ -31,6 +31,7 @@ data class HState(
     val error: String? = null,
     val missing: Boolean = false,                            // server par api/health.php nahi (404)
     val lastOk: Long = 0L,
+    val cached: Set<String> = emptySet(),                    // "overview" / "consoles": abhi disk cache wala copy (live nahi)
 )
 
 class HealthVm(private val app: App) : ViewModel() {
@@ -55,8 +56,26 @@ class HealthVm(private val app: App) : ViewModel() {
         }
     }
 
-    fun loadOverview() = load { val o = api.hOverview(); _s.update { it.copy(overview = o) } }
-    fun loadConsoles() = load { val c = api.hConsoles(); _s.update { it.copy(consoles = c) } }
+    /**
+     * Screen par abhi kuch nahi (app khuli): disk wala pichhla jawab turant. [HState.cached] me naam, lastOk = us copy
+     * ka waqt ("Updated 3 h ago", abhi ka nahi). Network wala aate hi badal jaata hai; network fail = copy dikhta rahe.
+     */
+    private fun <T> showCached(name: String, has: (HState) -> Boolean, read: suspend () -> Cached<T>?, put: (HState, T) -> HState) {
+        if (has(_s.value)) return
+        viewModelScope.launch {
+            val c = runCatching { read() }.getOrNull() ?: return@launch
+            _s.update { if (has(it)) it else put(it, c.value).copy(cached = it.cached + name, lastOk = if (it.lastOk == 0L) c.at else it.lastOk) }
+        }
+    }
+
+    fun loadOverview() {
+        showCached("overview", { it.overview != null }, { api.hOverviewCached() }) { st, v -> st.copy(overview = v) }
+        load { val o = api.hOverview(); _s.update { it.copy(overview = o, cached = it.cached - "overview") } }
+    }
+    fun loadConsoles() {
+        showCached("consoles", { it.consoles != null }, { api.hConsolesCached() }) { st, v -> st.copy(consoles = v) }
+        load { val c = api.hConsoles(); _s.update { it.copy(consoles = c, cached = it.cached - "consoles") } }
+    }
     fun loadRuns() = load { val r = api.hRuns(mapOf("limit" to "60")); _s.update { it.copy(runs = r) } }
     fun loadIssues(f: Map<String, String>) {
         val key = f.toSortedMap().toString()
@@ -65,12 +84,19 @@ class HealthVm(private val app: App) : ViewModel() {
         load { val r = api.hIssues(f); if (key == pendingIssues) _s.update { it.copy(issues = r, issuesKey = key) } }
     }
     private var pendingIssues = ""
-    fun loadFixes(result: String) = load { val r = api.hFixes(mapOf("result" to result)); _s.update { it.copy(fixes = r, fixesKey = result) } }
+    fun loadFixes(result: String) {
+        pendingFixes = result
+        // filter jaldi badla: purane filter ka (der se aaya) jawab naye ko na dhak de
+        load { val r = api.hFixes(mapOf("result" to result)); if (result == pendingFixes) _s.update { it.copy(fixes = r, fixesKey = result) } }
+    }
+    private var pendingFixes = ""
     fun loadBuilds() = load { val r = api.hBuilds(); _s.update { it.copy(builds = r) } }
     fun loadLogs(level: String, q: String) {
         val key = "$level|$q"
-        load { val r = api.hLogs(mapOf("level" to level, "q" to q)); _s.update { it.copy(logs = r, logsKey = key) } }
+        pendingLogs = key
+        load { val r = api.hLogs(mapOf("level" to level, "q" to q)); if (key == pendingLogs) _s.update { it.copy(logs = r, logsKey = key) } }
     }
+    private var pendingLogs = ""
     fun loadSettings() = load { val r = api.hSettings(); _s.update { it.copy(settings = r) } }
     fun loadIssue(id: Long) = load { val r = api.hIssue(id); _s.update { it.copy(issue = it.issue + (id to r)) } }
     fun loadApp(pkg: String, days: Int) = load { val r = api.hApp(pkg, days); _s.update { it.copy(app = it.app + ("$pkg|$days" to r)) } }

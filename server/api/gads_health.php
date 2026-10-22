@@ -282,6 +282,15 @@ function gv_acct_pace(array $snap): array
         'reported_through' => $R >= 0 ? sprintf('%02d:59', $R) : null];
 }
 
+/** Aaj ka budget: chalu (ENABLED) campaigns ke daily budget ka jod, aur aaj ka kharcha uska kitna %. Shared budget do baar gin sakta hai (script budget id nahi bhejta). */
+function gv_acct_budget(PDO $pdo, string $cid, float $spend): array
+{
+    $q = $pdo->prepare("SELECT SUM(budget) FROM ga_camp WHERE customer_id = ? AND status = 'ENABLED' AND budget > 0 AND budget_period IN ('', 'DAILY')");
+    $q->execute([$cid]);
+    $b = (float)($q->fetchColumn() ?: 0);
+    return ['budget_today' => $b > 0 ? round($b, 2) : null, 'budget_pct' => $b > 0 ? round($spend / $b * 100, 1) : null];
+}
+
 // ---------------------------------------------------------------- A. All Accounts (overview)
 function gv_overview(PDO $pdo, array $f): array
 {
@@ -295,7 +304,7 @@ function gv_overview(PDO $pdo, array $f): array
         $c = $cnt->fetch();
         if ($f['status'] !== '' && !gv_status_match($f['status'], (string)$a['health'], (int)$c['c'], (int)$c['w'])) continue;
         $acc[] = gv_acct_out($a) + ['data_age_min' => $snap['age'], 'fresh' => $snap['fresh'], 'sources' => $snap['sources'], 'tz_used' => $snap['tz'],
-            'critical' => (int)$c['c'], 'warning' => (int)$c['w'], 'info' => (int)$c['i']] + $p;
+            'critical' => (int)$c['c'], 'warning' => (int)$c['w'], 'info' => (int)$c['i']] + $p + gv_acct_budget($pdo, (string)$cid, (float)$p['spend_today']);
         if ($a['currency'] !== '') { $byCur[$a['currency']]['spend_today'] = ($byCur[$a['currency']]['spend_today'] ?? 0) + $p['spend_today']; $byCur[$a['currency']]['accounts'] = ($byCur[$a['currency']]['accounts'] ?? 0) + 1; }
     }
     $cur = [];

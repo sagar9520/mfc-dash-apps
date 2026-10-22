@@ -59,7 +59,7 @@ import com.myfuturecode.mfcdash.ui.kit.KIcons
 import com.myfuturecode.mfcdash.ui.kit.KKind
 import com.myfuturecode.mfcdash.ui.kit.KKv
 import com.myfuturecode.mfcdash.ui.kit.KListDivider
-import com.myfuturecode.mfcdash.ui.kit.KLoading
+import com.myfuturecode.mfcdash.ui.kit.KLoadOnChange
 import com.myfuturecode.mfcdash.ui.kit.KNum
 import com.myfuturecode.mfcdash.ui.kit.KPill
 import com.myfuturecode.mfcdash.ui.kit.KProgress
@@ -68,7 +68,16 @@ import com.myfuturecode.mfcdash.ui.kit.KScreen
 import com.myfuturecode.mfcdash.ui.kit.KSection
 import com.myfuturecode.mfcdash.ui.kit.KSectionLink
 import com.myfuturecode.mfcdash.ui.kit.KSegTabs
+import com.myfuturecode.mfcdash.ui.kit.KSkelCard
+import com.myfuturecode.mfcdash.ui.kit.KSkelHero
+import com.myfuturecode.mfcdash.ui.kit.KSkelRows
+import com.myfuturecode.mfcdash.ui.kit.KSkelSection
+import com.myfuturecode.mfcdash.ui.kit.KSkeleton
 import com.myfuturecode.mfcdash.ui.kit.KSmallAction
+import com.myfuturecode.mfcdash.ui.kit.KSortButton
+import com.myfuturecode.mfcdash.ui.kit.KSortKind
+import com.myfuturecode.mfcdash.ui.kit.KSortPill
+import com.myfuturecode.mfcdash.ui.kit.KSortState
 import com.myfuturecode.mfcdash.ui.kit.KSplit
 import com.myfuturecode.mfcdash.ui.kit.KStatus
 import com.myfuturecode.mfcdash.ui.kit.KSwitch
@@ -76,6 +85,8 @@ import com.myfuturecode.mfcdash.ui.kit.KTint
 import com.myfuturecode.mfcdash.ui.kit.KTwoPane
 import com.myfuturecode.mfcdash.ui.kit.fg
 import com.myfuturecode.mfcdash.ui.kit.isWide
+import com.myfuturecode.mfcdash.ui.kit.kSorted
+import com.myfuturecode.mfcdash.ui.kit.rememberKSort
 import com.myfuturecode.mfcdash.ui.kit.word
 import com.myfuturecode.mfcdash.ui.kit.zone
 import com.myfuturecode.mfcdash.ui.theme.Mfc
@@ -96,6 +107,7 @@ import com.myfuturecode.mfcdash.util.sn
 import com.myfuturecode.mfcdash.util.t
 import com.myfuturecode.mfcdash.util.tFull
 import com.myfuturecode.mfcdash.util.tf
+import com.myfuturecode.mfcdash.util.tsMs
 import com.myfuturecode.mfcdash.util.usd
 import org.json.JSONArray
 import org.json.JSONObject
@@ -141,6 +153,14 @@ private fun coKind(p: Double?): KKind = when {
 
 private fun prov(k: String) = (PROVIDERS[k] ?: k).t()
 
+// Sort (bar ka Sort button, sirf Usage tab par; Apps / Tasks ka apna). Default = server ka order (kharcha zyada -> kam).
+// Overview / Modules (config order, chhoti fixed list) aur Budgets par Sort nahi.
+private val CO_SORT_KINDS = mapOf("time" to KSortKind.DATE)
+
+private fun coSortOpts(sub: String): List<Pair<String, String>> =
+    if (sub == "tasks") listOf("cost" to "Cost".t(), "time" to "Time".t(), "calls" to "AI calls".t(), "name" to "Name".t())
+    else listOf("cost" to "Cost".t(), "tasks" to "Tasks".t(), "calls" to "AI calls".t(), "name" to "Name".t())
+
 /** AI Cost & Usage Manager: hero = is mahine ka kharcha / budget; tabs: Overview, Modules, Usage (app / task), Budgets. */
 @Composable
 fun CostScreen(vm: CostVm, nav: NavHostController, startTab: String) {
@@ -151,15 +171,22 @@ fun CostScreen(vm: CostVm, nav: NavHostController, startTab: String) {
     val reload = remember { mutableIntStateOf(0) }
     LaunchedEffect(reload.intValue) { vm.load("month") }
     LaunchedEffect(reload.intValue, range, tab) { if (tab == "usage" && range != "month") vm.load(range) }
+    KLoadOnChange(range)   // Usage ka range chip = upar ki line
     val m = g.view("month")
     val back: () -> Unit = { if (!nav.popBackStack()) nav.navigate("home") }
+    // Usage ki do list (apps / tasks), har ek ka apna sort
+    val sortApps = rememberKSort("cost")
+    val sortTasks = rememberKSort("cost")
+    val sort = if (sub == "tasks") sortTasks else sortApps
     val subT = listOfNotNull(
         m?.s("month")?.takeIf { it.isNotBlank() },
         m?.let { "₹" + num(it.d("inr_per_usd"), 0) + " = $1" },
-        if (g.lastOk == 0L) "Loading…".t() else "Updated".t() + " " + agoText(g.lastOk),
+        // pehli baar "Loading…" nahi: neeche skeleton dikh raha hai
+        if (g.lastOk == 0L) null else "Updated".t() + " " + agoText(g.lastOk),
     ).joinToString(" · ")
     val bar: @Composable ColumnScope.() -> Unit = {
         KDetailBar("AI Cost & Usage".t(), back, sub = subT, actions = {
+            if (tab == "usage") KSortButton(sort, coSortOpts(sub), CO_SORT_KINDS)
             KBarIcon(KIcons.Refresh, "Refresh".t(), { reload.intValue++ }, spinning = g.busy.isNotEmpty())
         })
     }
@@ -167,13 +194,19 @@ fun CostScreen(vm: CostVm, nav: NavHostController, startTab: String) {
     val tabRow: @Composable () -> Unit = { KSegTabs(tabs, CO_MAIN.indexOf(tab).coerceAtLeast(0), { tab = CO_MAIN[it] }) }
     val body: @Composable ColumnScope.() -> Unit = {
         if (m == null) {
-            if (g.error != null) CoProblem(g) { reload.intValue++ } else KLoading()
+            if (g.error != null) CoProblem(g) { reload.intValue++ }
+            else KSkeleton {
+                // hisaab card + section + modules ki list (Overview jaisa)
+                KSkelCard(7, title = false)
+                KSkelSection()
+                KSkelRows(3)
+            }
         } else {
             val r = m.d("inr_per_usd", 95.0)
             when (tab) {
                 "overview" -> CoOverview(m, r) { tab = it }
                 "modules" -> CoModules(vm, m, r) { tab = "budgets" }
-                "usage" -> CoUsage(g, r, sub, { sub = it }, range, { range = it })
+                "usage" -> CoUsage(g, r, sub, { sub = it }, range, { range = it }, sort) { reload.intValue++ }
                 else -> CoBudgets(vm, g, m, r)
             }
         }
@@ -184,7 +217,7 @@ fun CostScreen(vm: CostVm, nav: NavHostController, startTab: String) {
         KScreen(top = bar) {
             KTwoPane(
                 left = {
-                    if (m != null) CoHero(m)
+                    if (m != null) CoHero(m) else if (g.error == null) KSkelHero(KTint.Sand)
                     tabRow()
                 },
                 right = { body() },
@@ -193,7 +226,7 @@ fun CostScreen(vm: CostVm, nav: NavHostController, startTab: String) {
     } else {
         KScreen(top = {
             bar()
-            if (m != null) CoHero(m)
+            if (m != null) CoHero(m) else if (g.error == null) KSkelHero(KTint.Sand)
         }) {
             tabRow()
             body()
@@ -454,19 +487,33 @@ private fun CoModules(vm: CostVm, m: JSONObject, r: Double, toBudgets: () -> Uni
 // ---------------------------------------------------------------- Usage (apps / tasks)
 
 @Composable
-private fun CoUsage(g: GState, r: Double, sub: String, onSub: (String) -> Unit, range: String, onRange: (String) -> Unit) {
+private fun CoUsage(
+    g: GState, r: Double, sub: String, onSub: (String) -> Unit, range: String, onRange: (String) -> Unit, sort: KSortState, retry: () -> Unit,
+) {
     KSegTabs(listOf("Apps".t(), "Tasks".t()), if (sub == "tasks") 1 else 0, { onSub(if (it == 1) "tasks" else "apps") })
     KSegTabs(
         CO_RANGES.map { it.second.t() }, CO_RANGES.indexOfFirst { it.first == range }.coerceAtLeast(0),
         { onRange(CO_RANGES[it].first) },
     )
+    KSortPill(sort, coSortOpts(sub), CO_SORT_KINDS)
     val j = g.view(range)
-    if (j == null) KLoading() else if (sub == "tasks") CoTasks(j, r) else CoApps(j, r)
+    // is range ka jawab nahi: load chal raha = skeleton, fail hua = error + Dobara (warna skeleton hamesha chamakta)
+    if (j == null) { if (g.error != null) CoProblem(g, retry) else KSkeleton { KSkelRows(5) } }
+    else if (sub == "tasks") CoTasks(j, r, sort) else CoApps(j, r, sort)
 }
 
 @Composable
-private fun CoApps(j: JSONObject, r: Double) {
-    val apps = j.arr("apps").objs()
+private fun CoApps(j: JSONObject, r: Double, sort: KSortState) {
+    // default par server ka order (kharcha zyada -> kam)
+    val apps = j.arr("apps").objs().let { l ->
+        when {
+            sort.isDefault -> l
+            sort.key == "tasks" -> l.kSorted(sort.desc) { it.l("tasks") }
+            sort.key == "calls" -> l.kSorted(sort.desc) { it.l("calls") }
+            sort.key == "name" -> l.kSorted(sort.desc) { it.s("name").lowercase() }
+            else -> l.kSorted(sort.desc) { it.d("usd") }
+        }
+    }
     val noApp = j.d("no_app_usd")
     if (apps.isEmpty() && noApp <= 0) {
         KCard { KEmpty("No app cost".t(), KIcons.Apps) }
@@ -491,8 +538,17 @@ private fun CoApps(j: JSONObject, r: Double) {
 }
 
 @Composable
-private fun CoTasks(j: JSONObject, r: Double) {
-    val tasks = j.arr("tasks").objs()
+private fun CoTasks(j: JSONObject, r: Double, sort: KSortState) {
+    // default par server ka order (kharcha zyada -> kam)
+    val tasks = j.arr("tasks").objs().let { l ->
+        when {
+            sort.isDefault -> l
+            sort.key == "time" -> l.kSorted(sort.desc) { tsMs(it.s("last_at")) }
+            sort.key == "calls" -> l.kSorted(sort.desc) { it.l("calls") }
+            sort.key == "name" -> l.kSorted(sort.desc) { (TASKS[it.s("task")] ?: it.s("task")).t().lowercase() + " " + it.s("app").lowercase() }
+            else -> l.kSorted(sort.desc) { it.d("usd") }
+        }
+    }
     if (tasks.isEmpty()) {
         KCard { KEmpty("No AI tasks".t(), KIcons.Spark) }
         return

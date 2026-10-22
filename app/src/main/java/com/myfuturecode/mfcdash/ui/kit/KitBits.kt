@@ -350,7 +350,8 @@ private fun initials(name: String): String {
 
 /**
  * List row (min 56dp; lead + sub ho to 64dp). sub ke saath subKind: shape + rang.
- * value = right side ka bold number, valueSub uske neeche. trailing = switch/button. strong = unread (bold), quiet = padha hua.
+ * value = right side ka bold number, valueSub uske neeche, valueBottom (pill) sabse neeche. trailing = switch/button.
+ * strong = unread (bold), quiet = padha hua.
  */
 @Composable
 fun KRow(
@@ -369,6 +370,7 @@ fun KRow(
     strong: Boolean = false,
     quiet: Boolean = false,
     titleLines: Int = 1,
+    valueBottom: (@Composable () -> Unit)? = null,
 ) {
     val c = Mfc.c
     val tall = lead != null && sub != null
@@ -391,12 +393,14 @@ fun KRow(
                 else KT(sub, 13.sp, if (quiet) c.ink3 else c.ink2, Modifier.padding(top = 2.dp), lh = 18.sp)
             }
         }
-        if (value != null || valueSub != null) Column(horizontalAlignment = Alignment.End) {
+        if (value != null || valueSub != null || valueBottom != null) Column(horizontalAlignment = Alignment.End) {
             if (value != null) {
                 if (valuePlain) KT(value, 14.sp, valueColor.takeOrElse { c.ink2 })
                 else KT(value, 16.sp, kFix(valueColor, c).takeOrElse { c.ink }, weight = FontWeight.Bold, lh = 20.sp)
             }
             if (valueSub != null) KT(valueSub, 13.sp, c.ink3, Modifier.padding(top = 2.dp), lh = 18.sp)
+            // value ke neeche chhoti pill (jaise "141 crash"), valueSub ke baad
+            if (valueBottom != null) Box(Modifier.padding(top = 3.dp)) { valueBottom() }
         }
         trailing?.invoke()
         if (chevron) Icon(KIcons.Chev, null, tint = c.chev, modifier = Modifier.offset(x = 6.dp).size(22.dp))

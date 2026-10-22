@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.myfuturecode.mfcdash.App
+import com.myfuturecode.mfcdash.data.Cached
 import com.myfuturecode.mfcdash.util.t
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -20,8 +21,13 @@ data class GState(
     val error: String? = null,
     val missing: Boolean = false,                            // server par api/gads_health.php nahi (404)
     val lastOk: Long = 0L,
+    val cached: Set<String> = emptySet(),                    // in keys (gkey) ka view abhi disk cache wala copy (live nahi)
 ) {
     fun view(view: String, p: Map<String, String> = emptyMap()): JSONObject? = views[gkey(view, p)]
+
+    /** Disk wala copy, sirf jab us key par abhi kuch na ho. lastOk = us copy ka waqt jab tak koi live jawab na aaya ho. */
+    internal fun withCached(k: String, c: Cached<JSONObject>): GState =
+        if (k in views) this else copy(views = views + (k to c.value), cached = cached + k, lastOk = if (lastOk == 0L) c.at else lastOk)
 }
 
 fun gkey(view: String, p: Map<String, String>) = view + "?" + p.filterValues { it.isNotBlank() }.toSortedMap().toString()
@@ -37,10 +43,17 @@ class GadsVm(app: App) : ViewModel() {
 
     fun load(view: String, p: Map<String, String> = emptyMap()) {
         val k = gkey(view, p)
+        val q = p.filterValues { it.isNotBlank() }
+        // pehli baar (app khuli): disk wala pichhla jawab turant (abhi sirf overview rakha jaata hai), phir network
+        if (k !in _s.value.views) viewModelScope.launch {
+            // sirf aaj ka copy: overview me "aaj" ka kharcha / raftaar hai (kal ka aaj ke naam se nahi)
+            val c = runCatching { api.gGetCached(view, q) }.getOrNull()?.takeIf { cacheSameDay(it.at) } ?: return@launch
+            _s.update { it.withCached(k, c) }
+        }
         viewModelScope.launch {
             try {
-                val j = api.gGet(view, p.filterValues { it.isNotBlank() })
-                _s.update { it.copy(views = it.views + (k to j), error = null, missing = false, lastOk = System.currentTimeMillis()) }
+                val j = api.gGet(view, q)
+                _s.update { it.copy(views = it.views + (k to j), cached = it.cached - k, error = null, missing = false, lastOk = System.currentTimeMillis()) }
             } catch (e: Exception) {
                 val m = e.message ?: "error"
                 _s.update { it.copy(error = m, missing = m.contains("404")) }

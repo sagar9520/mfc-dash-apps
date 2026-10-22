@@ -22,12 +22,14 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.outlined.Mail
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
@@ -38,6 +40,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -64,6 +67,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import com.myfuturecode.mfcdash.App
 import com.myfuturecode.mfcdash.BuildConfig
+import com.myfuturecode.mfcdash.data.HPlayMail
 import com.myfuturecode.mfcdash.notify.Notify
 import com.myfuturecode.mfcdash.ui.CostVm
 import com.myfuturecode.mfcdash.ui.DashVm
@@ -81,6 +85,9 @@ import com.myfuturecode.mfcdash.ui.kit.KIcons
 import com.myfuturecode.mfcdash.ui.kit.KKind
 import com.myfuturecode.mfcdash.ui.kit.KKv
 import com.myfuturecode.mfcdash.ui.kit.KListDivider
+import com.myfuturecode.mfcdash.ui.kit.KSkelBlock
+import com.myfuturecode.mfcdash.ui.kit.KSkelLine
+import com.myfuturecode.mfcdash.ui.kit.KSkeleton
 import com.myfuturecode.mfcdash.ui.kit.KNum
 import com.myfuturecode.mfcdash.ui.kit.KPill
 import com.myfuturecode.mfcdash.ui.kit.KProgress
@@ -114,8 +121,11 @@ import com.myfuturecode.mfcdash.util.num
 import com.myfuturecode.mfcdash.util.pct
 import com.myfuturecode.mfcdash.util.s
 import com.myfuturecode.mfcdash.util.t
+import com.myfuturecode.mfcdash.util.tFull
 import com.myfuturecode.mfcdash.util.tf
 import com.myfuturecode.mfcdash.widget.WidgetPins
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
 import org.json.JSONObject
 import kotlin.math.roundToInt
 
@@ -129,7 +139,7 @@ private const val SET_ROAS_MAX = 4f
 
 /**
  * Settings tab: upar AI Kharcha (mahine ka kharcha / budget, tap = AI Cost screen), phir rows:
- * Claude AI, Bhasha, ROAS target, Rang (Light / Dark / Brand), Widgets | 24x7 monitor, Notifications | account, version.
+ * Claude AI, Bhasha, ROAS target, Rang (Light / Dark / Brand), Widgets | 24x7 monitor, Notifications, Play mail | account, version.
  * Row tap = wahin khulta hai (ek baar me ek).
  */
 @Composable
@@ -142,7 +152,7 @@ fun SettingsScreen(vm: DashVm, nav: NavHostController) {
     val cvm: CostVm = viewModel(viewModelStoreOwner = owner, factory = CostVm.factory(app))
     val g by cvm.s.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) { cvm.load("month") }
-    var open by rememberSaveable { mutableStateOf("") }       // khula hissa: ai | lang | roas | notif
+    var open by rememberSaveable { mutableStateOf("") }       // khula hissa: ai | lang | roas | notif | pmail
     var info by rememberSaveable { mutableStateOf(false) }
     var placed by remember { mutableStateOf<Int?>(null) }
     LaunchedEffect(Unit) { placed = runCatching { WidgetPins.placedCount(ctx) }.getOrNull() }
@@ -195,7 +205,7 @@ private fun SetCostHero(m: JSONObject?, g: GState, onOpen: () -> Unit) {
             when {
                 g.missing -> KStatus("Not set up".t(), KKind.NEUTRAL, Modifier.padding(top = 8.dp))
                 err != null -> KStatus(err, KKind.BAD, Modifier.padding(top = 8.dp))
-                else -> KBigNum("–")
+                else -> SetCostSkel()   // pehli baar aa raha: number / % / aaj / patti ki jagah
             }
         } else {
             val r = m.d("inr_per_usd", 95.0)
@@ -215,6 +225,23 @@ private fun SetCostHero(m: JSONObject?, g: GState, onOpen: () -> Unit) {
             }
             KProgress((p ?: 0.0).toFloat(), k.zone())
             if (paused.isNotEmpty()) SetPausedLine(paused)
+        }
+    }
+}
+
+/** AI Kharcha aane tak hero me: bada number, daayein % + aaj, neeche patti (asli jitna ooncha). */
+@Composable
+private fun SetCostSkel() {
+    KSkeleton(Modifier.padding(top = 4.dp)) {
+        Column(Modifier.fillMaxWidth()) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Box(Modifier.weight(1f).height(48.dp), contentAlignment = Alignment.CenterStart) { KSkelLine(.62f, 32.dp) }
+                Column(Modifier.padding(bottom = 5.dp), horizontalAlignment = Alignment.End) {
+                    KSkelLine(44.dp, 18.dp)
+                    KSkelLine(72.dp, 11.dp, Modifier.padding(top = 7.dp))
+                }
+            }
+            KSkelLine(1f, 8.dp, Modifier.padding(top = 14.dp))
         }
     }
 }
@@ -254,12 +281,20 @@ private fun SetMainGroup(vm: DashVm, st: UiState, open: String, flip: (String) -
     val app = LocalContext.current.applicationContext as App
     val ai = st.alerts?.ai
     val aiVal = if (ai != null && ai.enabled) "On".t() + " · " + setModelName(ai.model) else "Off".t()
+    // alerts.php ka jawab abhi raste me: "Band" na dikhao, chhota skeleton
+    val aiWait = ai == null && !st.alertsMissing && st.alertsError == null
     var target by remember(st.roasTarget) { mutableFloatStateOf(st.roasTarget.toFloat()) }
     KCard(list = true) {
         // ---- Claude AI
         KRow(
-            "Claude AI", lead = { SetTile(KIcons.Spark) }, value = aiVal, valuePlain = true,
-            trailing = { SetChev(open == "ai") }, onClick = { flip("ai") },
+            "Claude AI", lead = { SetTile(KIcons.Spark) }, value = if (aiWait) null else aiVal, valuePlain = true,
+            trailing = {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (aiWait) KSkelLine(96.dp, 13.dp)
+                    SetChev(open == "ai")
+                }
+            },
+            onClick = { flip("ai") },
         )
         if (open == "ai") SetAiPanel(vm, st)
         // ---- Bhasha
@@ -350,7 +385,7 @@ private fun SetAiPanel(vm: DashVm, st: UiState) {
     }
 }
 
-/** 24x7 monitor, Notifications (urgent / dhyan do / info, check ka gap, test). */
+/** 24x7 monitor, Notifications (urgent / dhyan do / info, check ka gap, test), Play mail. */
 @Composable
 private fun SetMonitorGroup(vm: DashVm, st: UiState, open: String, flip: (String) -> Unit, onAlerts: () -> Unit) {
     val c = Mfc.c
@@ -406,8 +441,105 @@ private fun SetMonitorGroup(vm: DashVm, st: UiState, open: String, flip: (String
                 msg?.let { SetText(it, 13.sp, c.brand, maxLines = 3) }
             }
         }
+        // ---- Play Console emails (server mailbox padhta hai -> alerts)
+        KListDivider(true)
+        SetPlayMail(vm, open == "pmail") { flip("pmail") }
     }
 }
+
+/** Play mail: haal ka pill; khule to mailbox, aakhri check, alerts, error + Test (abhi mailbox check). */
+@Composable
+private fun SetPlayMail(vm: DashVm, open: Boolean, onToggle: () -> Unit) {
+    val c = Mfc.c
+    val app = LocalContext.current.applicationContext as App
+    val scope = rememberCoroutineScope()
+    var pm by remember { mutableStateOf<HPlayMail?>(null) }
+    var loadErr by remember { mutableStateOf<String?>(null) }
+    var testing by remember { mutableStateOf(false) }
+    var result by remember { mutableStateOf<Pair<Boolean, String>?>(null) }   // ok, text
+    // pehli baar + har baar kholne par taaza haal
+    LaunchedEffect(open) {
+        try { pm = app.api.playmailStatus(); loadErr = null }
+        catch (e: CancellationException) { throw e }
+        catch (e: Exception) { loadErr = e.message ?: "Error".t() }
+    }
+    val x = pm
+    KRow(
+        "Play mail".t(), lead = { SetTile(Icons.Outlined.Mail) },
+        trailing = {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (x != null) setPlayMailPill(x).let { (t, k) -> KPill(t, k) }
+                else if (loadErr == null) KSkelBlock(24.dp, RoundedCornerShape(12.dp), Modifier.width(76.dp))   // haal aa raha
+                SetChev(open)
+            }
+        },
+        onClick = onToggle,
+    )
+    if (!open) return
+    SetPanel {
+        val err = loadErr
+        if (x == null) {
+            if (err != null) SetText(err, 13.sp, c.red, maxLines = 3) else PlayMailSkel()
+        } else {
+            // "pl••••@gmail.com @ imap.gmail.com" -> sirf address (ek line me aaye)
+            if (x.mailbox.isNotBlank()) KKv("Mailbox".t(), x.mailbox.substringBefore(" @ "))
+            KKv("Last check".t(), x.lastCheck?.let { tFull(it) } ?: "not yet".t())
+            if (x.lastCheck != null) KKv("Alerts".t(), num(x.lastCount.toDouble()), valueSub = "/ " + tf("%s mail", x.lastMails))
+            if (x.lastError.isNotBlank()) SetText("Error".t() + ": " + x.lastError, 13.sp, c.red, maxLines = 4)
+            KButton(
+                "Test".t(),
+                {
+                    testing = true
+                    result = null
+                    scope.launch {
+                        try {
+                            val r = app.api.playmailTest()
+                            r.status?.let { pm = it }
+                            result = true to setMailCount(r.mails, r.alerts)
+                            if (r.alerts > 0) vm.refreshAlerts()   // naye alerts turant Alerts tab me
+                        } catch (e: CancellationException) { throw e }
+                        catch (e: Exception) {
+                            result = false to (e.message ?: "Error".t())
+                            // server fail par bhi pm_status likh deta hai: pill / last check / error taaza karo
+                            try { pm = app.api.playmailStatus() } catch (ce: CancellationException) { throw ce } catch (_: Exception) {}
+                        }
+                        finally { testing = false }
+                    }
+                },
+                Modifier.fillMaxWidth(), kind = KBtn.OUTLINE, icon = KIcons.Refresh, enabled = x.configured && !testing, busy = testing,
+            )
+            result?.let { (ok, t) -> SetText(t, 13.sp, if (ok) c.brand else c.red, maxLines = 4) }
+        }
+    }
+}
+
+/** Play mail ka haal aane tak: Mailbox / Aakhri check / Alerts ki lines + Test button ki jagah. */
+@Composable
+private fun PlayMailSkel() {
+    KSkeleton {
+        Column(Modifier.fillMaxWidth()) {
+            listOf(.5f to .38f, .36f to .44f, .28f to .3f).forEach { (l, v) ->
+                Row(Modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.weight(1f)) { KSkelLine(l, 13.dp) }
+                    Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) { KSkelLine(v * 2, 14.dp) }
+                }
+            }
+        }
+        KSkelBlock(48.dp, RoundedCornerShape(24.dp))
+    }
+}
+
+/** Haal: Set nahi (config nahi) / Error / Intezaar (abhi check nahi hua) / Juda hua. */
+private fun setPlayMailPill(x: HPlayMail): Pair<String, KKind> = when {
+    !x.configured -> "Not set".t() to KKind.NEUTRAL
+    x.lastError.isNotBlank() -> "Error".t() to KKind.BAD
+    x.lastCheck == null -> "Waiting".t() to KKind.ASK
+    else -> "Connected".t() to KKind.OK
+}
+
+/** "3 mail · 1 alert". */
+private fun setMailCount(mails: Int, alerts: Int): String =
+    tf("%s mail", mails) + " · " + if (alerts == 1) "1 alert".t() else tf("%s alerts", alerts)
 
 /** Account: naam + Logout, server address. */
 @Composable

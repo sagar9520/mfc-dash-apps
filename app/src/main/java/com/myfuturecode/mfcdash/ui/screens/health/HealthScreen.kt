@@ -7,9 +7,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -18,6 +21,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -59,6 +63,7 @@ import com.myfuturecode.mfcdash.ui.kit.KIcons
 import com.myfuturecode.mfcdash.ui.kit.KKind
 import com.myfuturecode.mfcdash.ui.kit.KLegend
 import com.myfuturecode.mfcdash.ui.kit.KListDivider
+import com.myfuturecode.mfcdash.ui.kit.KLoadOnChange
 import com.myfuturecode.mfcdash.ui.kit.KLive
 import com.myfuturecode.mfcdash.ui.kit.KPill
 import com.myfuturecode.mfcdash.ui.kit.KRow
@@ -67,11 +72,24 @@ import com.myfuturecode.mfcdash.ui.kit.KSearch
 import com.myfuturecode.mfcdash.ui.kit.KSection
 import com.myfuturecode.mfcdash.ui.kit.KSegBar
 import com.myfuturecode.mfcdash.ui.kit.KSegTabs
+import com.myfuturecode.mfcdash.ui.kit.KSkelBlock
+import com.myfuturecode.mfcdash.ui.kit.KSkelCard
+import com.myfuturecode.mfcdash.ui.kit.KSkelLine
+import com.myfuturecode.mfcdash.ui.kit.KSkelRows
+import com.myfuturecode.mfcdash.ui.kit.KSkelSection
+import com.myfuturecode.mfcdash.ui.kit.KSkelStats
+import com.myfuturecode.mfcdash.ui.kit.KSkeleton
 import com.myfuturecode.mfcdash.ui.kit.KSmallAction
+import com.myfuturecode.mfcdash.ui.kit.KSortButton
+import com.myfuturecode.mfcdash.ui.kit.KSortKind
+import com.myfuturecode.mfcdash.ui.kit.KSortState
 import com.myfuturecode.mfcdash.ui.kit.KTint
 import com.myfuturecode.mfcdash.ui.kit.KTwoPane
 import com.myfuturecode.mfcdash.ui.kit.icon
 import com.myfuturecode.mfcdash.ui.kit.isWide
+import com.myfuturecode.mfcdash.ui.kit.kSortLead
+import com.myfuturecode.mfcdash.ui.kit.kSorted
+import com.myfuturecode.mfcdash.ui.kit.rememberKSort
 import com.myfuturecode.mfcdash.ui.kit.word
 import com.myfuturecode.mfcdash.ui.screens.FilterBox
 import com.myfuturecode.mfcdash.ui.screens.FilterChips
@@ -84,6 +102,7 @@ import com.myfuturecode.mfcdash.util.num
 import com.myfuturecode.mfcdash.util.t
 import com.myfuturecode.mfcdash.util.tFull
 import com.myfuturecode.mfcdash.util.tf
+import com.myfuturecode.mfcdash.util.tsMs
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Locale
@@ -117,6 +136,52 @@ private fun tabIcon(k: String): ImageVector = when (k) {
     else -> KIcons.More
 }
 
+// Sort (bar ka Sort button): har list tab ka apna; default = aaj ka order (bina chhede wahi list).
+// apps: dikkat wale pehle; consoles: naam A -> Z (server); live: chalu + naye runs pehle; issues: review wale, severity, aakhri baar;
+// AI fixes / logs: naye pehle; builds: aapka intezaar wale pehle, phir naye. Overview / Settings par Sort nahi.
+private val H_SORT_DEF = mapOf(
+    "apps" to ("status" to true), "consoles" to ("name" to false), "live" to ("time" to true), "issues" to ("severity" to true),
+    "fixes" to ("time" to true), "builds" to ("status" to true), "logs" to ("time" to true),
+)
+private val H_SORT_KINDS = mapOf("time" to KSortKind.DATE, "last" to KSortKind.DATE, "app" to KSortKind.TEXT)
+
+private fun hSortOpts(tab: String): List<Pair<String, String>> = when (tab) {
+    "apps", "consoles" -> listOf(
+        "status" to "Problem".t(), "issues" to "Open issues".t(), "crash" to "Crash rate".t(), "anr" to "ANR rate".t(), "name" to "Name".t(),
+    )
+    "live" -> listOf("time" to "Time".t(), "problems" to "Problems found".t(), "errors" to "Errors".t())
+    "issues" -> listOf("severity" to "Severity".t(), "last" to "Last seen".t(), "users" to "Users".t(), "events" to "Events".t())
+    "fixes" -> listOf("time" to "Time".t(), "app" to "App".t())
+    "builds" -> listOf("status" to "Waiting for you".t(), "time" to "Time".t(), "app" to "App".t())
+    "logs" -> listOf("time" to "Time".t(), "level" to "Level".t())
+    else -> emptyList()
+}
+
+/** Apps: "Problem" = dikkat kitni (PROBLEM > WATCH > khule issues > baaki); default par wahi jo appRank deta tha. */
+private fun hSortApps(list: List<HApp>, s: KSortState?): List<HApp> = when {
+    s == null || s.isDefault -> if (s?.key == "status") list.sortedBy { appRank(it) } else list
+    s.key == "issues" -> list.kSorted(s.desc) { it.openIssues }
+    s.key == "crash" -> list.kSorted(s.desc) { it.crashRate }
+    s.key == "anr" -> list.kSorted(s.desc) { it.anrRate }
+    s.key == "name" -> list.kSorted(s.desc) { it.name.ifBlank { it.pkg }.lowercase() }
+    else -> list.kSorted(s.desc) { 3 - appRank(it) }
+}
+
+/** Severity ka darja (P0 sabse upar), sort ke liye. */
+internal fun hSevRank(s: String): Int = when (s.uppercase()) {
+    "P0" -> 3
+    "P1" -> 2
+    "P2" -> 1
+    else -> 0
+}
+
+private fun hLevelRank(l: String): Int = when (l) {
+    "error" -> 3
+    "warn" -> 2
+    "ok" -> 1
+    else -> 0
+}
+
 /** App Health: hero (kitne apps theek) + tabs. Aaj = Turant, AI fix taiyaar, Consoles. Har tab apna data khud laata hai. */
 @Composable
 fun HealthScreen(vm: HealthVm, nav: NavHostController, startTab: String) {
@@ -128,10 +193,18 @@ fun HealthScreen(vm: HealthVm, nav: NavHostController, startTab: String) {
     val rl = reload.intValue
     // hero har tab par dikhta hai, isliye overview yahin se
     Poll(30_000, rl) { vm.loadOverview() }
+    KLoadOnChange(tab)   // user ne tab badla = upar ki line
     val go: (String) -> Unit = { tab = it }
     val back: () -> Unit = { if (!nav.popBackStack()) nav.navigate("home") }
+    // har list tab ka apna sort (tab badalne par yaad); Overview / Settings par null
+    val sorts = H_SORT_DEF.mapValues { (k, d) -> key(k) { rememberKSort(d.first, d.second) } }
+    val sort = sorts[tab]
+    val sortOpts = hSortOpts(tab)
+    val sortLead = sort?.let { kSortLead(it, sortOpts, H_SORT_KINDS) }
     val bar: @Composable ColumnScope.() -> Unit = {
         KDetailBar("App Health".t(), back, sub = scanSub(h), actions = {
+            // Filter is page par list ke upar (pill); Sort bar me pehla
+            if (sort != null) KSortButton(sort, sortOpts, H_SORT_KINDS)
             KBarIcon(KIcons.Plus, "New task".t(), { task = true })
             KBarIcon(KIcons.Refresh, "Refresh".t(), { reload.intValue++ })
         })
@@ -142,24 +215,24 @@ fun HealthScreen(vm: HealthVm, nav: NavHostController, startTab: String) {
         KScreen(top = bar) {
             KTwoPane(
                 left = {
-                    HealthHero(o)
+                    HealthHero(o, wait = h.error == null)
                     HealthTabs(tab, o, go)
                     FilterToggle(box)
-                    FilterSummary(box)
+                    FilterSummary(box, lead = sortLead)
                     if (tab == "overview") OverviewMain(h, vm, nav, go)
                 },
                 right = {
                     if (tab == "overview") OverviewSide(h, vm, nav, rl, go)
-                    else CompositionLocalProvider(LocalFilterBox provides box) { TabBody(tab, h, vm, nav, rl, go) }
+                    else CompositionLocalProvider(LocalFilterBox provides box) { TabBody(tab, h, vm, nav, rl, go, sort) }
                 },
             )
         }
     } else {
-        KScreen(top = { bar(); HealthHero(o) }) {
+        KScreen(top = { bar(); HealthHero(o, wait = h.error == null) }) {
             HealthTabs(tab, o, go)
             FilterToggle(box)
-            FilterSummary(box)
-            CompositionLocalProvider(LocalFilterBox provides box) { TabBody(tab, h, vm, nav, rl, go) }
+            FilterSummary(box, lead = sortLead)
+            CompositionLocalProvider(LocalFilterBox provides box) { TabBody(tab, h, vm, nav, rl, go, sort) }
         }
     }
     FilterSheet(box)
@@ -173,15 +246,15 @@ private fun scanSub(h: HState): String {
 }
 
 @Composable
-private fun TabBody(tab: String, h: HState, vm: HealthVm, nav: NavHostController, reload: Int, go: (String) -> Unit) {
+private fun TabBody(tab: String, h: HState, vm: HealthVm, nav: NavHostController, reload: Int, go: (String) -> Unit, sort: KSortState?) {
     when (tab) {
-        "apps" -> AppsTab(h, vm, nav, reload)
-        "consoles" -> ConsolesTab(h, vm, nav, reload)
-        "live" -> LiveTab(h, vm, nav, reload)
-        "issues" -> IssuesTab(h, vm, nav, reload)
-        "fixes" -> FixesTab(h, vm, nav, reload)
-        "builds" -> BuildsTab(h, vm, nav, reload)
-        "logs" -> LogsTab(h, vm, nav, reload)
+        "apps" -> AppsTab(h, vm, nav, reload, sort)
+        "consoles" -> ConsolesTab(h, vm, nav, reload, sort)
+        "live" -> LiveTab(h, vm, nav, reload, sort)
+        "issues" -> IssuesTab(h, vm, nav, reload, sort)
+        "fixes" -> FixesTab(h, vm, nav, reload, sort)
+        "builds" -> BuildsTab(h, vm, nav, reload, sort)
+        "logs" -> LogsTab(h, vm, nav, reload, sort)
         "settings" -> HSettingsTab(h, vm, reload)
         else -> {
             OverviewMain(h, vm, nav, go)
@@ -199,9 +272,9 @@ private fun heroKind(o: HOverview): KKind = when {
     else -> KKind.OK
 }
 
-/** Rose hero: 21/25 apps theek + legend + patti + pill (Turant dekho / Sab theek). */
+/** Rose hero: 21/25 apps theek + legend + patti + pill (Turant dekho / Sab theek). wait = data aa raha (number ki jagah skeleton). */
 @Composable
-private fun HealthHero(o: HOverview?) {
+private fun HealthHero(o: HOverview?, wait: Boolean = false) {
     KHero(KTint.Rose) {
         val c = Mfc.c
         val k = o?.let { heroKind(it) }
@@ -215,6 +288,10 @@ private fun HealthHero(o: HOverview?) {
                 k,
             )
         })
+        if (o == null && wait) {
+            HeroSkel()
+            return@KHero
+        }
         val ok = o?.healthy?.coerceAtLeast(0) ?: 0
         val bad = o?.withProblems?.coerceAtLeast(0) ?: 0
         val total = o?.apps?.coerceAtLeast(0) ?: 0
@@ -238,6 +315,22 @@ private fun HealthHero(o: HOverview?) {
             }
         }
         KSegBar(if (o == null) emptyList() else listOf(ok.toFloat() to c.zGreen, bad.toFloat() to c.zRed, wait.toFloat() to c.zGrey))
+    }
+}
+
+/** Overview aane tak hero me: bada number + legend (3 line) + patti ki jagah. */
+@Composable
+private fun HeroSkel() {
+    KSkeleton(Modifier.padding(top = 10.dp)) {
+        Column(Modifier.fillMaxWidth()) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Box(Modifier.weight(1f).height(56.dp), contentAlignment = Alignment.CenterStart) { KSkelLine(124.dp, 38.dp) }
+                Column(Modifier.padding(bottom = 6.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    listOf(64.dp, 82.dp, 106.dp).forEach { KSkelLine(it, 10.dp) }
+                }
+            }
+            KSkelLine(1f, 8.dp, Modifier.padding(top = 14.dp))
+        }
     }
 }
 
@@ -296,7 +389,13 @@ private fun issueLine(i: com.myfuturecode.mfcdash.data.HIssue): String = listOfN
 @Composable
 private fun OverviewMain(h: HState, vm: HealthVm, nav: NavHostController, go: (String) -> Unit) {
     val o = h.overview ?: run {
-        if (h.error != null) HProblem(h) { vm.loadOverview() } else Loading()
+        // phone par neeche wale blocks ka dhaancha bhi yahin (ek skeleton); Fold par woh daayein column me
+        if (h.error != null) HProblem(h) { vm.loadOverview() }
+        else KSkeleton {
+            KSkelSection()
+            KSkelRows(3)
+            if (!isWide()) OverviewSideSkel()
+        }
         return
     }
     val att = o.attention.filter { it.severity == "P0" || it.severity == "P1" }
@@ -334,12 +433,28 @@ private fun OverviewMain(h: HState, vm: HealthVm, nav: NavHostController, go: (S
 @Composable
 private fun OverviewSide(h: HState, vm: HealthVm, nav: NavHostController, reload: Int, go: (String) -> Unit) {
     Poll(30_000, reload) { vm.loadBuilds() }
-    val o = h.overview ?: return
+    val o = h.overview ?: run {
+        if (isWide() && h.error == null) OverviewSideSkel()
+        return
+    }
     FixReady(h, o, nav, go)
     ConsolesBlock(o, go)
     ScanBlock(h, o, vm, nav, go)
     NumbersBlock(o, go)
     IntegrationsBlock(o)
+}
+
+/** Overview aane tak: Consoles (1 line), Scan (3 lines), AI kaam (number grid) ki jagah. */
+@Composable
+private fun OverviewSideSkel() {
+    KSkeleton {
+        KSkelSection(width = 100.dp)
+        KSkelRows(1)
+        KSkelSection(width = 60.dp)
+        KSkelRows(3)
+        KSkelSection(width = 90.dp)
+        KSkelStats(12, 3)
+    }
 }
 
 /** "Crash fix" (issue ka type pata ho) warna "v1.4.2". */
@@ -354,7 +469,8 @@ private fun FixReady(h: HState, o: HOverview, nav: NavHostController, go: (Strin
     val n = if (ready.isEmpty()) o.aabReady else ready.size
     KSection("AI fix ready".t(), trailing = { KPill(tf("%s need OK", n), KKind.ASK) })
     if (ready.isEmpty()) {
-        KCard { Loading() }
+        // builds abhi aa rahe (ginti overview se pata): utni lines ka dhaancha
+        KSkelRows(n.coerceIn(1, 3))
         return
     }
     KCard(list = true) {
@@ -526,14 +642,14 @@ private fun appRank(a: HApp): Int = when {
 }
 
 @Composable
-private fun AppsTab(h: HState, vm: HealthVm, nav: NavHostController, reload: Int) {
+private fun AppsTab(h: HState, vm: HealthVm, nav: NavHostController, reload: Int, sort: KSortState?) {
     Poll(60_000, reload) { vm.loadConsoles() }
     var q by rememberSaveable { mutableStateOf("") }
     var stF by rememberSaveable { mutableStateOf("") }
     var conF by rememberSaveable { mutableStateOf("") }
     FilterChips("Status".t(), appStatusOpts(), stF) { stF = it }
     val d = h.consoles ?: run {
-        if (h.error != null) HProblem(h) { vm.loadConsoles() } else Loading()
+        if (h.error != null) HProblem(h) { vm.loadConsoles() } else ListSkel(6)
         return
     }
     val ids = d.consoles.map { it.id }.toSet()
@@ -541,13 +657,16 @@ private fun AppsTab(h: HState, vm: HealthVm, nav: NavHostController, reload: Int
         "Console".t(), listOf("" to "All".t()) + d.consoles.map { it.id to it.name } + listOf("-" to "Not linked".t()), conF,
     ) { conF = it }
     KSearch(q, { q = it }, "Search app or package".t())
-    val shown = d.apps.filter { a ->
-        appMatch(a, q, stF) && when (conF) {
-            "" -> true
-            "-" -> a.consoleId !in ids
-            else -> a.consoleId == conF
-        }
-    }.sortedBy { appRank(it) }
+    val shown = hSortApps(
+        d.apps.filter { a ->
+            appMatch(a, q, stF) && when (conF) {
+                "" -> true
+                "-" -> a.consoleId !in ids
+                else -> a.consoleId == conF
+            }
+        },
+        sort,
+    )
     if (shown.isEmpty()) {
         KCard { KEmpty(if (d.apps.isEmpty()) "No apps".t() else "No match".t(), KIcons.Apps) }
         return
@@ -560,16 +679,25 @@ private fun AppsTab(h: HState, vm: HealthVm, nav: NavHostController, reload: Int
     }
 }
 
+/** Apps / Consoles aane tak: search box + app lines (logo + naam + haal). */
+@Composable
+private fun ListSkel(rows: Int) {
+    KSkeleton {
+        KSkelBlock(48.dp, RoundedCornerShape(24.dp))
+        KSkelRows(rows)
+    }
+}
+
 // ---------------------------------------------------------------- 3. Consoles
 
 @Composable
-private fun ConsolesTab(h: HState, vm: HealthVm, nav: NavHostController, reload: Int) {
+private fun ConsolesTab(h: HState, vm: HealthVm, nav: NavHostController, reload: Int, sort: KSortState?) {
     Poll(60_000, reload) { vm.loadConsoles() }
     var q by rememberSaveable { mutableStateOf("") }
     var stF by rememberSaveable { mutableStateOf("") }
     FilterChips("Status".t(), appStatusOpts(), stF) { stF = it }
     val d = h.consoles ?: run {
-        if (h.error != null) HProblem(h) { vm.loadConsoles() } else Loading()
+        if (h.error != null) HProblem(h) { vm.loadConsoles() } else ListSkel(5)
         return
     }
     KSearch(q, { q = it }, "Search app or package".t())
@@ -581,7 +709,7 @@ private fun ConsolesTab(h: HState, vm: HealthVm, nav: NavHostController, reload:
         listOf<Pair<HConsole?, List<HApp>>>(null to d.apps.filter { a -> d.consoles.none { it.id == a.consoleId } })
     groups.forEach { (con, apps) ->
         if (con == null && apps.isEmpty()) return@forEach
-        val shown = apps.filter { appMatch(it, q, stF) }
+        val shown = hSortApps(apps.filter { appMatch(it, q, stF) }, sort)
         KCard(list = true) {
             if (con != null) ConsoleHead(con)
             else KRow(
@@ -619,7 +747,7 @@ private fun ConsoleHead(con: HConsole) {
 private val JOBS = listOf("manual_full", "critical", "play_errors", "vitals", "ads", "discovery")
 
 @Composable
-private fun LiveTab(h: HState, vm: HealthVm, nav: NavHostController, reload: Int) {
+private fun LiveTab(h: HState, vm: HealthVm, nav: NavHostController, reload: Int, sort: KSortState?) {
     Poll(5_000, reload) { vm.loadRuns() }
     var type by rememberSaveable { mutableStateOf("manual_full") }
     val c = Mfc.c
@@ -629,7 +757,15 @@ private fun LiveTab(h: HState, vm: HealthVm, nav: NavHostController, reload: Int
         KButton("Run Scan Now".t(), { vm.scan(type = type) }, Modifier.fillMaxWidth().padding(top = 8.dp), busy = "scan" in h.busy)
     }
     val r = h.runs ?: run {
-        if (h.error != null) HProblem(h) { vm.loadRuns() } else Loading()
+        // number grid, Runs, Activity feed ka dhaancha
+        if (h.error != null) HProblem(h) { vm.loadRuns() }
+        else KSkeleton {
+            KSkelStats(5, 3)
+            KSkelSection(width = 60.dp)
+            KSkelRows(4)
+            KSkelSection(width = 110.dp)
+            KSkelCard(4, title = false)
+        }
         return
     }
     KCard {
@@ -644,9 +780,16 @@ private fun LiveTab(h: HState, vm: HealthVm, nav: NavHostController, reload: Int
         )
     }
     KSection("Runs".t(), trailing = { KLive("auto 5 sec".t()) })
-    if (r.runs.isEmpty()) KCard { KEmpty("No runs yet".t(), KIcons.History) }
+    // default par server ka order (chalu / line me pehle, phir naye)
+    val runs = when {
+        sort == null || sort.isDefault -> r.runs
+        sort.key == "problems" -> r.runs.kSorted(sort.desc) { it.problems }
+        sort.key == "errors" -> r.runs.kSorted(sort.desc) { it.errors }
+        else -> r.runs.kSorted(sort.desc) { tsMs(it.startedAt ?: it.queuedAt) }
+    }
+    if (runs.isEmpty()) KCard { KEmpty("No runs yet".t(), KIcons.History) }
     else KCard(list = true) {
-        r.runs.forEachIndexed { i, x ->
+        runs.forEachIndexed { i, x ->
             if (i > 0) KListDivider(true)
             RunRow(x, nav)
         }
@@ -663,7 +806,7 @@ private fun LiveTab(h: HState, vm: HealthVm, nav: NavHostController, reload: Int
 private fun dayAgo(n: Int): String = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -n) }.time)
 
 @Composable
-private fun IssuesTab(h: HState, vm: HealthVm, nav: NavHostController, reload: Int) {
+private fun IssuesTab(h: HState, vm: HealthVm, nav: NavHostController, reload: Int, sort: KSortState?) {
     val ctx = LocalContext.current
     val c = Mfc.c
     var status by rememberSaveable { mutableStateOf("open") }
@@ -679,6 +822,7 @@ private fun IssuesTab(h: HState, vm: HealthVm, nav: NavHostController, reload: I
         "from" to if (period.isBlank()) "" else dayAgo(period.toInt() - 1),
     )
     Poll(20_000, f, reload) { vm.loadIssues(f) }
+    KLoadOnChange(status, console, pkg, sev, type, period)   // filter chips = upar ki line (search text nahi)
 
     val cons = h.consoles
     if (cons != null && cons.consoles.size > 1) FilterChips("Console".t(), listOf("" to "All".t()) + cons.consoles.map { it.id to it.name }, console) {
@@ -704,7 +848,16 @@ private fun IssuesTab(h: HState, vm: HealthVm, nav: NavHostController, reload: I
     }
     KSearch(q, { q = it }, "Search title, cause, ISS-id".t())
     if (d == null) {
-        if (h.error != null) HProblem(h) { vm.loadIssues(f) } else Loading()
+        // "N issues" + CSV ki line, phir issue lines
+        if (h.error != null) HProblem(h) { vm.loadIssues(f) }
+        else KSkeleton {
+            Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+                KSkelLine(84.dp, 14.dp, Modifier.padding(start = 4.dp))
+                Box(Modifier.weight(1f))
+                KSkelBlock(48.dp, RoundedCornerShape(24.dp), Modifier.width(88.dp))
+            }
+            KSkelRows(5)
+        }
         return
     }
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -718,8 +871,16 @@ private fun IssuesTab(h: HState, vm: HealthVm, nav: NavHostController, reload: I
         KCard { KEmpty(if (status == "open") "No open issue".t() else "No match".t(), KIcons.Ok) }
         return
     }
+    // default par server ka order (review wale pehle, severity, aakhri baar)
+    val issues = when {
+        sort == null || sort.isDefault -> d.issues
+        sort.key == "last" -> d.issues.kSorted(sort.desc) { tsMs(it.lastSeen) }
+        sort.key == "users" -> d.issues.kSorted(sort.desc) { it.users }
+        sort.key == "events" -> d.issues.kSorted(sort.desc) { it.events }
+        else -> d.issues.kSorted(sort.desc) { hSevRank(it.severity) }
+    }
     KCard(list = true) {
-        d.issues.forEachIndexed { i, x ->
+        issues.forEachIndexed { i, x ->
             if (i > 0) KListDivider(true)
             IssueRow(x, nav)
         }
@@ -729,19 +890,26 @@ private fun IssuesTab(h: HState, vm: HealthVm, nav: NavHostController, reload: I
 // ---------------------------------------------------------------- 6. AI fixes
 
 @Composable
-private fun FixesTab(h: HState, vm: HealthVm, nav: NavHostController, reload: Int) {
+private fun FixesTab(h: HState, vm: HealthVm, nav: NavHostController, reload: Int, sort: KSortState?) {
     var res by rememberSaveable { mutableStateOf("") }
     Poll(15_000, res, reload) { vm.loadFixes(res) }
+    KLoadOnChange(res)
     FilterChips("Result".t(), listOf("" to "All".t(), "ok" to "Verified".t(), "fail" to "Failed".t(), "running" to "Running".t()), res) { res = it }
     val list = h.fixes?.takeIf { h.fixesKey == res } ?: run {
-        if (h.error != null) HProblem(h) { vm.loadFixes(res) } else Loading()
+        if (h.error != null) HProblem(h) { vm.loadFixes(res) } else HSkelCards(3, 4)
         return
     }
     if (list.isEmpty()) {
         KCard { KEmpty("No AI fixes".t(), KIcons.Wand) }
         return
     }
-    list.forEach { f -> FixHistoryCard(f) { nav.navigate("health/issue/${f.issueId}") } }
+    // default par server ka order (naye pehle)
+    val shown = when {
+        sort == null || sort.isDefault -> list
+        sort.key == "app" -> list.kSorted(sort.desc) { it.app.ifBlank { it.pkg }.lowercase() }
+        else -> list.kSorted(sort.desc) { tsMs(it.startedAt) }
+    }
+    shown.forEach { f -> FixHistoryCard(f) { nav.navigate("health/issue/${f.issueId}") } }
 }
 
 @Composable
@@ -782,14 +950,14 @@ private fun FixHistoryCard(f: HFix, onOpen: () -> Unit) {
 // ---------------------------------------------------------------- 7. Builds (AAB)
 
 @Composable
-private fun BuildsTab(h: HState, vm: HealthVm, nav: NavHostController, reload: Int) {
+private fun BuildsTab(h: HState, vm: HealthVm, nav: NavHostController, reload: Int, sort: KSortState?) {
     var show by rememberSaveable { mutableStateOf("") }
     Poll(30_000, reload) { vm.loadBuilds() }
     FilterChips(
         "Show".t(), listOf("" to "All".t(), "review" to "Waiting for you".t(), "PUBLISHED" to "Published".t(), "DISCARDED" to "Discarded".t()), show,
     ) { show = it }
     val list = h.builds ?: run {
-        if (h.error != null) HProblem(h) { vm.loadBuilds() } else Loading()
+        if (h.error != null) HProblem(h) { vm.loadBuilds() } else HSkelCards(3, 3)
         return
     }
     val shown = list.filter {
@@ -797,6 +965,14 @@ private fun BuildsTab(h: HState, vm: HealthVm, nav: NavHostController, reload: I
             "" -> true
             "review" -> it.reviewable
             else -> it.status == show
+        }
+    }.let { l ->
+        // default par server ka order (aapka intezaar wale pehle, phir naye)
+        when {
+            sort == null || sort.isDefault -> l
+            sort.key == "time" -> l.kSorted(sort.desc) { tsMs(it.createdAt) }
+            sort.key == "app" -> l.kSorted(sort.desc) { it.app.ifBlank { it.pkg }.lowercase() }
+            else -> l.kSorted(sort.desc) { if (it.reviewable) 1 else 0 }
         }
     }
     if (shown.isEmpty()) KCard { KEmpty("No builds yet".t(), KIcons.Download) }
@@ -806,20 +982,27 @@ private fun BuildsTab(h: HState, vm: HealthVm, nav: NavHostController, reload: I
 // ---------------------------------------------------------------- 8. Logs
 
 @Composable
-private fun LogsTab(h: HState, vm: HealthVm, nav: NavHostController, reload: Int) {
+private fun LogsTab(h: HState, vm: HealthVm, nav: NavHostController, reload: Int, sort: KSortState?) {
     var level by rememberSaveable { mutableStateOf("") }
     var q by rememberSaveable { mutableStateOf("") }
     val c = Mfc.c
     Poll(15_000, level, q, reload) { vm.loadLogs(level, q.trim()) }
+    KLoadOnChange(level)   // level chip = upar ki line (search text nahi)
     FilterChips("Level".t(), listOf("" to "All".t(), "error" to "Error".t(), "warn" to "Warning".t(), "ok" to "OK", "info" to "Info".t()), level) { level = it }
     KSearch(q, { q = it }, "Search logs".t())
     val list = h.logs?.takeIf { h.logsKey == "$level|${q.trim()}" } ?: run {
-        if (h.error != null) HProblem(h) { vm.loadLogs(level, q) } else Loading()
+        if (h.error != null) HProblem(h) { vm.loadLogs(level, q) } else KSkelCard(8, title = false)
         return
     }
+    // default par server ka order (naye pehle)
+    val shown = when {
+        sort == null || sort.isDefault -> list
+        sort.key == "level" -> list.kSorted(sort.desc) { hLevelRank(it.level) }
+        else -> list.kSorted(sort.desc) { tsMs(it.createdAt) }
+    }
     KCard {
-        if (list.isEmpty()) KEmpty("No log lines".t(), KIcons.History)
-        list.forEach { e ->
+        if (shown.isEmpty()) KEmpty("No log lines".t(), KIcons.History)
+        shown.forEach { e ->
             Column {
                 EventRow(e, nav)
                 if (e.pkg.isNotBlank()) Text(
@@ -837,7 +1020,16 @@ private fun LogsTab(h: HState, vm: HealthVm, nav: NavHostController, reload: Int
 private fun HSettingsTab(h: HState, vm: HealthVm, reload: Int) {
     Poll(60_000, reload) { vm.loadSettings() }
     val s = h.settings ?: run {
-        if (h.error != null) HProblem(h) { vm.loadSettings() } else Loading()
+        // Per app cards, Email, monitoring ka dhaancha
+        if (h.error != null) HProblem(h) { vm.loadSettings() }
+        else KSkeleton {
+            KSkelSection(width = 80.dp)
+            KSkelRows(3)
+            KSkelSection(width = 60.dp)
+            KSkelRows(3, lead = false, value = false)
+            KSkelSection(width = 150.dp)
+            KSkelRows(2, lead = false, value = false)
+        }
         return
     }
     KSection("Per app".t(), trailing = { HSecNote(tf("%s apps", s.apps.size)) })

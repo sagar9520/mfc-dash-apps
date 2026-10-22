@@ -58,7 +58,7 @@
             </intent-filter>
         </receiver>
 
-        <!-- Home-screen widgets (Jetpack Glance): Paisa, Google Ads, App Health -->
+        <!-- Home-screen widgets (Jetpack Glance): Paisa, Ads + Live, App Health, Alerts -->
         <receiver
             android:name=".widget.PaisaWidgetReceiver"
             android:exported="true"
@@ -91,6 +91,17 @@
             <meta-data
                 android:name="android.appwidget.provider"
                 android:resource="@xml/widget_health_info" />
+        </receiver>
+        <receiver
+            android:name=".widget.AlertsWidgetReceiver"
+            android:exported="true"
+            android:label="@string/widget_alerts_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_alerts_info" />
         </receiver>
     </application>
 </manifest>

@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
@@ -38,11 +39,17 @@ import com.myfuturecode.mfcdash.ui.kit.KLazyScreen
 import com.myfuturecode.mfcdash.ui.kit.KLegend
 import com.myfuturecode.mfcdash.ui.kit.KListDivider
 import com.myfuturecode.mfcdash.ui.kit.KLive
+import com.myfuturecode.mfcdash.ui.kit.KMiniPill
+import com.myfuturecode.mfcdash.ui.kit.KSortButton
 import com.myfuturecode.mfcdash.ui.kit.KRow
 import com.myfuturecode.mfcdash.ui.kit.KScreen
 import com.myfuturecode.mfcdash.ui.kit.KSearch
 import com.myfuturecode.mfcdash.ui.kit.KSegBar
 import com.myfuturecode.mfcdash.ui.kit.KSegTabs
+import com.myfuturecode.mfcdash.ui.kit.KSkelBlock
+import com.myfuturecode.mfcdash.ui.kit.KSkelHero
+import com.myfuturecode.mfcdash.ui.kit.KSkelRows
+import com.myfuturecode.mfcdash.ui.kit.KSkeleton
 import com.myfuturecode.mfcdash.ui.kit.KTabBar
 import com.myfuturecode.mfcdash.ui.kit.KTint
 import com.myfuturecode.mfcdash.ui.kit.KTwoPane
@@ -50,6 +57,9 @@ import com.myfuturecode.mfcdash.ui.kit.isWide
 import com.myfuturecode.mfcdash.ui.kit.kCardItems
 import com.myfuturecode.mfcdash.ui.kit.kItem
 import com.myfuturecode.mfcdash.ui.kit.kRoasKind
+import com.myfuturecode.mfcdash.ui.kit.kSortLead
+import com.myfuturecode.mfcdash.ui.kit.kSorted
+import com.myfuturecode.mfcdash.ui.kit.rememberKSort
 import com.myfuturecode.mfcdash.ui.theme.Mfc
 import com.myfuturecode.mfcdash.util.inr
 import com.myfuturecode.mfcdash.util.num
@@ -59,12 +69,18 @@ import com.myfuturecode.mfcdash.util.tf
 
 /**
  * Apps tab: hero = kitne apps profit me (profit / loss / bina data patti), phir har app ek row:
- * avatar, naam, ROAS (rang niyam) ya crash, daayein signed munafa. Tap = app detail.
+ * avatar, naam, ROAS (rang niyam), daayein signed munafa (crash zyada ho to neeche laal pill). Tap = app detail.
+ * Sort: bar ka Sort button (Filter ke baad), default munafa zyada -> kam; badla ho to list ke upar pill.
  */
 @Composable
 fun AppsScreen(vm: DashVm, st: UiState, nav: NavHostController) {
     var tab by rememberSaveable { mutableIntStateOf(0) }          // 0 sab | 1 profit | 2 loss | 3 bina data
-    var sort by rememberSaveable { mutableStateOf("profit") }
+    // sort: bar ka Sort button (default munafa zyada -> kam, aaj jaisa); bina chhede pill nahi
+    val sort = rememberKSort("profit")
+    val sortOpts = listOf(
+        "profit" to "Net profit".t(), "earned" to "Earnings".t(), "roas" to "ROAS", "spend" to "Ads spend".t(),
+        "installs" to "Installs".t(), "live" to "Live users".t(), "name" to "Name".t(),
+    )
     var show by rememberSaveable { mutableStateOf("") }          // "" sab | paid = ad kharch wale | organic
     var searching by rememberSaveable { mutableStateOf(false) }
     var q by rememberSaveable { mutableStateOf("") }
@@ -85,20 +101,12 @@ fun AppsScreen(vm: DashVm, st: UiState, nav: NavHostController) {
                 } &&
                 (needle.isEmpty() || r.name.contains(needle, true) || r.pkg.contains(needle, true))
         },
-        sort,
+        sort.key, sort.desc,
     )
     val open: (String) -> Unit = { p -> nav.navigate("app/$p") }
-    // Sort + Show (purane Home ke app filters) bar ke filter icon ke peeche sheet me
+    // Show (purane Home ka app filter) bar ke filter icon ke peeche sheet me; Sort ab apne button me
     val box = remember { FilterBox() }
     CompositionLocalProvider(LocalFilterBox provides box) {
-        FilterChips(
-            "Sort".t(),
-            listOf(
-                "profit" to "Profit".t(), "earned" to "Earnings".t(), "roas" to "ROAS", "spend" to "Ad spend".t(),
-                "installs" to "Installs".t(), "live" to "Live users".t(), "name" to "Name".t(),
-            ),
-            sort,
-        ) { sort = it }
         FilterChips(
             "Show".t(),
             listOf("" to "All".t(), "paid" to "With ad spend".t(), "organic" to "Organic only".t()),
@@ -112,13 +120,18 @@ fun AppsScreen(vm: DashVm, st: UiState, nav: NavHostController) {
                 if (!searching) q = ""
             })
             KBarIcon(KIcons.Filter, "Filters".t(), { box.open = true }, badge = box.active.size, badgeUrgent = false)
+            KSortButton(sort, sortOpts)
             DashRangeIcon(vm, st)
             KBarIcon(KIcons.Refresh, "Refresh".t(), { vm.refresh() }, spinning = st.loading)
         }
     }
     val tabs = listOf("All".t(), "Profit".t(), "Loss".t(), "No data".t())
     if (d == null) {
-        KScreen(top = bar) { DashNoData(st, st.loading) { vm.refresh() } }
+        // pehli baar: hero + tabs + app rows ka skeleton (error ho to error card)
+        val wide = isWide()
+        KScreen(top = { bar(); if (st.loading && !wide) KSkelHero() }) {
+            DashNoData(st, st.loading, { AppsSkel(wide) }) { vm.refresh() }
+        }
     } else if (isWide()) {
         // Fold: baayein hero + tabs, daayein list
         KScreen(top = bar) {
@@ -129,12 +142,12 @@ fun AppsScreen(vm: DashVm, st: UiState, nav: NavHostController) {
                 },
                 right = {
                     if (searching) KSearch(q, { q = it }, "Search apps".t())
-                    FilterSummary(box)
+                    FilterSummary(box, lead = kSortLead(sort, sortOpts))
                     if (shown.isEmpty()) KCard { KEmpty(if (rows.isEmpty()) "No apps".t() else "No match".t(), KIcons.Apps) }
                     else KCard(list = true) {
                         shown.forEachIndexed { i, r ->
                             if (i > 0) KListDivider(true)
-                            AppsRow(r, sort, st.roasTarget) { open(r.pkg) }
+                            AppsRow(r, sort.key, st.roasTarget) { open(r.pkg) }
                         }
                     }
                 },
@@ -147,14 +160,27 @@ fun AppsScreen(vm: DashVm, st: UiState, nav: NavHostController) {
         }) {
             if (searching) kItem(key = "apps.search") { KSearch(q, { q = it }, "Search apps".t()) }
             kItem(key = "apps.tabs") { KSegTabs(tabs, tab, { tab = it }) }
-            if (box.active.isNotEmpty()) kItem(key = "apps.filters") { FilterSummary(box) }
+            if (box.active.isNotEmpty() || !sort.isDefault) kItem(key = "apps.filters") { FilterSummary(box, lead = kSortLead(sort, sortOpts)) }
             if (shown.isEmpty()) kItem(key = "apps.empty") {
                 KCard { KEmpty(if (rows.isEmpty()) "No apps".t() else "No match".t(), KIcons.Apps) }
             }
-            else kCardItems(shown, key = { it.pkg }, lead = true) { r -> AppsRow(r, sort, st.roasTarget) { open(r.pkg) } }
+            else kCardItems(shown, key = { it.pkg }, lead = true) { r -> AppsRow(r, sort.key, st.roasTarget) { open(r.pkg) } }
         }
     }
     FilterSheet(box)
+}
+
+/** Apps ka skeleton: tabs + app rows (avatar, naam, ROAS, munafa). Fold: baayein hero + tabs, daayein list. */
+@Composable
+private fun AppsSkel(wide: Boolean) {
+    KSkeleton {
+        val tabs: @Composable () -> Unit = { KSkelBlock(48.dp, RoundedCornerShape(24.dp)) }
+        if (wide) KTwoPane(left = { KSkelHero(); tabs() }, right = { KSkelRows(7) })
+        else {
+            tabs()
+            KSkelRows(7)
+        }
+    }
 }
 
 /** Ek app ki row ka data. state: 1 profit | 2 loss | 3 bina data. */
@@ -184,15 +210,16 @@ private fun appsRowsOf(d: DashData): List<AppsRowData> {
     }
 }
 
-private fun appsSorted(list: List<AppsRowData>, sort: String): List<AppsRowData> = when (sort) {
-    "earned" -> list.sortedByDescending { it.earned }
-    "roas" -> list.sortedByDescending { it.roas ?: -1.0 }
-    "spend" -> list.sortedByDescending { it.spend }
-    "installs" -> list.sortedByDescending { it.installs }
-    "live" -> list.sortedByDescending { it.live }
-    "name" -> list.sortedBy { it.name.lowercase() }
-    // munafa: bina data wale aakhir me
-    else -> list.sortedWith(compareBy<AppsRowData> { if (it.state == 3) 1 else 0 }.thenByDescending { it.profit })
+/** desc = bada pehle (naam: Z -> A). Bina ROAS wale aur (munafa me) bina data wale dono direction me aakhir me. */
+private fun appsSorted(list: List<AppsRowData>, sort: String, desc: Boolean): List<AppsRowData> = when (sort) {
+    "earned" -> list.kSorted(desc) { it.earned }
+    "roas" -> list.kSorted(desc) { it.roas }
+    "spend" -> list.kSorted(desc) { it.spend }
+    "installs" -> list.kSorted(desc) { it.installs }
+    "live" -> list.kSorted(desc) { it.live }
+    "name" -> list.kSorted(desc) { it.name.lowercase() }
+    // munafa (default, zyada -> kam): bina data wale aakhir me
+    else -> list.kSorted(desc, last = { it.state == 3 }) { it.profit }
 }
 
 /** Crash zyada: 5+ crash aur DAU ka 1.09% se upar. */
@@ -210,7 +237,7 @@ private fun AppsHero(d: DashData, range: String, nProfit: Int, nLoss: Int, nNone
             "30d" -> "Apps · 30 days".t()
             else -> "Apps".t() + " · " + periodText(d)
         }
-        KHeroHead(label, trailing = { if (d.today) KLive("Live".t()) })
+        KHeroHead(label, trailing = { if (d.today && !d.cached) KLive("Live".t()) })
         val total = nProfit + nLoss + nNone
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             // mockup: "18" hara + "/25" chhota, neeche "apps profit mein"
@@ -230,13 +257,13 @@ private fun AppsHero(d: DashData, range: String, nProfit: Int, nLoss: Int, nNone
     }
 }
 
-/** Ek app: avatar, naam, ROAS / crash (shabd + shape + rang), signed munafa, chevron. */
+/** Ek app: avatar, naam, ROAS (shabd + shape + rang), signed munafa (+ sort wala number, + crash pill), chevron. */
 @Composable
 private fun AppsRow(a: AppsRowData, sort: String, target: Double, onClick: () -> Unit) {
     val c = Mfc.c
     val roas = a.roas
+    // ROAS hamesha (pata ho to); crash zyada ho to alag laal pill value ke neeche
     val (sub, kind) = when {
-        appsCrashHigh(a) -> tf("Crash · %s", num(a.crashes)) to KKind.BAD
         roas != null && roas.isFinite() -> "ROAS " + roasPct(roas) to kRoasKind(roas, target)
         a.state != 3 -> "No ad spend".t() to KKind.NEUTRAL
         else -> "No data".t() to KKind.NEUTRAL
@@ -260,5 +287,6 @@ private fun AppsRow(a: AppsRowData, sort: String, target: Double, onClick: () ->
         },
         valueSub = extra,
         chevron = true, onClick = onClick,
+        valueBottom = if (appsCrashHigh(a)) ({ KMiniPill(tf("%s crash", num(a.crashes)), KKind.BAD, icon = KIcons.Bug) }) else null,
     )
 }

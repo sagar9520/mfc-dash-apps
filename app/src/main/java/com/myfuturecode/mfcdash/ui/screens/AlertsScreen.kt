@@ -20,9 +20,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Mail
+import androidx.compose.material.icons.outlined.RocketLaunch
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -45,6 +49,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -69,9 +75,15 @@ import com.myfuturecode.mfcdash.ui.kit.KIcons
 import com.myfuturecode.mfcdash.ui.kit.KKind
 import com.myfuturecode.mfcdash.ui.kit.KLazyScreen
 import com.myfuturecode.mfcdash.ui.kit.KListDivider
-import com.myfuturecode.mfcdash.ui.kit.KLoading
+import com.myfuturecode.mfcdash.ui.kit.KSkelBlock
+import com.myfuturecode.mfcdash.ui.kit.KSkelCircle
+import com.myfuturecode.mfcdash.ui.kit.KSkelLine
+import com.myfuturecode.mfcdash.ui.kit.KSkelRows
+import com.myfuturecode.mfcdash.ui.kit.KSkelSection
+import com.myfuturecode.mfcdash.ui.kit.KSkeleton
 import com.myfuturecode.mfcdash.ui.kit.KNum
 import com.myfuturecode.mfcdash.ui.kit.KPageTokens
+import com.myfuturecode.mfcdash.ui.kit.KPullAction
 import com.myfuturecode.mfcdash.ui.kit.KPill
 import com.myfuturecode.mfcdash.ui.kit.KRow
 import com.myfuturecode.mfcdash.ui.kit.KScreen
@@ -79,6 +91,9 @@ import com.myfuturecode.mfcdash.ui.kit.KSearch
 import com.myfuturecode.mfcdash.ui.kit.KSection
 import com.myfuturecode.mfcdash.ui.kit.KSegTabs
 import com.myfuturecode.mfcdash.ui.kit.KSmallAction
+import com.myfuturecode.mfcdash.ui.kit.KSortButton
+import com.myfuturecode.mfcdash.ui.kit.KSortKind
+import com.myfuturecode.mfcdash.ui.kit.KSortPill
 import com.myfuturecode.mfcdash.ui.kit.KStatus
 import com.myfuturecode.mfcdash.ui.kit.KTabBar
 import com.myfuturecode.mfcdash.ui.kit.KTint
@@ -87,6 +102,8 @@ import com.myfuturecode.mfcdash.ui.kit.icon
 import com.myfuturecode.mfcdash.ui.kit.isWide
 import com.myfuturecode.mfcdash.ui.kit.kCardItems
 import com.myfuturecode.mfcdash.ui.kit.kItem
+import com.myfuturecode.mfcdash.ui.kit.kSorted
+import com.myfuturecode.mfcdash.ui.kit.rememberKSort
 import com.myfuturecode.mfcdash.ui.kit.word
 import com.myfuturecode.mfcdash.ui.theme.Mfc
 import com.myfuturecode.mfcdash.util.agoText
@@ -111,7 +128,11 @@ fun AlertsScreen(vm: DashVm, st: UiState, nav: NavHostController) {
     var tab by rememberSaveable { mutableIntStateOf(0) }           // 0 sab | 1 turant | 2 dhyan do | 3 OK chahiye
     var show by rememberSaveable { mutableStateOf("all") }         // all | open | info | closed
     var appF by rememberSaveable { mutableStateOf("") }
-    var kind by rememberSaveable { mutableStateOf("") }            // "" | ads | gads | crash | money | health | gah | studio | cost | data
+    var kind by rememberSaveable { mutableStateOf("") }            // "" | release | play | ads | gads | crash | money | health | gah | studio | cost | data
+    // sort: bar ka Sort button (Filter ke baad). Default = aaj jaisa: din-wise (naya din pehle; din me khule, kism, naya)
+    val sort = rememberKSort("time")
+    val sortOpts = listOf("time" to "Time".t(), "level" to "Level".t(), "app" to "App".t())
+    val sortKinds = mapOf("time" to KSortKind.DATE, "app" to KSortKind.TEXT)
     var searching by rememberSaveable { mutableStateOf(false) }
     var q by rememberSaveable { mutableStateOf("") }
     var sheet by remember { mutableStateOf(false) }
@@ -125,6 +146,8 @@ fun AlertsScreen(vm: DashVm, st: UiState, nav: NavHostController) {
     val al = st.alerts
     val filters = (if (show != "all") 1 else 0) + (if (appF.isNotBlank()) 1 else 0) + (if (kind.isNotBlank()) 1 else 0)
     val bar: @Composable ColumnScope.() -> Unit = {
+        // kheencho = sirf list dobara (tez). Refresh icon ka "Check now" (server par rules chalana, slow) alag rehta hai.
+        KPullAction({ vm.refreshAlerts() })
         KTabBar("Alerts".t()) {
             if (al != null) {
                 KBarIcon(if (searching) KIcons.Close else KIcons.Search, "Search".t(), {
@@ -132,6 +155,7 @@ fun AlertsScreen(vm: DashVm, st: UiState, nav: NavHostController) {
                     if (!searching) q = ""
                 })
                 KBarIcon(KIcons.Filter, "Filter".t(), { sheet = true }, badge = filters, badgeUrgent = false)
+                KSortButton(sort, sortOpts, sortKinds)
                 KBarIcon(KIcons.Refresh, "Check now".t(), { vm.computeAlerts { msg = it } }, spinning = st.alertsBusy, enabled = !st.alertsBusy)
             } else {
                 KBarIcon(KIcons.Refresh, "Check again".t(), { vm.refreshAlerts() })
@@ -142,7 +166,8 @@ fun AlertsScreen(vm: DashVm, st: UiState, nav: NavHostController) {
     if (rules) AlRulesDialog { rules = false }
 
     if (al == null) {
-        KScreen(top = bar) { AlProblem(st, vm) }
+        // pehli baar aa raha = hero + tabs + list ka dhaancha; alerts.php nahi / error = AlProblem (Dobara check)
+        if (!st.alertsMissing && st.alertsError == null) AlSkelScreen(bar) else KScreen(top = bar) { AlProblem(st, vm) }
         return
     }
 
@@ -153,7 +178,7 @@ fun AlertsScreen(vm: DashVm, st: UiState, nav: NavHostController) {
         val tabOk = tab == 0 || (tab == 1 && s == KKind.BAD) || (tab == 2 && s == KKind.WARN) || (tab == 3 && s == KKind.ASK)
         val showOk = when (show) {
             "open" -> a.open
-            "info" -> a.open && s == KKind.NEUTRAL
+            "info" -> a.open && (s == KKind.NEUTRAL || s == KKind.OK)
             "closed" -> !a.open
             else -> true
         }
@@ -161,9 +186,21 @@ fun AlertsScreen(vm: DashVm, st: UiState, nav: NavHostController) {
             (needle.isEmpty() || a.titleL.contains(needle, true) || a.bodyL.contains(needle, true) ||
                 a.appName.contains(needle, true) || a.campaign.contains(needle, true))
     }
-    val groups: List<Pair<String, List<AlertItem>>> = list.groupBy { alDayKey(it) }.toList()
-        .sortedWith(compareBy<Pair<String, List<AlertItem>>> { it.first.isEmpty() }.thenByDescending { it.first })
-        .map { (k, v) -> k to v.sortedWith(AL_ORDER) }
+    // Time: din-wise (naya / purana din pehle); Level: ek list (khule + kism, phir naya); App: app-wise A -> Z (bina app aakhir me)
+    val groups: List<Pair<String, List<AlertItem>>> = when (sort.key) {
+        "level" -> if (list.isEmpty()) emptyList() else listOf(
+            "" to list.kSorted(true) { tsMs(it.createdAt) }.kSorted(sort.desc) { (if (it.open) 10 else 0) + 4 - alRank(alSev(it)) },
+        )
+        "app" -> list.groupBy { it.appName.ifBlank { it.pkg } }.toList()
+            .kSorted(sort.desc, last = { it.first.isBlank() }) { it.first.lowercase() }
+            .map { (k, v) -> k to v.sortedWith(AL_ORDER) }
+        else -> list.groupBy { alDayKey(it) }.toList()
+            .sortedWith(
+                compareBy<Pair<String, List<AlertItem>>> { it.first.isEmpty() }
+                    .let { c -> if (sort.desc) c.thenByDescending { it.first } else c.thenBy { it.first } },
+            )
+            .map { (k, v) -> k to if (sort.desc) v.sortedWith(AL_ORDER) else v.kSorted(false) { tsMs(it.createdAt) } }
+    }
     val fresh = al.alerts.filter { it.open && it.unread }
     val nBad = fresh.count { alSev(it) == KKind.BAD }
     val nWarn = fresh.count { alSev(it) == KKind.WARN }
@@ -177,6 +214,11 @@ fun AlertsScreen(vm: DashVm, st: UiState, nav: NavHostController) {
         else -> KKind.OK
     }
     val tabs = listOf("All".t(), "Act now".t(), "Watch".t(), "Needs OK".t())
+    val groupLabel: (String) -> String = when (sort.key) {
+        "level" -> { _ -> tabs[tab] }
+        "app" -> { k -> k.ifBlank { "Other".t() } }
+        else -> { k -> alDayLabel(k) }
+    }
     val plain = tab == 0 && filters == 0 && needle.isEmpty()
     val emptyText = if (plain) "No alerts".t() else "No match".t()
     val readAll: (() -> Unit)? = if (al.unread > 0) { { vm.markAllRead() } } else null
@@ -194,9 +236,10 @@ fun AlertsScreen(vm: DashVm, st: UiState, nav: NavHostController) {
                     AlExtras(al, nav)
                 },
                 right = {
+                    KSortPill(sort, sortOpts, sortKinds)
                     if (groups.isEmpty()) KCard { KEmpty(emptyText, KIcons.Bell) }
                     groups.forEachIndexed { gi, (key, items) ->
-                        AlDayHead(alDayLabel(key), if (gi == 0) readAll else null)
+                        AlDayHead(groupLabel(key), if (gi == 0) readAll else null)
                         KCard(list = true) {
                             items.forEachIndexed { i, a ->
                                 if (i > 0) KListDivider(true)
@@ -214,10 +257,11 @@ fun AlertsScreen(vm: DashVm, st: UiState, nav: NavHostController) {
         }) {
             if (searching) kItem(key = "al.search") { KSearch(q, { q = it }, "Search alerts".t()) }
             kItem(key = "al.tabs") { AlTabs(tabs, tab) { tab = it } }
+            if (!sort.isDefault) kItem(key = "al.sort") { KSortPill(sort, sortOpts, sortKinds) }
             msg?.let { m -> kItem(key = "al.msg") { AlMsg(m) } }
             if (groups.isEmpty()) kItem(key = "al.empty") { KCard { KEmpty(emptyText, KIcons.Bell) } }
             groups.forEachIndexed { gi, (key, items) ->
-                kItem(key = "al.h.$key") { AlDayHead(alDayLabel(key), if (gi == 0) readAll else null) }
+                kItem(key = "al.h.$key") { AlDayHead(groupLabel(key), if (gi == 0) readAll else null) }
                 kCardItems(items, key = { it.id }, lead = true) { a ->
                     AlRow(a, expanded[a.id] == true, { toggle(a.id) }, nav) { vm.resolveAlert(a.id) }
                 }
@@ -240,6 +284,8 @@ fun AlertsScreen(vm: DashVm, st: UiState, nav: NavHostController) {
 
 /** Group rule names into kinds for the Kind filter. */
 fun alertKind(rule: String): String = when {
+    rule == "new_version" -> "release"   // naya version Play par live
+    rule == "play_mail" -> "play"        // Play Console ki email
     rule.startsWith("health") -> "health"
     rule.startsWith("gah_") -> "gah"
     rule.startsWith("studio_") -> "studio"
@@ -253,9 +299,10 @@ fun alertKind(rule: String): String = when {
 
 // ---------------------------------------------------------------- kism / din
 
-/** Alert ki kism: aapke faisle wale (Gate, tested build) = OK chahiye, level 3 = Turant, 2 = Dhyan do, baaki Info. */
+/** Alert ki kism: aapke faisle wale (Gate, tested build) = OK chahiye, level 3 = Turant, 2 = Dhyan do, naya version live = Theek, baaki Info. */
 private fun alSev(a: AlertItem): KKind = when {
     a.rule == "studio_gate" || a.rule == "health_aab" || (a.rule == "studio_research" && a.level >= 2) -> KKind.ASK
+    a.rule == "new_version" && a.level <= 1 -> KKind.OK
     a.level >= 3 -> KKind.BAD
     a.level == 2 -> KKind.WARN
     else -> KKind.NEUTRAL
@@ -299,7 +346,11 @@ private fun alDayLabel(key: String): String {
 /** Status line: shabd · app · kitni baar (band = "Theek · band 2 ghante pehle"). */
 private fun alSub(a: AlertItem, k: KKind): String {
     val parts = ArrayList<String>()
-    parts += if (k == KKind.NEUTRAL) "Info".t() else k.word()
+    parts += when {
+        k == KKind.NEUTRAL -> "Info".t()
+        a.open && a.rule == "new_version" -> "Live".t()
+        else -> k.word()
+    }
     if (!a.open) {
         val at = a.resolvedAt
         val ago = when {
@@ -321,9 +372,21 @@ private fun alTarget(a: AlertItem): Pair<String, String>? = when {
     a.isGads -> (if (a.gaAlertId != null) "Open alert".t() else "Ads Monitor".t()) to a.route
     a.isStudio -> "Open in Studio".t() to a.route
     a.isCost -> "AI Cost & Usage".t() to a.route
+    (a.rule == "new_version" || a.rule == "play_mail") && a.pkg.isNotBlank() -> "App health".t() to "health/app/${a.pkg}"
     a.pkg.isNotBlank() -> "Open app".t() to "app/${a.pkg}"
     else -> null
 }
+
+/** Kism ka apna icon (naya version = rocket, Play mail = mail); baaki alerts par haalat ka icon. */
+private fun alKindIcon(a: AlertItem): ImageVector? = when (alertKind(a.rule)) {
+    "release" -> Icons.Outlined.RocketLaunch
+    "play" -> Icons.Outlined.Mail
+    else -> null
+}
+
+/** Body ka pehla link (jaise Gmail forwarding confirm), aakhri .,) hata ke. */
+private fun alLink(text: String): String? =
+    Regex("https?://[^\\s<>\"']+").find(text)?.value?.trimEnd('.', ',', ')', ';', ']')?.takeIf { it.length > 10 }
 
 /** Tab badlo (Root ke bottom nav jaisa). */
 private fun alGoTab(nav: NavHostController, route: String) = nav.navigate(route) {
@@ -333,8 +396,8 @@ private fun alGoTab(nav: NavHostController, route: String) = nav.navigate(route)
 }
 
 private val AL_KINDS = listOf(
-    "" to "All", "ads" to "Ads", "gads" to "Google Ads", "crash" to "Crash", "money" to "Money", "health" to "AI Health",
-    "gah" to "Ads Monitor", "studio" to "Studio", "cost" to "AI Cost", "data" to "Data",
+    "" to "All", "release" to "New version", "play" to "Play mail", "ads" to "Ads", "gads" to "Google Ads", "crash" to "Crash", "money" to "Money",
+    "health" to "AI Health", "gah" to "Ads Monitor", "studio" to "Studio", "cost" to "AI Cost", "data" to "Data",
 )
 private val AL_SHOWS = listOf("all", "open", "info", "closed")
 
@@ -443,9 +506,10 @@ private fun AlRow(a: AlertItem, open: Boolean, onToggle: () -> Unit, nav: NavHos
             a.titleL,
             sub = alSub(a, k),
             subKind = k,
-            lead = { KIconTile(k.icon() ?: KIcons.Info, if (quiet) KKind.NEUTRAL else k) },
+            lead = { KIconTile(alKindIcon(a) ?: k.icon() ?: KIcons.Info, if (quiet) KKind.NEUTRAL else k) },
             trailing = { AlTime(a) },
-            onClick = onToggle,
+            // naya version (app pata) = seedha us app ka AI Health; baaki = khulta hai
+            onClick = if (a.rule == "new_version" && a.pkg.isNotBlank()) { { nav.navigate(a.route) } } else onToggle,
             quiet = quiet,
             titleLines = if (open) 3 else 1,
         )
@@ -466,11 +530,14 @@ private fun AlTime(a: AlertItem) {
 @Composable
 private fun AlDetail(a: AlertItem, nav: NavHostController, onResolve: () -> Unit) {
     val c = Mfc.c
+    val uri = LocalUriHandler.current
+    val link = alLink(a.bodyL)
     Column(
         Modifier.fillMaxWidth().padding(start = 68.dp, end = 16.dp, bottom = 14.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        if (a.bodyL.isNotBlank()) AlText(a.bodyL, 14.sp, c.ink2, maxLines = 40)
+        // long press = select / copy (Play mail ka link ya code)
+        if (a.bodyL.isNotBlank()) SelectionContainer { AlText(a.bodyL, 14.sp, c.ink2, maxLines = 40) }
         if (a.ai.isNotBlank()) Column {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Icon(KIcons.Spark, null, tint = c.brand, modifier = Modifier.size(16.dp))
@@ -480,6 +547,7 @@ private fun AlDetail(a: AlertItem, nav: NavHostController, onResolve: () -> Unit
         }
         val target = alTarget(a)
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (link != null) KSmallAction("Open link".t(), { runCatching { uri.openUri(link) } })
             if (target != null) KSmallAction(target.first, { nav.navigate(target.second) })
             if (a.campaign.isNotBlank() || a.account.isNotBlank()) KSmallAction("Campaigns".t(), { nav.navigate("money") })
             if (a.open) KSmallAction("✓ Done".t(), onResolve)
@@ -526,13 +594,61 @@ private fun AlProblem(st: UiState, vm: DashVm) {
     val c = Mfc.c
     val err = st.alertsError
     if (!st.alertsMissing && err == null) {
-        KLoading()
+        AlListSkel()
         return
     }
     KCard {
         if (st.alertsMissing) AlText("alerts.php is not on the server".t(), 15.sp, c.ink, weight = FontWeight.SemiBold, maxLines = 2)
         else if (err != null) AlText(err, 14.sp, c.red, maxLines = 4)
         KButton("Check again".t(), { vm.refreshAlerts() }, Modifier.fillMaxWidth().padding(top = 12.dp), kind = KBtn.SOFT, icon = KIcons.Refresh)
+    }
+}
+
+/** Alerts aane tak poori screen ka dhaancha (Fold: baayein hero + tabs, daayein list). */
+@Composable
+private fun AlSkelScreen(bar: @Composable ColumnScope.() -> Unit) {
+    if (isWide()) {
+        KScreen(top = bar) {
+            KSkeleton {
+                KTwoPane(left = {
+                    AlHeroSkel()
+                    KSkelBlock(48.dp, RoundedCornerShape(24.dp))
+                }, right = { AlListSkel() })
+            }
+        }
+    } else {
+        KScreen(top = { bar(); AlHeroSkel() }) {
+            KSkeleton {
+                KSkelBlock(48.dp, RoundedCornerShape(24.dp))
+                AlListSkel()
+            }
+        }
+    }
+}
+
+/** Hero ka dhaancha: asli label, bada number + nishaan, neeche ek line. */
+@Composable
+private fun AlHeroSkel() {
+    KHero(KTint.Rose) {
+        KHeroHead("Today's alerts".t())
+        KSkeleton(Modifier.padding(top = 2.dp)) {
+            Column(Modifier.fillMaxWidth()) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Box(Modifier.weight(1f).height(56.dp), contentAlignment = Alignment.CenterStart) { KSkelLine(112.dp, 38.dp) }
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { repeat(3) { KSkelCircle(24.dp) } }
+                }
+                KSkelLine(170.dp, 11.dp, Modifier.padding(top = 10.dp))
+            }
+        }
+    }
+}
+
+/** Din ki heading + alert lines ki jagah. */
+@Composable
+private fun AlListSkel() {
+    KSkeleton {
+        KSkelSection(width = 60.dp)
+        KSkelRows(5)
     }
 }
 
@@ -569,9 +685,12 @@ private fun AlRulesDialog(onClose: () -> Unit) {
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 listOf(
-                    Triple(KKind.BAD, "URGENT".t(), "data stopped (app / server), ads stopped, Google Ads script silent, campaign 0 impressions, spend with 0 installs, CPI 2.5x, ROAS loss (<60%), crash spike, revenue 85%+ down, ad unit no-fill, cron down".t()),
-                    Triple(KKind.WARN, "Watch".t(), "data low, impressions down, CPI +50%, ROAS <85%, campaign D3 ROAS <60%, spend 2x faster, new version crashing, ad fill down, ad unit CTR/eCPM/fill down, revenue/installs 60%+ down, eCPM halved, uninstalls high, payments failing, D1 retention down".t()),
-                    Triple(KKind.NEUTRAL, "Info".t(), "9 AM summary of yesterday (+AI brief), new/paused campaign, revenue/installs up, new record, urgent issue recovered".t()),
+                    Triple(KKind.BAD, "URGENT".t(), "data stopped (app / server), ads stopped, Google Ads script silent, campaign 0 impressions, spend with 0 installs, CPI 2.5x, ROAS loss (<60%), crash spike, revenue 85%+ down, ad unit no-fill, cron down".t() +
+                        ", " + "Play mail: rejected / removed / suspended / policy violation".t()),
+                    Triple(KKind.WARN, "Watch".t(), "data low, impressions down, CPI +50%, ROAS <85%, campaign D3 ROAS <60%, spend 2x faster, new version crashing, ad fill down, ad unit CTR/eCPM/fill down, revenue/installs 60%+ down, eCPM halved, uninstalls high, payments failing, D1 retention down".t() +
+                        ", " + "Play mail: warning / declaration / deadline".t()),
+                    Triple(KKind.NEUTRAL, "Info".t(), "9 AM summary of yesterday (+AI brief), new/paused campaign, revenue/installs up, new record, urgent issue recovered".t() +
+                        ", " + "new version live on Play, Play mail: approved / live".t()),
                 ).forEach { (k, label, body) ->
                     KStatus(label, k, Modifier.padding(top = 6.dp))
                     AlText(body, 14.sp, c.ink2, maxLines = 20)
