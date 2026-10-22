@@ -1150,8 +1150,17 @@ function h_task_create(PDO $pdo, string $pkg, string $title, string $details, st
 }
 final class HTaskWarn extends RuntimeException { public int $issueId; public function __construct(int $id, string $m) { parent::__construct($m); $this->issueId = $id; } }
 
-/** Sirf Sagar ke "Approve & Live" tap par: AAB Play par upload + track release. Kabhi apne aap nahi. */
+/** Sirf Sagar ke "Approve & Live" tap par: AAB Play par upload + track release. Kabhi apne aap nahi.
+ *  Ek build ka ek hi publish ek waqt par (app ka timeout ke baad dobara tap = doosra upload nahi). */
 function h_publish(PDO $pdo, int $buildId, string $track, float $rollout, string $by): array
+{
+    $lk = $pdo->quote('mfc_publish_' . $buildId);
+    if ((int)$pdo->query("SELECT GET_LOCK($lk, 0)")->fetchColumn() !== 1) throw new RuntimeException('publish is already running for this build, check AAB Releases in a minute');
+    try { return h_publish_run($pdo, $buildId, $track, $rollout, $by); }
+    finally { $pdo->query("SELECT RELEASE_LOCK($lk)"); }
+}
+
+function h_publish_run(PDO $pdo, int $buildId, string $track, float $rollout, string $by): array
 {
     if (!in_array($track, ['internal', 'alpha', 'beta', 'production'], true)) throw new RuntimeException('bad track');
     $b = $pdo->query('SELECT * FROM health_builds WHERE id = ' . $buildId)->fetch();

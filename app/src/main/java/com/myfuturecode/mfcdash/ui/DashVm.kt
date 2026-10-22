@@ -19,6 +19,8 @@ import com.myfuturecode.mfcdash.util.Lang
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -36,6 +38,7 @@ data class UiState(
     val alerts: AlertsData? = null,        // api/alerts.php (smart alerts)
     val alertsMissing: Boolean = false,
     val alertsBusy: Boolean = false,
+    val alertsError: String? = null,       // alerts.php tak pahunch nahi paye (net / server busy): message + dobara try
     val appExtra: Map<String, ExtraData> = emptyMap(),
     val appData: Map<String, DashData> = emptyMap(),   // App detail: pkg → us app ka data
     val appCp: Map<String, CpData> = emptyMap(),
@@ -59,7 +62,11 @@ class DashVm(private val app: App) : ViewModel() {
     fun consumeRoute() { app.pendingRoute.value = null }
     private var autoJob: Job? = null
 
-    init { if (prefs.hasLogin) { refresh(); startAuto() } }
+    init {
+        if (prefs.hasLogin) { refresh(); startAuto() }
+        // app wapas aaye (peeche se) to turant taaza data: auto refresh peeche ruka rehta hai
+        viewModelScope.launch { app.foreground.drop(1).filter { it }.collect { if (_s.value.loggedIn) refresh() } }
+    }
 
     val baseUrl get() = prefs.baseUrl
     val username get() = prefs.username
@@ -137,7 +144,8 @@ class DashVm(private val app: App) : ViewModel() {
     fun refreshAlerts() {
         viewModelScope.launch {
             runCatching { AlertsSync.check(app) }
-                .onSuccess { al -> _s.update { it.copy(alerts = al ?: it.alerts, alertsMissing = al == null) } }
+                .onSuccess { al -> _s.update { it.copy(alerts = al ?: it.alerts, alertsMissing = al == null, alertsError = null) } }
+                .onFailure { e -> _s.update { it.copy(alertsError = e.message ?: "Server not reachable".t()) } }
         }
     }
 

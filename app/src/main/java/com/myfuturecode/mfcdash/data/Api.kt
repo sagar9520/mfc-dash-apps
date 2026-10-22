@@ -66,6 +66,8 @@ class Api(private val prefs: Prefs) {
         .readTimeout(40, TimeUnit.SECONDS)
         .followRedirects(false)
         .build()
+    /** Lambe kaam wale taps (Play publish, alerts abhi check, AI key test): server par Claude/Play call poori hone do. */
+    private val slowClient = client.newBuilder().readTimeout(180, TimeUnit.SECONDS).build()
 
     private fun url(path: String) = prefs.baseUrl + path
 
@@ -73,6 +75,8 @@ class Api(private val prefs: Prefs) {
     private val gate = Semaphore(4)
     /** Wahi GET pehle se chal rahi ho to naya call usi ka jawab leta hai (poll jaldi-jaldi chale to requests jama nahi hoti). */
     private val inflight = ConcurrentHashMap<String, Deferred<Pair<Int, String>>>()
+    /** Har POST ke baad badhta hai: POST ke baad wali GET, POST se pehle chali GET ka (purana) jawab nahi leti. */
+    @Volatile private var writes = 0L
     private val bg = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /**
@@ -80,12 +84,14 @@ class Api(private val prefs: Prefs) {
      * Ek baar dobara try: request server tak pahunchi hi nahi (net/DNS/connect), ya GET par 502/503/504 / connection toota.
      * Read timeout par dobara nahi (server pehle se kaam kar raha hai, aur load mat badhao).
      */
-    private suspend fun send(req: Request, idempotent: Boolean): Pair<Int, String> {
+    private suspend fun send(req: Request, idempotent: Boolean, slow: Boolean = false): Pair<Int, String> {
         var tries = 0
         while (true) {
             tries++
             try {
-                val r = gate.withPermit { withContext(Dispatchers.IO) { client.newCall(req).execute().use { it.code to (it.body?.string() ?: "") } } }
+                val r = try {
+                    gate.withPermit { withContext(Dispatchers.IO) { (if (slow) slowClient else client).newCall(req).execute().use { it.code to (it.body?.string() ?: "") } } }
+                } finally { if (req.method != "GET") writes++ }
                 if (idempotent && tries == 1 && r.first in 502..504) { delay(2_000); continue }
                 return r
             } catch (e: IOException) {
@@ -109,23 +115,25 @@ class Api(private val prefs: Prefs) {
         else -> "Network problem. Try again.".t()
     })
 
+    /** 502/503/504 = hosting abhi bhari (thodi der ki baat). 500 = server file/config ki galti: wahi code dikhao. */
     private fun httpError(code: Int): String =
-        if (code in 500..599) tf("Server is busy (error %s). Try again in a little while.", code) else "Server error $code"
+        if (code in 502..504) tf("Server is busy (error %s). Try again in a little while.", code) else "Server error $code"
 
     /** GET, ek URL ki ek hi request ek waqt par (baaki usi ka jawab lete hain). */
     private suspend fun fetch(u: String): Pair<Int, String> {
+        val key = "$u#$writes"
         while (true) {
             val mine = bg.async(start = CoroutineStart.LAZY) {
                 send(Request.Builder().url(u).header("Accept", "application/json").header("Cache-Control", "no-store").build(), idempotent = true)
             }
-            val cur = inflight.putIfAbsent(u, mine)
+            val cur = inflight.putIfAbsent(key, mine)
             if (cur == null) {
-                mine.invokeOnCompletion { inflight.remove(u, mine) }
+                mine.invokeOnCompletion { inflight.remove(key, mine) }
                 mine.start()
                 return mine.await()
             }
             mine.cancel()
-            if (cur.isCompleted) { inflight.remove(u, cur); continue }   // purana (khatam) jawab dobara mat do
+            if (cur.isCompleted) { inflight.remove(key, cur); continue }   // purana (khatam) jawab dobara mat do
             return cur.await()
         }
     }
@@ -142,7 +150,7 @@ class Api(private val prefs: Prefs) {
             if (html.contains("name=\"password\"")) throw ApiException("Username ya password galat hai", unauthorized = true)
             return@withContext
         }
-        throw ApiException(if (code in 500..599) httpError(code) else "Server ne $code diya", network = code in 500..599)
+        throw ApiException(if (code in 502..504) httpError(code) else "Server ne $code diya", network = code in 502..504)
     }
 
     private suspend fun getJson(path: String, retry: Boolean = true): JSONObject = withContext(Dispatchers.IO) {
@@ -156,7 +164,7 @@ class Api(private val prefs: Prefs) {
         }
         if (code in 500..599) {   // server ka apna JSON error ho to wahi, warna "server busy" (502/503/504 = hosting par jagah nahi)
             val err = runCatching { JSONObject(text).optString("error") }.getOrNull().orEmpty()
-            throw ApiException(err.ifBlank { httpError(code) }, network = err.isBlank())
+            throw ApiException(err.ifBlank { httpError(code) }, network = err.isBlank() && code in 502..504)
         }
         if (code != 200) throw ApiException(httpError(code))
         val j = runCatching { JSONObject(text) }.getOrElse { throw ApiException("Jawab JSON nahi tha (login page?)", unauthorized = text.contains("name=\"password\"")) }
@@ -198,13 +206,13 @@ class Api(private val prefs: Prefs) {
     }
 
     /** Form POST (login expire ho to ek baar dobara login karke retry). */
-    private suspend fun postForm(path: String, fields: Map<String, String>, retry: Boolean = true): JSONObject = withContext(Dispatchers.IO) {
+    private suspend fun postForm(path: String, fields: Map<String, String>, retry: Boolean = true, slow: Boolean = false): JSONObject = withContext(Dispatchers.IO) {
         val fb = FormBody.Builder()
         fields.forEach { (k, v) -> fb.add(k, v) }
         val req = Request.Builder().url(url(path)).post(fb.build()).header("Accept", "application/json").build()
-        val (code, text) = send(req, idempotent = false)
+        val (code, text) = send(req, idempotent = false, slow = slow)
         if (code == 401 || code in 300..399) {
-            if (retry && prefs.hasLogin) { login(prefs.username, prefs.password); return@withContext postForm(path, fields, retry = false) }
+            if (retry && prefs.hasLogin) { login(prefs.username, prefs.password); return@withContext postForm(path, fields, retry = false, slow = slow) }
             throw ApiException("Login expire ho gaya", unauthorized = true)
         }
         val j = runCatching { JSONObject(text) }.getOrNull() ?: throw ApiException(httpError(code))
@@ -219,16 +227,16 @@ class Api(private val prefs: Prefs) {
     suspend fun alertsRead(ids: List<Long>? = null) { postForm("api/alerts.php?action=read", if (ids == null) mapOf("all" to "1") else mapOf("ids" to ids.joinToString(","))) }
     suspend fun alertResolve(id: Long) { postForm("api/alerts.php?action=resolve", mapOf("id" to id.toString())) }
     suspend fun alertTest() { postForm("api/alerts.php?action=test", emptyMap()) }
-    suspend fun alertsCompute(): JSONObject = postForm("api/alerts.php?action=compute", emptyMap())
+    suspend fun alertsCompute(): JSONObject = postForm("api/alerts.php?action=compute", emptyMap(), slow = true)
     /** key khali = AI band. Return: server ka ai status + test_ok. */
-    suspend fun aiKey(key: String, model: String): JSONObject = postForm("api/alerts.php?action=ai_key", mapOf("key" to key, "model" to model))
+    suspend fun aiKey(key: String, model: String): JSONObject = postForm("api/alerts.php?action=ai_key", mapOf("key" to key, "model" to model), slow = true)
 
     // ---- api/health.php (AI App Health & Auto Fix)
     private fun hq(params: Map<String, String>) = params.filterValues { it.isNotBlank() }.entries
         .joinToString("&") { it.key + "=" + java.net.URLEncoder.encode(it.value, "UTF-8") }
     private suspend fun hget(view: String, params: Map<String, String> = emptyMap()): JSONObject =
         getJson("api/health.php?view=$view" + hq(params).let { if (it.isEmpty()) "" else "&$it" })
-    private suspend fun hpost(action: String, fields: Map<String, String>): JSONObject = postForm("api/health.php?action=$action", fields)
+    private suspend fun hpost(action: String, fields: Map<String, String>): JSONObject = postForm("api/health.php?action=$action", fields, slow = action == "publish")
 
     suspend fun hOverview() = HOverview.parse(hget("overview"))
     suspend fun hConsoles() = HConsolesData.parse(hget("consoles"))

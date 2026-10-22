@@ -57,6 +57,10 @@ fun AlertsScreen(vm: DashVm, st: UiState, nav: NavHostController) {
                         style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Spacer(Modifier.height(10.dp))
                     Button(onClick = { vm.refreshAlerts() }) { Text("Check again".t()) }
+                } else if (st.alertsError != null) Panel {
+                    Text(st.alertsError.orEmpty(), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
+                    Spacer(Modifier.height(10.dp))
+                    Button(onClick = { vm.refreshAlerts() }) { Text("Check again".t()) }
                 } else Box(Modifier.fillMaxWidth().padding(top = 60.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
                 return@Column
             }
