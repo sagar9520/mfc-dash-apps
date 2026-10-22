@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.myfuturecode.mfcdash.App
 import com.myfuturecode.mfcdash.data.Cached
 import com.myfuturecode.mfcdash.util.t
+import com.myfuturecode.mfcdash.widget.WidgetSync
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -32,7 +33,7 @@ data class GState(
 
 fun gkey(view: String, p: Map<String, String>) = view + "?" + p.filterValues { it.isNotBlank() }.toSortedMap().toString()
 
-class GadsVm(app: App) : ViewModel() {
+class GadsVm(private val app: App) : ViewModel() {
     private val api = app.api
     private val _s = MutableStateFlow(GState())
     val s: StateFlow<GState> = _s
@@ -69,6 +70,8 @@ class GadsVm(app: App) : ViewModel() {
             try {
                 val j = api.gAction(action, fields)
                 ok?.let { say(it) }
+                // account juda / badla / check chala: Ads widget turant naya (warna agle 15-30 min tak purane accounts)
+                if (action in WIDGET_ACTIONS) WidgetSync.runNow(app, force = true)
                 then(j)
             } catch (e: Exception) {
                 say(e.message ?: "Failed".t())
@@ -89,6 +92,8 @@ class GadsVm(app: App) : ViewModel() {
     }
 
     companion object {
+        private val WIDGET_ACTIONS = setOf("account_save", "account_toggle", "scan")
+
         fun factory(app: App) = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T = GadsVm(app) as T

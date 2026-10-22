@@ -403,7 +403,8 @@ function gr_campaign(array $c, array $th): array
  * Account level rules.
  * $a: cid, company, currency, data_age_min (null = kabhi data nahi), sources[], script_status (customer.status) + script_status_at,
  *     script_errors[], emails[] ([kind, verified, subject, received_at, reason]), policy[] ([campaign_id, campaign, ad_group_id, ad_id, approval, topics]),
- *     assets_low[] ([campaign_id, campaign, asset_id, name, field_type, impressions]), inactive (['now'=>, 'usual'=>, 'window'=>] ya null)
+ *     assets_low[] ([campaign_id, campaign, asset_id, name, field_type, impressions]), inactive (['now'=>, 'usual'=>, 'window'=>] ya null),
+ *     budget (['spend'=>, 'budget'=>, 'pct'=>, 'today'=>] aaj ka kharcha vs chalu campaigns ka daily budget; script nahi / data purana = null)
  */
 function gr_account(array $a, array $th): array
 {
@@ -567,6 +568,26 @@ function gr_account(array $a, array $th): array
             'next_hi' => 'Naye assets taiyar karo (AI Creative Review dekho) aur Google Ads me khud badlo.',
             'evidence' => 'ad_group_ad_asset_view.performance_label', 'campaign_id' => $camp, 'campaign' => $nm,
         ]);
+    }
+
+    // ---- aaj ka budget poora: laal alert. Key me din, isliye agle din (ya budget badha to) khud resolve
+    $bg = $a['budget'] ?? null;
+    if (!$bg) {
+        $checks['budget'] = ['INSUFFICIENT', 'no daily budget (needs read-only script)'];
+    } elseif ((float)$bg['pct'] >= 100) {
+        $p = number_format((float)$bg['pct'], 0);
+        $checks['budget'] = ['FAIL', "today $p% of daily budget"];
+        $F[] = gr_f("budget100|$cid|{$bg['today']}", 'budget_used', 'CRITICAL', 'CONFIRMED', [
+            'title' => "Today's budget is used up ($p%)", 'title_hi' => "Aaj ka budget poora kharch ($p%)",
+            'what' => 'Spend today ' . gr_money((float)$bg['spend'], $cur) . ' has reached the daily budget ' . gr_money((float)$bg['budget'], $cur) . ' of the enabled campaigns. Ads may slow down or stop for the rest of the day.',
+            'what_hi' => 'Aaj ka kharcha ' . gr_money((float)$bg['spend'], $cur) . ' chalu campaigns ke daily budget ' . gr_money((float)$bg['budget'], $cur) . ' tak pahunch gaya. Baaki din ads kam ya band chal sakte hain.',
+            'metrics' => ['spend_today' => $bg['spend'], 'budget' => $bg['budget'], 'budget_pct' => $bg['pct'], 'currency' => $cur],
+            'next' => 'If the campaigns are profitable, raise the budget yourself in Google Ads. Otherwise nothing to do.',
+            'next_hi' => 'Campaign munafe me hain to Google Ads me khud budget badhao. Warna kuch karna nahi.',
+            'evidence' => "daily budgets of enabled campaigns (read-only script) + today's spend",
+        ]);
+    } else {
+        $checks['budget'] = ['OK', 'today ' . number_format((float)$bg['pct'], 0) . '% of daily budget'];
     }
 
     // ---- account inactivity (suspension nahi!)

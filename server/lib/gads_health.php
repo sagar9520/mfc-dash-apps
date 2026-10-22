@@ -304,6 +304,13 @@ function ga_camp_status(array $snap, string $camp): string
     return (string)($snap['daily'][$camp]['status'] ?? ($snap['meta'][$camp]['status'] ?? ''));
 }
 
+/** Aaj ka budget: chalu (ENABLED) campaigns ke daily budget ka jod (sirf read-only script bhejti hai); na ho to null. Shared budget do baar gin sakta hai (script budget id nahi bhejta). */
+function ga_budget_today(PDO $pdo, string $cid): ?float
+{
+    $b = (float)(h_q1($pdo, "SELECT SUM(budget) FROM ga_camp WHERE customer_id = ? AND status = 'ENABLED' AND budget > 0 AND budget_period IN ('', 'DAILY')", [$cid]) ?? 0);
+    return $b > 0 ? $b : null;
+}
+
 // ================================================================ scan (rules -> alerts)
 /** Ek account: campaign state track karo, rules chalao. */
 function ga_eval_account(PDO $pdo, array $a, int $runId): array
@@ -399,9 +406,17 @@ function ga_eval_account(PDO $pdo, array $a, int $runId): array
         $bm = gr_median($bt);
         if ($nowT <= 0 && ($bm ?? 0) > 0 && count(array_filter($bt, fn($x) => $x > 0)) === count($bt)) $inactive = ['now' => 0, 'usual' => round((float)$bm, 2), 'window' => sprintf('today 00:00–%02d:59', $snap['R'])];
     }
+    // aaj ka kharcha vs chalu campaigns ka daily budget (overview ki budget line jaisa); 100% = laal alert
+    $budget = null;
+    $bud = ga_budget_today($pdo, $cid);
+    if ($bud !== null && $snap['fresh']) {
+        $spT = 0.0;
+        foreach ($snap['daily'] as $dc) $spT += (float)($dc['days'][$today]['cost'] ?? 0);
+        $budget = ['spend' => round($spT, 2), 'budget' => round($bud, 2), 'pct' => round($spT / $bud * 100, 1), 'today' => $today];
+    }
     $acc = gr_account(['cid' => $cid, 'company' => $a['company'], 'currency' => $snap['currency'], 'data_age_min' => $snap['age'], 'sources' => $snap['sources'],
         'script_status' => (int)$a['src_script'] === 1 ? (string)$a['script_status'] : '', 'script_status_at' => $a['script_status_at'], 'script_errors' => $errs,
-        'emails' => $emails, 'policy' => $policy, 'assets_low' => $low, 'inactive' => $inactive], $th);
+        'emails' => $emails, 'policy' => $policy, 'assets_low' => $low, 'inactive' => $inactive, 'budget' => $budget], $th);
     foreach ($acc['findings'] as $f) $findings[] = $f;
     return ['snap' => $snap, 'findings' => $findings, 'checks' => $acc['checks'], 'camp_checks' => $campChecks, 'campaigns' => $nCamp];
 }

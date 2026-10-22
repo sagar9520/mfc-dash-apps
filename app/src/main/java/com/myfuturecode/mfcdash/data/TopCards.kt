@@ -8,7 +8,7 @@ import com.myfuturecode.mfcdash.util.dn
 // "Top 3" cards ka hisaab (home-screen widgets; aage Home bhi yahi use kare). Sirf data, koi UI nahi:
 // sab functions pehle se parse kiye API models lete hain, isliye widget aur app dono ek jaisa dikhayenge.
 
-/** Rang ka zone: ROAS (red < 80%, amber 80-100%, green >= 100%) ya budget (green < 80%, amber 80-100%, red > 100%). */
+/** Rang ka zone: ROAS (red < 80%, amber 80-100%, green >= 100%) ya budget (green 80% tak, amber 80-90%, red 90% se upar). */
 enum class TopZone { RED, AMBER, GREEN, NONE }
 
 /** ROAS ratio (1.0 = 100%) ka zone; kharcha nahi (null) = NONE. Paisa meter aur Live users ki line dono me yahi. */
@@ -19,11 +19,11 @@ fun roasZone(roas: Double?): TopZone = when {
     else -> TopZone.GREEN
 }
 
-/** Budget ka kitna % kharch hua; budget pata nahi (null) = NONE. */
+/** Budget ka kitna % kharch hua; budget pata nahi (null) = NONE. 100% par server laal alert bhi banata hai. */
 fun budgetZone(pct: Double?): TopZone = when {
     pct == null || !pct.isFinite() -> TopZone.NONE
-    pct > 100.0 -> TopZone.RED
-    pct >= 80.0 -> TopZone.AMBER
+    pct > 90.0 -> TopZone.RED
+    pct > 80.0 -> TopZone.AMBER
     else -> TopZone.GREEN
 }
 

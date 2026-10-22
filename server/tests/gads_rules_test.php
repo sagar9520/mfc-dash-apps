@@ -114,5 +114,14 @@ ok(has($r, 'no_source') && !has($r, 'stale'), 'never received data -> no_source 
 $r = gr_account($a0 + ['policy' => [['campaign_id' => '111', 'campaign' => 'SIM', 'ad_group_id' => '9', 'ad_id' => '77', 'approval' => 'DISAPPROVED', 'topics' => ['MISLEADING (PROHIBITED)']]]], $th);
 ok(has($r, 'disapproved', 'WARNING'), 'disapproved ad -> WARNING');
 
+// account budget: 100% = CRITICAL (din wali key), kam = sirf check, budget nahi = INSUFFICIENT
+$r = gr_account($a0 + ['budget' => ['spend' => 1010, 'budget' => 1000, 'pct' => 101.0, 'today' => '2026-10-20']], $th);
+ok(has($r, 'budget_used', 'CRITICAL') && ($r['checks']['budget'][0] ?? '') === 'FAIL', 'budget 101% used -> CRITICAL budget_used');
+foreach ($r['findings'] as $f) if ($f['rule'] === 'budget_used') ok($f['key'] === 'budget100|1234567890|2026-10-20', 'budget alert key carries the day');
+$r = gr_account($a0 + ['budget' => ['spend' => 950, 'budget' => 1000, 'pct' => 95.0, 'today' => '2026-10-20']], $th);
+ok(!has($r, 'budget_used') && ($r['checks']['budget'][0] ?? '') === 'OK', 'budget 95% -> no alert');
+$r = gr_account($a0, $th);
+ok(!has($r, 'budget_used') && ($r['checks']['budget'][0] ?? '') === 'INSUFFICIENT', 'no budget data -> INSUFFICIENT, no alert');
+
 echo "\n$n checks, $fail failed\n";
 exit($fail > 0 ? 1 : 0);

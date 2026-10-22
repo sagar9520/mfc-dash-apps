@@ -192,6 +192,16 @@ ga_scan($pdo, 'manual', 'test-user', '7778889999');
 ok(count($al('7778889999', 'disapproved')) === 1, 'ad disapproval detected from policy snapshot');
 ok(count($al('7778889999', 'source_error')) === 1, 'reporting connection error recorded (missing section != zero)');
 ok(count($al('7778889999', 'cpi_high')) === 1 && str_contains($al('7778889999', 'cpi_high')[0]['what'], 'Google Ads target CPA'), 'CPI 25 vs Google tCPA 20 (+25.0%)... checked against target source');
+ok(count($al('7778889999', 'budget_used')) === 0, 'budget 67% used -> no budget alert');
+$payload['days'][0]['cost'] = 1530;   // aaj: 1530 / 1500 = 102%
+$http('POST', 'api/gads_ingest.php', $payload);
+ga_scan($pdo, 'manual', 'test-user', '7778889999');
+$bu = $al('7778889999', 'budget_used');
+ok(count($bu) === 1 && $bu[0]['level'] === 'CRITICAL' && str_contains($bu[0]['title'], '102%'), 'today 102% of daily budget -> red (CRITICAL) budget alert');
+$payload['days'][0]['cost'] = 1000;
+$http('POST', 'api/gads_ingest.php', $payload);
+ga_scan($pdo, 'manual', 'test-user', '7778889999');
+ok(count($al('7778889999', 'budget_used')) === 0, 'budget alert resolves when spend is back under budget');
 $payload['account']['status'] = 'SUSPENDED'; $payload['errors'] = [];
 $http('POST', 'api/gads_ingest.php', $payload);
 ga_scan($pdo, 'manual', 'test-user', '7778889999');

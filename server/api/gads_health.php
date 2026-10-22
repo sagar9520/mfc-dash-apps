@@ -282,13 +282,11 @@ function gv_acct_pace(array $snap): array
         'reported_through' => $R >= 0 ? sprintf('%02d:59', $R) : null];
 }
 
-/** Aaj ka budget: chalu (ENABLED) campaigns ke daily budget ka jod, aur aaj ka kharcha uska kitna %. Shared budget do baar gin sakta hai (script budget id nahi bhejta). */
+/** Aaj ka budget (ga_budget_today) aur aaj ka kharcha uska kitna %. Budget nahi (read-only script nahi) = null. */
 function gv_acct_budget(PDO $pdo, string $cid, float $spend): array
 {
-    $q = $pdo->prepare("SELECT SUM(budget) FROM ga_camp WHERE customer_id = ? AND status = 'ENABLED' AND budget > 0 AND budget_period IN ('', 'DAILY')");
-    $q->execute([$cid]);
-    $b = (float)($q->fetchColumn() ?: 0);
-    return ['budget_today' => $b > 0 ? round($b, 2) : null, 'budget_pct' => $b > 0 ? round($spend / $b * 100, 1) : null];
+    $b = ga_budget_today($pdo, $cid);
+    return ['budget_today' => $b === null ? null : round($b, 2), 'budget_pct' => $b === null ? null : round($spend / $b * 100, 1)];
 }
 
 // ---------------------------------------------------------------- A. All Accounts (overview)
