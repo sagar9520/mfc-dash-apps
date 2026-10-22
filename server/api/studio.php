@@ -7,9 +7,22 @@
  *
  * App (login cookie):
  *   GET ?view=overview | research&engine=organic|paid|combined&cc=&category=&status= | opp&id= | compare&ids=1,2,3 | evidence&ids= | projects
- *            | project&id= | approvals | history&q=&kind=&page= | runs | run&id= | sources | settings
+ *            | project&id= | approvals | history&q=&kind=&page= | runs | run&id= | sources | settings | mine
+ *       overview.mine = null (portfolio kabhi nahi chala) ya {computed_at, profit_inr, roas, ecpm_usd, apps, apps_ads_on, best:{cc, profit_inr}|null, loss:{cc, profit_inr}|null}
+ *       mine = aapke apne apps, pichhle 30 local din from..to (aaj samet; pure SQL, AI cost nahi), roz ek baar 'portfolio' job:
+ *              {empty (job kabhi nahi chala), computed_at (UTC), from, to, days, rate (INR/USD), spend_by_cc: exact|estimate|mixed|none, running (portfolio run QUEUED/RUNNING),
+ *              totals:{earn_inr, ad_rev_inr, pay_inr, spend_inr, profit_inr, roas|null, ecpm_usd|null, imps, installs, apps, apps_ads_on, evidence_id},
+ *              apps[]:{pkg, name, category ('' = nahi), earn_inr, ad_rev_inr, pay_inr, spend_inr, spend7_inr, profit_inr, roas|null, ecpm_usd|null, imps, installs, paid_installs, ads_on, evidence_id},
+ *              countries[]:{cc ('' = unknown), installs, paid_installs, earn_inr, ad_rev_inr, pay_inr, spend_inr, spend_est, profit_inr, roas|null, ecpm_usd|null, imps, apps, evidence_id},
+ *              categories[]:{category, apps, earn_inr, ad_rev_inr, pay_inr, spend_inr, profit_inr, roas|null, ecpm_usd|null, imps, installs, d7|null, evidence_id} — teeno profit desc,
+ *              insights[] (sirf type + numbers, text app banata hai; jo shart poori na ho wo type aata hi nahi):
+ *                focus {ccs[], ecpm_min_usd, profit_inr} | avoid_paid {ccs[], roas_min, roas_max, loss_inr, est} | strong {category, roas|null, profit_inr, d7|null, ecpm_usd|null}
+ *                | weak {category, ecpm_usd|null, profit_inr, roas|null} | app_loss {pkgs[], names[], loss_inr}   — loss_inr = ghate ki rakam, POSITIVE (₹ jo gaye)}
+ *              earn = ads + payments, profit = earn - spend (ghata = negative), roas = earn / spend (spend 0 = null), ecpm_usd = ad revenue USD / imps x 1000; paise 2 decimal, roas/eCPM 4
+ *       opp rows me 'fit' = own_fit ka saar {focus_ccs[], avoid_paid_ccs[], category_roas|null, category_profit_inr|null, rating, basis: VERIFIED|ESTIMATE} ya null
  *   POST ?action=gate1 {select:[ids], note} | opp {id, decision: REJECT|WATCH|MORE_RESEARCH|RESTORE, note} | idea {title, concept, category, countries[]}
- *        | gate {project_id, gate, artifact_id, hash, decision: APPROVE|REQUEST_CHANGES|REJECT, feedback} | run {job, source?} | cancel {id}
+ *        | gate {project_id, gate, artifact_id, hash, decision: APPROVE|REQUEST_CHANGES|REJECT, feedback}
+ *        | run {job: economics|portfolio|discover|rank|deep|source_check, source?} | cancel {id}
  *        | setting {key, value} | countries {list:[{cc,name,tier,on}]} | categories {list:[..]} | weights {weights:{key:w}} | app_category {pkg, category}
  *        | project_cancel {id, reason}
  *   GET ?open=project/12 -> chhota page jo app kholta hai (email ke link)
@@ -65,7 +78,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                 break;
             case 'run':
                 $job = (string)($in['job'] ?? '');
-                if (!in_array($job, ['economics', 'discover', 'rank', 'deep', 'source_check'], true)) throw new InvalidArgumentException('bad job');
+                if (!in_array($job, ['economics', 'portfolio', 'discover', 'rank', 'deep', 'source_check'], true)) throw new InvalidArgumentException('bad job');
                 if ((int)h_q1($pdo, "SELECT COUNT(*) FROM st_runs WHERE job = ? AND status IN ('QUEUED','RUNNING')", [$job]) > 0 && $job !== 'source_check') throw new StConflict("$job is already queued or running");
                 $rid = st_run_new($pdo, $job, ['trigger' => 'manual', 'by' => $me, 'params' => ['source' => (string)($in['source'] ?? '')]]);
                 $resp = ['ok' => true, 'run_id' => $rid, 'note' => 'Queued. The server cron (every 5 min) runs it; the app shows real progress.'];
@@ -154,6 +167,12 @@ switch ($view) {
         $out['top'] = array_map(fn($o) => st_opp_row($o), h_q($pdo, "SELECT * FROM st_opps WHERE status IN ('NEW','WATCH') ORDER BY GREATEST(COALESCE(organic_score,0), COALESCE(paid_score,0)) DESC LIMIT 3"));
         $out['schedule'] = ['daily' => st_set('st_daily') === '1', 'weekly' => st_set('st_weekly') === '1', 'monthly' => st_set('st_monthly') === '1',
             'last_daily' => kv_get('st_daily_day'), 'last_weekly' => kv_get('st_weekly_wk'), 'last_monthly' => kv_get('st_monthly_m')];
+        $out['mine'] = st_port_brief($pdo);
+        break;
+
+    case 'mine':   // aapke apne apps: eCPM, kamai, spend, ROAS, country-wise profit/loss (last 30 days)
+        $out += st_port_view($pdo);
+        $out['running'] = (int)h_q1($pdo, "SELECT COUNT(*) FROM st_runs WHERE job = 'portfolio' AND status IN ('QUEUED','RUNNING')") > 0;
         break;
 
     case 'research':

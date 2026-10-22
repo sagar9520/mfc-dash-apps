@@ -11,6 +11,8 @@
  *    us version tak hi; naye version ko nayi approval chahiye. Silence kabhi approval nahi. Koi code path Play par publish nahi karta
  *    (Gate 8 Release 3 me existing "Approve & Live" flow se aayega).
  *  - External text (web pages, reviews) = untrusted data: AI ko saaf bataya jata hai ki usme likhe instructions na maane.
+ *  - Portfolio: aapke apne apps (pichhle 30 din) ka eCPM, kamai, Google Ads spend, ROAS, country-wise profit/loss — pure SQL (AI cost nahi), roz ek baar;
+ *    ranking isi data ko P* evidence ke roop me use karti hai + 'own_fit' factor deterministic (VERIFIED; sirf estimated country spend par ESTIMATE).
  *  - Reuse: lib/health.php (h_q/h_x/h_ai_key/h_ai_model/h_email/h_mail_send/h_link base, h_b64url) — AI App Health module.
  */
 declare(strict_types=1);
@@ -18,7 +20,7 @@ require_once __DIR__ . '/common.php';
 require_once __DIR__ . '/health.php';
 if (is_file(__DIR__ . '/cost.php')) require_once __DIR__ . '/cost.php';   // AI Cost & Usage Manager (optional): cost_log() / budget_check()
 
-const ST_SCHEMA_V = '1';
+const ST_SCHEMA_V = '2';   // v2: st_port (apne apps ka portfolio)
 const ST_LABELS = ['VERIFIED', 'ESTIMATE', 'INFERENCE', 'UNKNOWN'];
 const ST_RECS = ['STRONGLY CONSIDER', 'TEST FIRST', 'WATCH MARKET', 'REJECT'];   // cautious order: index bada = zyada cautious
 const ST_GATES = [1 => 'Research idea selection', 2 => 'Competitor analysis + feature scope', 3 => 'Final UI/UX design', 4 => 'Working app demo',
@@ -47,6 +49,7 @@ const ST_FACTORS = [
     'expansion'     => ['Country expansion potential', 'both', 1, 4],
     'time_to_market' => ['Time to market', 'both', 1, 4],
     'team_fit'      => ['Fit with existing team', 'both', 1, 4],
+    'own_fit'       => ['Fit with your earning apps', 'both', 1, 8],   // aapke apps ka data (category profit/ROAS + countries), deterministic
 ];
 
 const ST_DEFAULT_COUNTRIES = [
@@ -168,6 +171,13 @@ function st_schema(PDO $pdo): void
   id VARCHAR(30) NOT NULL PRIMARY KEY, last_ok_at DATETIME NULL, last_error_at DATETIME NULL, last_error VARCHAR(500) NOT NULL DEFAULT '', last_items INT NOT NULL DEFAULT 0,
   verified TEXT NULL, updated_at DATETIME NOT NULL)$T");
     $pdo->exec("CREATE TABLE IF NOT EXISTS st_notified (nkey VARCHAR(190) NOT NULL PRIMARY KEY, created_at DATETIME NOT NULL)$T");
+    // v2: v1 wale server par bhi ye poora block chalta hai (version alag), purani tables IF NOT EXISTS se untouched; sirf st_port nayi banti hai
+    // pkg/category utf8mb4_bin: job keys pehle hi case-insensitive merge karta hai; bin se accent/space wale collation-barabar naam bhi duplicate key nahi dete
+    $pdo->exec("CREATE TABLE IF NOT EXISTS st_port (
+  kind VARCHAR(8) NOT NULL, pkg VARCHAR(150) COLLATE utf8mb4_bin NOT NULL DEFAULT '', cc CHAR(2) NOT NULL DEFAULT '', category VARCHAR(60) COLLATE utf8mb4_bin NOT NULL DEFAULT '',
+  installs INT NOT NULL DEFAULT 0, paid_installs INT NOT NULL DEFAULT 0, imps BIGINT NOT NULL DEFAULT 0, ad_rev_inr DOUBLE NOT NULL DEFAULT 0, pay_inr DOUBLE NOT NULL DEFAULT 0,
+  spend_inr DOUBLE NOT NULL DEFAULT 0, spend7_inr DOUBLE NOT NULL DEFAULT 0, spend_est TINYINT NOT NULL DEFAULT 0, apps INT NOT NULL DEFAULT 0, evidence_id INT UNSIGNED NULL,
+  computed_at DATETIME NOT NULL, PRIMARY KEY (kind, pkg, cc, category))$T");
     kv_set('st_schema_v', ST_SCHEMA_V);
 }
 
@@ -181,7 +191,7 @@ function st_log(PDO $pdo, string $msg, string $level = 'info', array $ref = [], 
 }
 
 // ================================================================ jobs (durable queue, retries, cancel, crash recovery)
-const ST_JOBS = ['economics', 'discover', 'rank', 'deep', 'evaluate_idea', 'more_research', 'competitors', 'revise_features', 'source_check'];
+const ST_JOBS = ['economics', 'portfolio', 'discover', 'rank', 'deep', 'evaluate_idea', 'more_research', 'competitors', 'revise_features', 'source_check'];
 const ST_MAX_ATTEMPTS = 2;
 
 function st_run_new(PDO $pdo, string $job, array $o = []): int
@@ -231,6 +241,7 @@ function st_run_exec(PDO $pdo, int $id): void
         $ref = (int)($row['ref_id'] ?? 0);
         switch ($run->job) {
             case 'economics': st_job_economics($pdo, $run); break;
+            case 'portfolio': st_job_portfolio($pdo, $run); break;
             case 'discover': st_job_discover($pdo, $run, 'daily'); break;
             case 'rank': st_job_rank($pdo, $run); break;
             case 'deep': st_job_deep($pdo, $run); break;
@@ -317,6 +328,8 @@ function st_cron(PDO $pdo, callable $log): void
     $today = $loc->format('Y-m-d');
     $hour = (int)$loc->format('G');
     $pending = fn(string $j) => (int)h_q1($pdo, "SELECT COUNT(*) FROM st_runs WHERE job = ? AND status IN ('QUEUED','RUNNING')", [$j]) > 0;
+    // apne apps ka portfolio: roz ek baar (local din), pure SQL — AI cost nahi, isliye daily setting / ghante par nahi ruka; dashboard tables hi nahi to queue nahi (roz FAILED nahi)
+    if (kv_get('st_port_day') !== $today && !$pending('portfolio')) { kv_set('st_port_day', $today); if (st_port_ready($pdo)) { st_run_new($pdo, 'portfolio'); $log('portfolio queued'); } }
     if ($hour >= (int)st_set('st_daily_hour')) {
         if (st_set('st_daily') === '1' && kv_get('st_daily_day') !== $today && !$pending('discover')) {
             kv_set('st_daily_day', $today);
@@ -472,8 +485,9 @@ function st_sources(PDO $pdo): array
     $bqReady = !empty($bq['project']) && !empty($bq['sa']) && is_file(h_sa_path((string)$bq['sa']));
     $list = [
         ['id' => 'internal', 'name' => 'Your dashboard analytics', 'engine' => 'both', 'label' => 'VERIFIED', 'configured' => true, 'paid' => false,
-            'provides' => 'Your own apps: installs, D1/D7 retention, D7 ad revenue per install, organic vs paid users (country-wise), Google Ads CPI per app',
-            'missing' => '', 'docs' => '', 'method' => 'SQL over day_install, day_user, imps, devices, gads_campaign_day (last 35 days of raw data)'],
+            'provides' => 'Your own apps: installs, D1/D7 retention, D7 ad revenue per install, organic vs paid users (country-wise), Google Ads CPI per app; '
+                . 'last 30 days per app / country / category: eCPM, earnings (ads + payments), Google Ads spend, ROAS, profit or loss',
+            'missing' => '', 'docs' => '', 'method' => 'SQL over day_install, day_user, imps, events, devices, gads_campaign_day, ga_geo_day (last 30-35 days of raw data)'],
         ['id' => 'claude_web', 'name' => 'Claude AI + web search', 'engine' => 'both', 'label' => 'INFERENCE', 'configured' => h_ai_key() !== '', 'paid' => true,
             'provides' => 'Public web evidence with URLs (articles, listings, review summaries), trend discovery, idea critique',
             'missing' => h_ai_key() === '' ? 'Claude API key (Dash app Settings > AI key)' : '', 'docs' => 'https://docs.claude.com/en/docs/agents-and-tools/tool-use/web-search-tool',
@@ -523,8 +537,13 @@ function st_source_mark(PDO $pdo, string $id, bool $ok, string $err = '', int $i
 // ---------------------------------------------------------------- adapter: internal analytics (VERIFIED)
 function st_app_category(PDO $pdo): array
 {
+    // ek category = ek spelling ('tools' / 'Tools' -> Settings list wali, warna pehli A-Z): DB keys case-insensitive hain, alag spelling se st_econ / st_port me duplicate key aata
+    $canon = [];
+    foreach (st_categories() as $c) $canon[mb_strtolower(trim($c))] ??= trim($c);
+    $rows = h_q($pdo, "SELECT pkg, category FROM st_app_meta WHERE category <> ''");
+    usort($rows, fn($a, $b) => strcmp((string)$a['category'], (string)$b['category']));
     $m = [];
-    foreach (h_q($pdo, "SELECT pkg, category FROM st_app_meta WHERE category <> ''") as $r) $m[$r['pkg']] = $r['category'];
+    foreach ($rows as $r) $m[$r['pkg']] = $canon[mb_strtolower(trim((string)$r['category']))] ??= trim((string)$r['category']);
     return $m;
 }
 
@@ -623,6 +642,286 @@ function st_econ_get(PDO $pdo, string $category, string $cc, string $ut): ?array
     $r = $pdo->prepare('SELECT * FROM st_econ WHERE category = ? AND cc = ? AND users_type = ?');
     $r->execute([$category, $cc, $ut]);
     return $r->fetch() ?: null;
+}
+
+// ---------------------------------------------------------------- adapter: aapke apne apps ka portfolio (VERIFIED, pure SQL, AI cost nahi)
+// Thresholds ek hi jagah (insights, AI context, own_fit sab yahi use karte hain)
+const ST_PORT_DAYS = 30;               // window: pichhle 30 local din (aaj samet), raw UTC tables bhi isi aadhi raat se
+const ST_PORT_MIN_INSTALLS = 50;       // isse kam installs: country focus / AI context me nahi, category kamai-per-install se judge nahi
+const ST_PORT_MIN_IMPS = 1000;         // isse kam impressions par eCPM judge nahi karte (weak category, own_fit)
+const ST_PORT_MIN_SPEND = 500;         // INR: isse kam spend par ROAS / loss judge nahi karte
+const ST_PORT_ROAS_OK = 1.0;           // ROAS < 1.0 = spend se kam kamai (paid unproven)
+const ST_PORT_WEAK_ECPM = 0.5;         // category eCPM < portfolio eCPM x 0.5 = weak
+const ST_PORT_FOCUS_MAX = 3, ST_PORT_AVOID_MAX = 4, ST_PORT_LOSS_MAX = 3, ST_PORT_CTX_CC = 25;
+const ST_PORT_MAX_AGE_H = 36;          // rank se pehle isse purana portfolio = dobara compute
+const ST_PORT_FIT_MID = 5.0;           // own_fit: 5 = break-even ROAS / portfolio jitni kamai; 10 = 2x
+const ST_PORT_FIT_LOSS_MAX = 4.0;      // own_fit: bina paid data ke loss wali category isse upar nahi
+const ST_PORT_FIT_CC_MAX = 2;          // own_fit: focus (+1 har) / avoid_paid (-1 har) countries ka asar max +-2
+const ST_PORT_TABLES = ['imps', 'events', 'day_install', 'devices', 'gads_campaign_day'];   // inme se ek bhi ho tabhi portfolio (ga_geo_day akela kaafi nahi)
+
+function st_rate(): float { return (float)cfg('inr_per_usd') ?: 88.0; }   // naye code me ek hi rate (app.php jaisa)
+function st_has_table(PDO $pdo, string $t): bool { return (bool)$pdo->query('SHOW TABLES LIKE ' . $pdo->quote($t))->fetch(); }
+function st_port_ready(PDO $pdo): bool { foreach (ST_PORT_TABLES as $t) if (st_has_table($pdo, $t)) return true; return false; }
+function st_has_col(PDO $pdo, string $t, string $c): bool { try { return (bool)$pdo->query("SHOW COLUMNS FROM `$t` LIKE " . $pdo->quote($c))->fetch(); } catch (Throwable $e) { return false; } }
+function st_inr(float $v): string { $r = round($v); return ($r < 0 ? '-' : '') . '₹' . number_format(abs($r)); }
+
+/**
+ * Aapke apne apps, pichhle 30 din: eCPM, kamai (ads + payments), Google Ads spend, ROAS, profit — app-wise, country-wise, category-wise (st_port).
+ * Spend campaign-wise: dashboard (gads_campaign_day) ya Ads Script geo report (ga_geo_day), jo bada; app = campaign ka pkg, khaali ho to ga_camp.pkg.
+ * Country spend: geo report ho to EXACT; campaign ka baaki spend us app ke paid installs (gclid/utm) ke country share se = ESTIMATE.
+ * Paid install hi nahi to wo spend cc '' (unknown). Insights deterministic (sirf numbers; text app banata hai). Jo table nahi, wo hissa skip.
+ */
+function st_job_portfolio(PDO $pdo, StRun $run): void
+{
+    $has = fn(string $t) => st_has_table($pdo, $t);
+    if (!st_port_ready($pdo)) throw new RuntimeException('dashboard tables missing (' . implode(', ', ST_PORT_TABLES) . ')');
+    $tabs = array_values(array_filter([...ST_PORT_TABLES, 'ga_geo_day'], $has));
+    $rate = st_rate(); $R = sprintf('%.6F', $rate);
+    $to = local_today();
+    $from = (new DateTime($to))->modify('-' . (ST_PORT_DAYS - 1) . ' day')->format('Y-m-d');
+    $from7 = (new DateTime($to))->modify('-6 day')->format('Y-m-d');
+    $W = $pdo->quote(day_bounds_utc($from)[0]);   // raw UTC tables (imps, events, devices): $from ki local aadhi raat se — day tables (spend, installs) wali hi window, warna ROAS me ek din ka farq
+    $A = []; $P = [];   // [pkg key][cc][metric]; pkg key = lowercase (DB keys case-insensitive), $P = pehli spelling
+    $put = function (string $pkg, ?string $cc, string $k, float $v) use (&$A, &$P): void {
+        $pkg = trim($pkg);
+        if ($pkg === '') return;
+        $key = strtolower($pkg); $P[$key] ??= $pkg;
+        $cc = strtoupper(trim((string)$cc));
+        if (!preg_match('/^[A-Z]{2}$/', $cc)) $cc = '';
+        $A[$key][$cc][$k] = ($A[$key][$cc][$k] ?? 0) + $v;
+    };
+    $run->plan(4);
+    $run->stage('your apps: ad revenue, payments, installs (last ' . ST_PORT_DAYS . ' days)');
+    if ($has('imps')) foreach (h_q($pdo, "SELECT pkg, cc, COUNT(*) n, SUM(rev_usd) rev FROM imps WHERE ts >= $W GROUP BY pkg, cc") as $r) {
+        $put($r['pkg'], $r['cc'], 'imps', (float)$r['n']); $put($r['pkg'], $r['cc'], 'ad_rev_inr', (float)$r['rev'] * $rate);
+    }
+    $dev = $has('devices');
+    // payment = purchase_done, ek order (p2) ek baar (app.php jaisa); val pehle se INR; country = us device ka devices.cc
+    if ($has('events')) foreach (h_q($pdo, 'SELECT x.pkg, ' . ($dev ? 'd.cc' : "''") . " cc, SUM(x.v) amt FROM (SELECT pkg, did, p2, MAX(val) v FROM events WHERE ev = 'purchase_done' AND ts >= $W GROUP BY pkg, did, p2) x"
+        . ($dev ? ' LEFT JOIN devices d ON d.pkg = x.pkg AND d.did = x.did GROUP BY x.pkg, d.cc' : ' GROUP BY x.pkg')) as $r) $put($r['pkg'], $r['cc'], 'pay_inr', (float)$r['amt']);
+    if ($has('day_install')) {
+        foreach (h_q($pdo, 'SELECT pkg, cc, COUNT(*) n FROM day_install WHERE day >= ? GROUP BY pkg, cc', [$from]) as $r) $put($r['pkg'], $r['cc'], 'installs', (float)$r['n']);
+    } elseif ($dev) {
+        foreach (h_q($pdo, "SELECT pkg, cc, COUNT(*) n FROM devices WHERE first_seen >= $W GROUP BY pkg, cc") as $r) $put($r['pkg'], $r['cc'], 'installs', (float)$r['n']);
+    }
+    // paid install = gclid ya utm_campaign (st_job_economics wali definition); column na ho to skip
+    $paidSql = implode(' OR ', array_filter([$dev && st_has_col($pdo, 'devices', 'gclid') ? "COALESCE(gclid, '') <> ''" : '', $dev && st_has_col($pdo, 'devices', 'utm_campaign') ? "COALESCE(utm_campaign, '') <> ''" : '']));
+    if ($paidSql !== '') foreach (h_q($pdo, "SELECT pkg, cc, COUNT(*) n FROM devices WHERE first_seen >= $W AND ($paidSql) GROUP BY pkg, cc") as $r) $put($r['pkg'], $r['cc'], 'paid_installs', (float)$r['n']);
+    $run->step();
+
+    $run->stage('Google Ads spend per app + country split');
+    // campaign-wise (customer_id + campaign_id): app = gads_campaign_day.pkg, khaali ho to ga_camp.pkg (Ads Script). Dono source alag account/campaign se aa sakte hain,
+    // isliye ek campaign ka geo report sirf usi campaign ke spend me se ghatta hai: spend = max(dashboard cost, geo cost), 7 din bhi waise hi
+    $cur = []; $camp = []; $rest = []; $s7 = [];
+    $gc = $has('ga_camp') && st_has_col($pdo, 'ga_camp', 'pkg');
+    $J = $gc ? ' LEFT JOIN ga_camp c ON c.customer_id = g.customer_id AND c.campaign_id = g.campaign_id' : '';
+    $cp = $gc ? 'MAX(c.pkg)' : "''";
+    if ($has('gads_campaign_day')) foreach (h_q($pdo, "SELECT g.customer_id cid, g.campaign_id cmp, MAX(g.pkg) pkg, $cp cpkg, MAX(g.currency) cur, SUM(g.cost*IF(g.currency='USD',$R,1)) inr,
+        SUM(IF(g.day >= ?, g.cost*IF(g.currency='USD',$R,1), 0)) inr7 FROM gads_campaign_day g$J WHERE g.day >= ? GROUP BY g.customer_id, g.campaign_id", [$from7, $from]) as $r) {
+        $cur[$r['cid']] = strtoupper((string)$r['cur']);
+        $camp[$r['cid'] . '|' . $r['cmp']] = ['pkg' => trim((string)$r['pkg']) !== '' ? (string)$r['pkg'] : (string)$r['cpkg'], 'cd' => (float)$r['inr'], 'cd7' => (float)$r['inr7'], 'geo' => 0.0, 'geo7' => 0.0];
+    }
+    // exact country spend: Ads Script ka geo report; currency ga_accounts se (USD -> x rate, warna INR)
+    if ($has('ga_geo_day')) {
+        if ($has('ga_accounts') && st_has_col($pdo, 'ga_accounts', 'currency')) foreach (h_q($pdo, "SELECT customer_id, currency FROM ga_accounts WHERE currency <> ''") as $r) $cur[$r['customer_id']] = strtoupper((string)$r['currency']);
+        foreach (h_q($pdo, "SELECT g.customer_id cid, g.campaign_id cmp, g.country, $cp cpkg, SUM(g.cost) cost, SUM(IF(g.day >= ?, g.cost, 0)) cost7 FROM ga_geo_day g$J
+            WHERE g.day >= ? GROUP BY g.customer_id, g.campaign_id, g.country", [$from7, $from]) as $r) {
+            $x = &$camp[$r['cid'] . '|' . $r['cmp']];
+            $x ??= ['pkg' => (string)$r['cpkg'], 'cd' => 0.0, 'cd7' => 0.0, 'geo' => 0.0, 'geo7' => 0.0];
+            $m = ($cur[$r['cid']] ?? 'INR') === 'USD' ? $rate : 1.0;
+            if (trim($x['pkg']) !== '') { $put($x['pkg'], $r['country'], 'spend_inr', (float)$r['cost'] * $m); $put($x['pkg'], $r['country'], 'exact', (float)$r['cost'] * $m); }
+            $x['geo'] += (float)$r['cost'] * $m; $x['geo7'] += (float)$r['cost7'] * $m;
+            unset($x);
+        }
+    }
+    foreach ($camp as $c) {
+        $k = strtolower(trim($c['pkg']));
+        if ($k === '') continue;   // kisi app se juda nahi: kisi app par nahi daalte
+        $P[$k] ??= trim($c['pkg']);
+        $rest[$k] = ($rest[$k] ?? 0) + max(0.0, $c['cd'] - $c['geo']);   // geo report ke baad is campaign ka bacha spend (kabhi 0 se kam nahi)
+        $s7[$k] = ($s7[$k] ?? 0) + max($c['cd7'], $c['geo7']);
+    }
+    foreach ($rest as $k => $left) {
+        $k = (string)$k;
+        $base = array_filter(array_map(fn($m) => (float)($m['paid_installs'] ?? 0), $A[$k] ?? []));
+        $tot = array_sum($base);
+        if ($left > 0.004) foreach ($tot > 0 ? $base : ['' => 1.0] as $cc => $n) {
+            $v = $left * $n / ($tot > 0 ? $tot : 1.0);
+            $put($P[$k], (string)$cc, 'spend_inr', $v); $put($P[$k], (string)$cc, 'est', $v);
+        }
+    }
+    $run->step();
+
+    $run->stage('app / country / category rows');
+    $cat = [];
+    foreach (st_app_category($pdo) as $p => $c) $cat[strtolower(trim((string)$p))] = $c;   // category ki ek hi spelling (st_app_category), pkg key lowercase
+    $rk = fn(string $kind, string $p, string $c, string $g) => "$kind|" . strtolower($p) . "|$c|" . mb_strtolower($g);   // PHP key = DB primary key jaisa (case-insensitive)
+    $rows = [];
+    foreach ($A as $k => $byCc) {
+        $k = (string)$k; $pkg = $P[$k]; $cg = $cat[$k] ?? '';
+        foreach ($byCc as $cc => $m) foreach ([['app', $pkg, '', $cg], ['cc', '', (string)$cc, ''], ['cat', '', '', $cg]] as [$kind, $p, $c, $g]) {
+            $x = &$rows[$rk($kind, $p, $c, $g)];
+            $x ??= ['kind' => $kind, 'pkg' => $p, 'cc' => $c, 'category' => $g, 'installs' => 0, 'paid_installs' => 0, 'imps' => 0, 'ad_rev_inr' => 0.0, 'pay_inr' => 0.0, 'spend_inr' => 0.0,
+                'spend7_inr' => 0.0, 'est' => 0.0, 'exact' => 0.0, 'set' => []];
+            foreach ($m as $f => $v) $x[$f] += $v;
+            $x['set'][$k] = true;
+            unset($x);
+        }
+        foreach ([$rk('app', $pkg, '', $cg), $rk('cat', '', '', $cg)] as $q) $rows[$q]['spend7_inr'] += $s7[$k] ?? 0;
+    }
+    $now = st_now();
+    $names = apps();
+    $meth = 'Last ' . ST_PORT_DAYS . " local days ($from..$to): ad revenue = imps.rev_usd x $rate INR/USD; eCPM = ad revenue/impressions x 1000; payments = purchase_done once per order (INR); "
+        . 'spend = Google Ads cost per campaign (gads_campaign_day or the Ads Script geo report, whichever is larger; USD x rate); profit = ads + payments - spend; ROAS = (ads + payments)/spend; paid install = gclid/utm_campaign';
+    $out = []; $exact = 0.0; $estAll = 0.0;
+    foreach ($rows as $x) {
+        $est = $x['kind'] === 'cc' && $x['est'] > 0.004;
+        if ($x['kind'] === 'cc') { $exact += $x['exact']; $estAll += $x['est']; }
+        $row = ['kind' => $x['kind'], 'pkg' => $x['pkg'], 'cc' => $x['cc'], 'category' => $x['category'], 'installs' => (int)round($x['installs']), 'paid_installs' => (int)round($x['paid_installs']),
+            'imps' => (int)round($x['imps']), 'ad_rev_inr' => $x['ad_rev_inr'], 'pay_inr' => $x['pay_inr'], 'spend_inr' => $x['spend_inr'], 'spend7_inr' => $x['kind'] === 'cc' ? 0.0 : $x['spend7_inr'],
+            'spend_est' => $est ? 1 : 0, 'apps' => count($x['set'])];
+        $val = st_port_calc($row, $rate) + ['installs' => $row['installs'], 'paid_installs' => $row['paid_installs'], 'apps' => $row['apps'], 'spend_est' => $est];
+        if ($x['kind'] === 'app') $e = ['title' => 'Your app ' . ($names[$x['pkg']]['name'] ?? $x['pkg']) . ' · last ' . ST_PORT_DAYS . ' days', 'method' => $meth];
+        elseif ($x['kind'] === 'cat') $e = ['title' => 'Your ' . ($x['category'] !== '' ? $x['category'] : 'uncategorised') . ' apps · last ' . ST_PORT_DAYS . ' days', 'method' => $meth];
+        else $e = ['title' => 'Your apps in ' . ($x['cc'] !== '' ? $x['cc'] : 'unknown country') . ' · last ' . ST_PORT_DAYS . ' days', 'method' => $meth . ($x['spend_inr'] <= 0.004 ? ''
+            : ($est ? '; country spend partly ESTIMATED: app spend without Ads geo report split by paid installs per country' : '; country spend exact from the Google Ads geo report (Ads Script)'))];
+        $row['ev'] = $e + ['source' => 'internal', 'data_type' => 'portfolio', 'label' => $est ? 'ESTIMATE' : 'VERIFIED', 'confidence' => $est ? 'Medium' : 'High',
+            'pkg' => $x['pkg'], 'cc' => $x['cc'], 'category' => $x['category'], 'key' => $x['kind'], 'value' => $val, 'as_of' => $now];
+        $out[] = $row;
+    }
+    $v = st_port_shape($pdo, $out, $rate);
+    $t = $v['totals'];
+    $sbc = $t['spend_inr'] <= 0 ? 'none' : ($estAll <= 0.004 ? 'exact' : ($exact <= 0.004 ? 'estimate' : 'mixed'));
+    $insights = st_port_insights($v);
+    $run->step();
+
+    $run->stage('save portfolio + evidence + insights');
+    // ek transaction: st_port rows + unke evidence + total evidence + meta saath me; fail ho to purana portfolio poora ka poora bacha rehta hai
+    $pdo->beginTransaction();
+    try {
+        $pdo->exec('DELETE FROM st_port');
+        $ins = $pdo->prepare('INSERT INTO st_port (kind, pkg, cc, category, installs, paid_installs, imps, ad_rev_inr, pay_inr, spend_inr, spend7_inr, spend_est, apps, evidence_id, computed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
+        foreach ($out as $r) $ins->execute([$r['kind'], st_cut($r['pkg'], 150), $r['cc'], st_cut($r['category'], 60), $r['installs'], $r['paid_installs'], $r['imps'], $r['ad_rev_inr'], $r['pay_inr'],
+            $r['spend_inr'], $r['spend7_inr'], $r['spend_est'], $r['apps'], st_evidence($pdo, $r['ev'], $run->id), $now]);
+        $tid = st_evidence($pdo, ['source' => 'internal', 'data_type' => 'portfolio', 'label' => 'VERIFIED', 'confidence' => 'High', 'key' => 'total', 'title' => 'All your apps · last ' . ST_PORT_DAYS . ' days',
+            'value' => $t, 'as_of' => $now, 'method' => $meth], $run->id);
+        kv_set('st_port_meta', st_json(['from' => $from, 'to' => $to, 'days' => ST_PORT_DAYS, 'computed_at' => $now, 'rate' => $rate, 'spend_by_cc' => $sbc, 'insights' => $insights,
+            'total_eid' => $tid, 'missing' => array_values(array_diff([...ST_PORT_TABLES, 'ga_geo_day'], $tabs))]));
+        $pdo->commit();
+    } catch (Throwable $e) { if ($pdo->inTransaction()) $pdo->rollBack(); throw $e; }
+    $run->step();
+    st_source_mark($pdo, 'internal', true, '', count($out) + 1);
+    $ncc = count(array_filter($v['countries'], fn($c) => $c['cc'] !== ''));
+    $run->summary = "{$t['apps']} apps · $ncc countries · profit " . st_inr($t['profit_inr']) . ' · ROAS ' . ($t['roas'] === null ? 'n/a (no ad spend)' : round($t['roas'] * 100) . '%')
+        . ($sbc === 'estimate' || $sbc === 'mixed' ? ' · country spend partly estimated' : '');
+}
+
+/** Ek st_port row -> paise (2 decimal), ROAS + eCPM (4 decimal). earn = ads + payments, profit = earn - spend (rounded parts se, taaki total hamesha jude). */
+function st_port_calc(array $r, float $rate): array
+{
+    $ad = round((float)$r['ad_rev_inr'], 2); $pay = round((float)$r['pay_inr'], 2); $sp = round((float)$r['spend_inr'], 2); $imps = (int)$r['imps'];
+    $earn = round($ad + $pay, 2);
+    return ['earn_inr' => $earn, 'ad_rev_inr' => $ad, 'pay_inr' => $pay, 'spend_inr' => $sp, 'profit_inr' => round($earn - $sp, 2), 'roas' => $sp > 0 ? round($earn / $sp, 4) : null,
+        'ecpm_usd' => $imps > 0 && $rate > 0 ? round((float)$r['ad_rev_inr'] / $rate / $imps * 1000, 4) : null, 'imps' => $imps];
+}
+
+/** st_port rows -> totals + apps + countries + categories (profit desc). Job aur API dono yahi use karte hain. */
+function st_port_shape(PDO $pdo, array $rows, float $rate): array
+{
+    $names = apps();
+    $o = ['apps' => [], 'countries' => [], 'categories' => []];
+    $t = ['ad_rev_inr' => 0.0, 'pay_inr' => 0.0, 'spend_inr' => 0.0, 'imps' => 0];
+    $inst = 0; $on = 0;
+    foreach ($rows as $r) {
+        $c = st_port_calc($r, $rate);
+        $eid = ($r['evidence_id'] ?? null) !== null ? (int)$r['evidence_id'] : null;
+        if ($r['kind'] === 'app') {
+            $s7 = round((float)$r['spend7_inr'], 2);
+            $o['apps'][] = ['pkg' => (string)$r['pkg'], 'name' => (string)($names[$r['pkg']]['name'] ?? $r['pkg']), 'category' => (string)$r['category']] + $c
+                + ['spend7_inr' => $s7, 'installs' => (int)$r['installs'], 'paid_installs' => (int)$r['paid_installs'], 'ads_on' => $s7 > 0, 'evidence_id' => $eid];
+            foreach (array_keys($t) as $k) $t[$k] += (float)$r[$k];
+            $inst += (int)$r['installs']; $on += $s7 > 0 ? 1 : 0;
+        } elseif ($r['kind'] === 'cc') {
+            $o['countries'][] = ['cc' => (string)$r['cc'], 'installs' => (int)$r['installs'], 'paid_installs' => (int)$r['paid_installs']] + $c
+                + ['spend_est' => (int)$r['spend_est'] === 1, 'apps' => (int)$r['apps'], 'evidence_id' => $eid];
+        } elseif ($r['kind'] === 'cat') {
+            $e = (string)$r['category'] !== '' ? st_econ_get($pdo, (string)$r['category'], '', 'organic') : null;
+            $o['categories'][] = ['category' => (string)$r['category'], 'apps' => (int)$r['apps']] + $c
+                + ['installs' => (int)$r['installs'], 'd7' => $e && $e['d7'] !== null ? round((float)$e['d7'], 4) : null, 'evidence_id' => $eid];
+        }
+    }
+    foreach ($o as &$l) usort($l, fn($a, $b) => [$b['profit_inr'], $b['earn_inr']] <=> [$a['profit_inr'], $a['earn_inr']]);
+    unset($l);
+    return ['totals' => st_port_calc($t, $rate) + ['installs' => $inst, 'apps' => count($o['apps']), 'apps_ads_on' => $on]] + $o;
+}
+
+/** Deterministic insights (sirf type + numbers; text app / AI context banata hai). Thresholds: ST_PORT_* consts. */
+function st_port_insights(array $v): array
+{
+    $out = [];
+    $pe = $v['totals']['ecpm_usd'];
+    $real = array_values(array_filter($v['countries'], fn($c) => $c['cc'] !== ''));
+    // focus: profit + kaafi installs + eCPM portfolio average se upar, eCPM desc
+    $f = $pe === null ? [] : array_values(array_filter($real, fn($c) => $c['profit_inr'] > 0 && $c['installs'] >= ST_PORT_MIN_INSTALLS && $c['ecpm_usd'] !== null && $c['ecpm_usd'] >= $pe));
+    usort($f, fn($a, $b) => $b['ecpm_usd'] <=> $a['ecpm_usd']);
+    $f = array_slice($f, 0, ST_PORT_FOCUS_MAX);
+    if ($f) $out[] = ['type' => 'focus', 'ccs' => array_column($f, 'cc'), 'ecpm_min_usd' => min(array_column($f, 'ecpm_usd')), 'profit_inr' => round(array_sum(array_column($f, 'profit_inr')), 2)];
+    // avoid_paid: spend kaafi, ROAS < 1 (sabse bada loss pehle)
+    $a = array_values(array_filter($real, fn($c) => $c['spend_inr'] >= ST_PORT_MIN_SPEND && $c['roas'] !== null && $c['roas'] < ST_PORT_ROAS_OK));
+    usort($a, fn($x, $y) => $x['profit_inr'] <=> $y['profit_inr']);
+    $a = array_slice($a, 0, ST_PORT_AVOID_MAX);
+    if ($a) $out[] = ['type' => 'avoid_paid', 'ccs' => array_column($a, 'cc'), 'roas_min' => min(array_column($a, 'roas')), 'roas_max' => max(array_column($a, 'roas')),
+        'loss_inr' => round(-array_sum(array_map(fn($c) => min(0, $c['profit_inr']), $a)), 2), 'est' => in_array(true, array_column($a, 'spend_est'), true)];
+    // strong: spend wali categories me best ROAS, warna best profit (sirf profit > 0, kaafi installs/imps); weak: alag category, loss (kaafi spend par) ya eCPM aadhe se kam (kaafi imps par)
+    $cats = array_values(array_filter($v['categories'], fn($c) => $c['category'] !== '' && $c['apps'] >= 1));
+    $paid = array_filter($cats, fn($c) => $c['spend_inr'] >= ST_PORT_MIN_SPEND && $c['roas'] !== null && $c['profit_inr'] > 0);
+    $pool = $paid ?: array_filter($cats, fn($c) => $c['profit_inr'] > 0 && ($c['installs'] >= ST_PORT_MIN_INSTALLS || $c['imps'] >= ST_PORT_MIN_IMPS));
+    usort($pool, fn($x, $y) => $paid ? $y['roas'] <=> $x['roas'] : $y['profit_inr'] <=> $x['profit_inr']);
+    $strong = $pool[0] ?? null;
+    if ($strong) $out[] = ['type' => 'strong', 'category' => $strong['category'], 'roas' => $strong['roas'], 'profit_inr' => $strong['profit_inr'], 'd7' => $strong['d7'], 'ecpm_usd' => $strong['ecpm_usd']];
+    $weak = array_values(array_filter($cats, fn($c) => $c['category'] !== ($strong['category'] ?? null)
+        && (($c['profit_inr'] < 0 && $c['spend_inr'] >= ST_PORT_MIN_SPEND) || ($pe !== null && $c['ecpm_usd'] !== null && $c['imps'] >= ST_PORT_MIN_IMPS && $c['ecpm_usd'] < $pe * ST_PORT_WEAK_ECPM))));
+    usort($weak, fn($x, $y) => $x['profit_inr'] <=> $y['profit_inr']);
+    if ($weak) $out[] = ['type' => 'weak', 'category' => $weak[0]['category'], 'ecpm_usd' => $weak[0]['ecpm_usd'], 'profit_inr' => $weak[0]['profit_inr'], 'roas' => $weak[0]['roas']];
+    // app_loss: Google Ads par paisa doobne wale apps
+    $l = array_values(array_filter($v['apps'], fn($p) => $p['spend_inr'] >= ST_PORT_MIN_SPEND && $p['roas'] !== null && $p['roas'] < ST_PORT_ROAS_OK));
+    usort($l, fn($x, $y) => $x['profit_inr'] <=> $y['profit_inr']);
+    $l = array_slice($l, 0, ST_PORT_LOSS_MAX);
+    if ($l) $out[] = ['type' => 'app_loss', 'pkgs' => array_column($l, 'pkg'), 'names' => array_column($l, 'name'), 'loss_inr' => round(-array_sum(array_map(fn($p) => min(0, $p['profit_inr']), $l)), 2)];
+    return $out;
+}
+
+/** API (view=mine) + AI context + own_fit: last saved portfolio. empty = job kabhi chala hi nahi. */
+function st_port_view(PDO $pdo): array
+{
+    $m = st_dec(kv_get('st_port_meta'), null);
+    $ok = is_array($m);
+    $rate = $ok && (float)($m['rate'] ?? 0) > 0 ? (float)$m['rate'] : st_rate();
+    $v = ['empty' => !$ok, 'computed_at' => $m['computed_at'] ?? null, 'from' => $m['from'] ?? null, 'to' => $m['to'] ?? null, 'days' => (int)($m['days'] ?? ST_PORT_DAYS), 'rate' => $rate,
+        'spend_by_cc' => (string)($m['spend_by_cc'] ?? 'none')] + st_port_shape($pdo, $ok ? h_q($pdo, 'SELECT * FROM st_port') : [], $rate);
+    $v['totals']['evidence_id'] = $ok && !empty($m['total_eid']) ? (int)$m['total_eid'] : null;
+    $v['insights'] = $ok ? array_values((array)($m['insights'] ?? [])) : [];
+    return $v;
+}
+
+/** Overview card: chhota summary (null = job abhi tak nahi chala). */
+function st_port_brief(PDO $pdo): ?array
+{
+    $v = st_port_view($pdo);
+    if ($v['empty']) return null;
+    $real = array_values(array_filter($v['countries'], fn($c) => $c['cc'] !== ''));
+    $best = $real && $real[0]['profit_inr'] > 0 ? $real[0] : null;
+    $loss = $real && end($real)['profit_inr'] < 0 ? end($real) : null;
+    $t = $v['totals'];
+    return ['computed_at' => $v['computed_at'], 'profit_inr' => $t['profit_inr'], 'roas' => $t['roas'], 'ecpm_usd' => $t['ecpm_usd'], 'apps' => $t['apps'], 'apps_ads_on' => $t['apps_ads_on'],
+        'best' => $best ? ['cc' => $best['cc'], 'profit_inr' => $best['profit_inr']] : null, 'loss' => $loss ? ['cc' => $loss['cc'], 'profit_inr' => $loss['profit_inr']] : null];
+}
+
+function st_port_stale(PDO $pdo): bool
+{
+    $m = st_dec(kv_get('st_port_meta'), null);
+    $c = is_array($m) ? (string)($m['computed_at'] ?? '') : '';
+    return $c === '' || (int)strtotime("$c UTC") < time() - ST_PORT_MAX_AGE_H * 3600;
 }
 
 // ---------------------------------------------------------------- adapter: Google Ads Transparency (BigQuery public dataset)
@@ -772,11 +1071,62 @@ function st_econ_context(PDO $pdo): array
 }
 function st_pct($v): string { return $v === null ? 'n/a' : round((float)$v * 100, 1) . '%'; }
 
+/**
+ * Aapke apne apps ka portfolio (last 30 days) numbered evidence P1.. ke roop me (st_econ_context jaisa). Estimated country spend wali line par saaf mark (wo evidence ESTIMATE hai).
+ * Jo country / app kisi rule (insight) me naam se aata hai, uski P line hamesha hoti hai (kam installs par bhi) aur rule line me uska P id likha hota hai, taaki AI cite kar sake.
+ */
+function st_portfolio_context(PDO $pdo): array
+{
+    $v = st_port_view($pdo);
+    if ($v['empty'] || (!$v['apps'] && !$v['countries'])) return ['(no data from your own apps yet: the portfolio job has not run, or the dashboard has no data for the last ' . ST_PORT_DAYS . " days)\n", []];
+    $txt = ''; $map = []; $ref = []; $i = 0;
+    $add = function (string $s, ?int $eid, string $key = '') use (&$txt, &$map, &$ref, &$i): void { $i++; $txt .= "P$i: $s\n"; if ($eid) $map['P' . $i] = $eid; if ($key !== '') $ref[$key] = 'P' . $i; };
+    $roas = fn($r) => $r === null ? 'n/a (no ad spend)' : round($r * 100) . '%';
+    $ecpm = fn($e) => $e === null ? 'n/a' : '$' . round($e, 2);
+    $money = fn(array $r) => 'earnings ' . st_inr($r['earn_inr']) . ' (ads ' . st_inr($r['ad_rev_inr']) . ' + payments ' . st_inr($r['pay_inr']) . '), Google Ads spend ' . st_inr($r['spend_inr'])
+        . ', profit ' . st_inr($r['profit_inr']) . ', ROAS ' . $roas($r['roas']) . ', eCPM ' . $ecpm($r['ecpm_usd']);
+    $t = $v['totals'];
+    $ins = array_column($v['insights'], null, 'type');
+    $named = array_merge((array)($ins['focus']['ccs'] ?? []), (array)($ins['avoid_paid']['ccs'] ?? []));
+    $loss = (array)($ins['app_loss']['pkgs'] ?? []);
+    $add("all your apps, {$v['from']}..{$v['to']}: " . $money($t) . ", {$t['apps']} apps ({$t['apps_ads_on']} with Google Ads on in the last 7 days), {$t['installs']} installs", $t['evidence_id']);
+    $ccs = array_values(array_filter($v['countries'], fn($c) => $c['installs'] >= ST_PORT_MIN_INSTALLS || in_array($c['cc'], $named, true)));
+    usort($ccs, fn($a, $b) => [in_array($b['cc'], $named, true), abs($b['profit_inr'])] <=> [in_array($a['cc'], $named, true), abs($a['profit_inr'])]);
+    foreach (array_slice($ccs, 0, ST_PORT_CTX_CC) as $c) $add('your apps in ' . ($c['cc'] !== '' ? $c['cc'] : 'unknown country') . ": {$c['installs']} installs ({$c['paid_installs']} paid), " . $money($c)
+        . ($c['spend_est'] ? ' (spend estimated from paid installs)' : ''), $c['evidence_id'], 'cc:' . $c['cc']);
+    foreach ($v['categories'] as $c) $add(($c['category'] !== '' ? "your '{$c['category']}' apps" : 'your apps without a category') . " ({$c['apps']} app" . ($c['apps'] === 1 ? '' : 's') . '): ' . $money($c)
+        . ($c['d7'] !== null ? ', D7 retention ' . st_pct($c['d7']) : ''), $c['evidence_id'], 'cat:' . mb_strtolower($c['category']));
+    foreach ($v['apps'] as $a) if ($a['ads_on'] || in_array($a['pkg'], $loss, true)) $add("your app {$a['name']} ({$a['pkg']}" . ($a['category'] !== '' ? ", {$a['category']}" : '') . '): Google Ads '
+        . ($a['ads_on'] ? 'on (' . st_inr($a['spend7_inr']) . ' last 7 days)' : 'off in the last 7 days') . ', 30 days: ' . $money($a), $a['evidence_id'], 'app:' . $a['pkg']);
+    $see = fn(string $key) => isset($ref[$key]) ? " ({$ref[$key]})" : '';   // saari P lines ke baad (arrow fn $ref ki copy leta hai)
+    $ccl = fn(array $l) => implode(', ', array_map(fn($c) => $c . $see("cc:$c"), $l));
+    $l = '';
+    foreach ($v['insights'] as $x) switch ($x['type'] ?? '') {
+        case 'focus': $l .= '- focus countries (profitable, eCPM at or above your average): ' . $ccl($x['ccs']) . ' (eCPM from $' . round((float)$x['ecpm_min_usd'], 2) . ', profit ' . st_inr((float)$x['profit_inr']) . ")\n"; break;
+        case 'avoid_paid': $l .= '- paid acquisition unproven (your Google Ads ROAS below ' . round(ST_PORT_ROAS_OK * 100) . '% on ' . st_inr(ST_PORT_MIN_SPEND) . '+ spend): ' . $ccl($x['ccs'])
+            . ' (ROAS ' . $roas($x['roas_min']) . '..' . $roas($x['roas_max']) . ', loss ' . st_inr((float)$x['loss_inr']) . (!empty($x['est']) ? ', spend partly estimated from paid installs' : '') . "): organic only there\n"; break;
+        case 'strong': $l .= "- your strongest category: {$x['category']}" . $see('cat:' . mb_strtolower($x['category'])) . ' (ROAS ' . $roas($x['roas']) . ', profit ' . st_inr((float)$x['profit_inr']) . ', eCPM ' . $ecpm($x['ecpm_usd']) . ")\n"; break;
+        case 'weak': $l .= "- your weakest category: {$x['category']}" . $see('cat:' . mb_strtolower($x['category'])) . ' (profit ' . st_inr((float)$x['profit_inr']) . ', eCPM ' . $ecpm($x['ecpm_usd']) . ', ROAS ' . $roas($x['roas']) . ")\n"; break;
+        case 'app_loss': $l .= '- apps losing money on Google Ads: ' . implode(', ', array_map(fn($n, $p) => $n . $see("app:$p"), $x['names'], $x['pkgs'])) . ' (loss ' . st_inr((float)$x['loss_inr']) . ")\n"; break;
+    }
+    if ($l !== '') $txt .= "Rules from the lines above (computed, not AI):\n$l";
+    return [$txt, $map];
+}
+
+/** AI prompts ke liye: owner ke apps ka data kaise use karna hai (rank + evaluate/deep me same). Estimated spend wali P lines ESTIMATE hain, VERIFIED nahi. */
+const ST_PORT_GUIDE = "Owner's own apps (P* ids, the owner's dashboard data, last 30 days): prefer countries where the owner's apps already show high eCPM and profit. "
+    . "Where the owner's paid ROAS is below 100%, treat paid acquisition in that country as unproven: recommend organic only there and say so in why_avoid and risks. "
+    . "Give higher ratings (monetization, rev_per_user, own_fit) to categories where the owner's apps are profitable, lower where they lose money, and cite the P ids as evidence: "
+    . "basis VERIFIED, except P lines marked '(spend estimated from paid installs)', which are estimates: cite those with basis ESTIMATE. "
+    . "own_fit = how well the idea fits the owner's earning apps and countries.";
+
 function st_job_rank(PDO $pdo, StRun $run): void
 {
     $ccs = st_on_countries();
     $cats = st_categories();
     if (!h_q1($pdo, 'SELECT 1 FROM st_econ LIMIT 1')) { $run->stage('economics first (internal analytics)'); try { st_job_economics($pdo, $run); } catch (Throwable $e) { $run->error('economics: ' . $e->getMessage()); } }
+    // apne apps ka portfolio purana (36 ghante) ya kabhi bana hi nahi: pehle wahi (pure SQL, AI cost nahi; dashboard tables hi nahi to skip)
+    if (st_port_ready($pdo) && st_port_stale($pdo)) { $run->stage('portfolio first (your apps, last ' . ST_PORT_DAYS . ' days)'); try { st_job_portfolio($pdo, $run); } catch (StCancelled $e) { throw $e; } catch (Throwable $e) { $run->error('portfolio: ' . $e->getMessage()); } }
     $run->plan(count($cats) + 3);
     $allNotes = ''; $smap = [];
     $n = 0;
@@ -812,16 +1162,17 @@ function st_job_rank(PDO $pdo, StRun $run): void
     $run->step();
     if ($allNotes === '') throw new RuntimeException('no research notes collected');
     [$econ, $emap] = st_econ_context($pdo);
+    [$port, $pmap] = st_portfolio_context($pdo);
     $own = st_user_ideas_context($pdo);
     $run->stage('AI ranking (structured)');
     $r = st_ai($pdo, $run, ['system' => ST_RESEARCH_SYS . "\nYou now turn research notes into 10-20 app opportunities. Each factor: rating 0-10 where 10 means MORE of that thing (more demand, more competition, more policy risk, more complexity), "
-        . "or null if there is no evidence. basis: VERIFIED only for E* evidence (owner's own analytics), ESTIMATE only for licensed third-party estimates, INFERENCE for anything from web notes or your judgement, UNKNOWN when rating is null. "
-        . "evidence: list of ids exactly as given (S1, E2...); never invent ids. Use recommendation REJECT for ideas with high policy risk (deceptive pranks, impersonation, fake functionality, sensitive permissions without core need). "
-        . "Critically assess the owner's own ideas too.", 'effort' => 'high', 'max_tokens' => 32000, 'schema' => st_opp_schema(),
+        . "or null if there is no evidence. basis: VERIFIED only for E* or P* evidence (owner's own analytics), ESTIMATE only for licensed third-party estimates or P* lines marked as estimated, INFERENCE for anything from web notes or your judgement, UNKNOWN when rating is null. "
+        . "evidence: list of ids exactly as given (S1, E2, P3...); never invent ids. Use recommendation REJECT for ideas with high policy risk (deceptive pranks, impersonation, fake functionality, sensitive permissions without core need). "
+        . "Critically assess the owner's own ideas too.\n" . ST_PORT_GUIDE, 'effort' => 'high', 'max_tokens' => 32000, 'schema' => st_opp_schema(),
         'user' => "Countries enabled: " . implode(', ', $ccs) . "\nCategories: " . implode(', ', $cats) . "\n\n=== Web research notes (untrusted) ===\n$allNotes\n=== Ads Transparency ===\n" . ($adsTxt ?: "(source not configured)\n")
-            . "\n=== Owner's own analytics (verified) ===\n$econ\n=== Owner's own ideas to evaluate ===\n" . ($own ?: "(none)\n")]);
+            . "\n=== Owner's own analytics (verified) ===\n$econ\n=== Owner's own apps, last " . ST_PORT_DAYS . " days (verified) ===\n$port\n=== Owner's own ideas to evaluate ===\n" . ($own ?: "(none)\n")]);
     $run->step();
-    $ids = st_store_opps($pdo, $run, (array)($r['json']['opportunities'] ?? []), $smap + $emap, 'ai');
+    $ids = st_store_opps($pdo, $run, (array)($r['json']['opportunities'] ?? []), $smap + $emap + $pmap, 'ai');
     st_rank_positions($pdo, $ids);
     $aid = st_artifact_save($pdo, null, $run->id, 'ranking', ['opportunity_ids' => $ids, 'countries' => $ccs, 'categories' => $cats, 'weights' => st_weights()], 'weekly ranking', 'ai');
     $run->step();
@@ -922,7 +1273,9 @@ function st_store_opps(PDO $pdo, StRun $run, array $list, array $evMap, string $
         if ($title === '') continue;
         $factors = st_clean_factors($pdo, (array)($o['factors'] ?? []), $evMap);
         $st = st_apply_internal($pdo, (string)($o['category'] ?? ''), (array)($o['countries'] ?? []), $factors);
-        $factors = $st['factors'];
+        $pf = st_apply_portfolio($pdo, (string)($o['category'] ?? ''), (array)($o['countries'] ?? []), $st['factors']);
+        $factors = $pf['factors'];
+        if ($pf['fit'] !== null) $st['profit']['fit'] = $pf['fit'];   // app "fits your data" dikhata hai
         $evIds = [];
         foreach ($factors as $f) foreach ($f['evidence'] as $id) $evIds[$id] = true;
         $comps = [];
@@ -979,6 +1332,65 @@ function st_apply_internal(PDO $pdo, string $category, array $ccs, array $factor
             'note' => 'Base LTV / your CPI = ' . round($b['margin_ratio'], 2) . ' (5 = break-even, 10 = 2x)'];
     }
     return ['factors' => $factors, 'profit' => $profit];
+}
+
+/**
+ * own_fit factor: aapke apne apps (portfolio, last 30 days) se deterministic rating 0-10 (scale: ST_PORT_FIT_* consts).
+ * Category (sirf kaafi sample par): spend >= ST_PORT_MIN_SPEND ho to ROAS x5 (5 = break-even, 10 = 2x); warna kamai (ads + payments) per install / aapki average x5
+ * (installs >= ST_PORT_MIN_INSTALLS), installs kam hon to kamai per 1000 impressions / average x5 (imps >= ST_PORT_MIN_IMPS). Bina paid data ke loss me max 4. Kam sample = category ka data nahi.
+ * Countries: idea ke target countries focus list me +1 har ek, avoid_paid list me -1 har ek (dono max 2). Category data na ho to 5 se shuru.
+ * basis: VERIFIED jab category ya koi exact-spend country use hua; sirf estimated-spend countries = ESTIMATE (st_clean_factors wala hi niyam).
+ * Na category ka data na matching country: AI wala rating jaisa tha waisa (kabhi invent nahi), fit = null.
+ */
+function st_apply_portfolio(PDO $pdo, string $category, array $ccs, array $factors): array
+{
+    $v = st_port_view($pdo);
+    if ($v['empty']) return ['factors' => $factors, 'fit' => null];
+    $ccs = array_values(array_unique(array_filter(array_map(fn($c) => strtoupper(trim((string)$c)), $ccs), fn($c) => preg_match('/^[A-Z]{2}$/', $c))));
+    $key = mb_strtolower(trim($category));
+    $pt = $v['totals'];
+    $epi = fn(array $x) => $x['installs'] > 0 ? $x['earn_inr'] / $x['installs'] : 0.0;   // kamai (ads + payments) per install
+    $epm = fn(array $x) => $x['imps'] > 0 ? $x['earn_inr'] / $x['imps'] * 1000 : 0.0;     // kamai (ads + payments) per 1000 impressions
+    $cat = null; $mode = '';
+    foreach ($v['categories'] as $c) if ($c['category'] !== '' && mb_strtolower(trim($c['category'])) === $key) $cat = $c;
+    $had = $cat !== null;
+    if ($cat) $mode = $cat['spend_inr'] >= ST_PORT_MIN_SPEND && $cat['roas'] !== null ? 'roas' : ($cat['installs'] >= ST_PORT_MIN_INSTALLS && $epi($pt) > 0 ? 'epi'
+        : ($cat['imps'] >= ST_PORT_MIN_IMPS && $epm($pt) > 0 ? 'epm' : ''));
+    if ($mode === '') $cat = null;   // kam sample (ya kamai/spend hi nahi): category judge nahi karte
+    $ins = array_column($v['insights'], null, 'type');
+    $focus = array_values(array_intersect($ccs, (array)($ins['focus']['ccs'] ?? [])));
+    $avoid = array_values(array_intersect($ccs, (array)($ins['avoid_paid']['ccs'] ?? [])));
+    if (!$cat && !$focus && !$avoid) return ['factors' => $factors, 'fit' => null];
+    $byCc = array_column($v['countries'], null, 'cc');
+    $why = []; $ev = []; $exact = $cat !== null;   // category evidence hamesha VERIFIED
+    if ($cat) {
+        $ev[] = $cat['evidence_id'];
+        $tail = ', profit ' . st_inr($cat['profit_inr']) . ' in ' . ST_PORT_DAYS . ' days';
+        if ($mode === 'roas') {
+            $r = $cat['roas'] * ST_PORT_FIT_MID;
+            $why[] = "your {$cat['category']} apps: ROAS " . round($cat['roas'] * 100) . '%' . $tail . ' (5 = break-even, 10 = 2x)';
+        } elseif ($mode === 'epi') {
+            $r = ST_PORT_FIT_MID * $epi($cat) / $epi($pt);
+            $why[] = "your {$cat['category']} apps: earnings (ads + payments) ₹" . round($epi($cat), 2) . ' per install vs your average ₹' . round($epi($pt), 2) . $tail . ' (no paid data; 5 = your average)';
+        } else {
+            $r = ST_PORT_FIT_MID * $epm($cat) / $epm($pt);
+            $why[] = "your {$cat['category']} apps: earnings (ads + payments) ₹" . round($epm($cat), 2) . ' per 1000 impressions vs your average ₹' . round($epm($pt), 2) . $tail . ' (no paid data; 5 = your average)';
+        }
+        $r = min(10.0, $r);
+        if ($mode !== 'roas' && $cat['profit_inr'] <= 0) $r = min($r, ST_PORT_FIT_LOSS_MAX);
+    } else {
+        $r = ST_PORT_FIT_MID;
+        $why[] = $had ? "too little data from your '$category' apps yet" : "no apps of yours in '$category' yet";
+    }
+    $r += min(ST_PORT_FIT_CC_MAX, count($focus)) - min(ST_PORT_FIT_CC_MAX, count($avoid));
+    foreach (array_merge($focus, $avoid) as $c) if (isset($byCc[$c])) { $ev[] = $byCc[$c]['evidence_id']; if (!$byCc[$c]['spend_est']) $exact = true; }
+    if ($focus) $why[] = 'target countries where your apps earn well: ' . implode(', ', $focus);
+    if ($avoid) $why[] = 'your paid ROAS below 100% in ' . implode(', ', $avoid) . ' (paid unproven there, organic only)'
+        . (array_filter($avoid, fn($c) => !empty($byCc[$c]['spend_est'])) ? '; spend partly estimated' : '');
+    $r = round(max(0.0, min(10.0, $r)), 1);
+    $basis = $exact ? 'VERIFIED' : 'ESTIMATE';
+    $factors['own_fit'] = ['rating' => $r, 'basis' => $basis, 'evidence' => array_values(array_unique(array_filter(array_map('intval', $ev)))), 'note' => st_cut(implode('; ', $why), 400)];
+    return ['factors' => $factors, 'fit' => ['focus_ccs' => $focus, 'avoid_paid_ccs' => $avoid, 'category_roas' => $cat['roas'] ?? null, 'category_profit_inr' => $cat['profit_inr'] ?? null, 'rating' => $r, 'basis' => $basis]];
 }
 
 /**
@@ -1073,14 +1485,16 @@ function st_reassess(PDO $pdo, StRun $run, int $oppId, string $why): void
     $ccs = $o['countries'] !== '' ? explode(',', $o['countries']) : st_on_countries();
     [$notes, $map] = st_web_notes($pdo, $run, (string)$o['title'], "$why\nIdea: {$o['title']} — {$o['concept']}\nFind the most relevant real competitors, their user complaints, demand signals and policy risks.", $ccs, 5);
     [$econ, $emap] = st_econ_context($pdo);
-    $r = st_ai($pdo, $run, ['system' => ST_RESEARCH_SYS . "\nReturn exactly one opportunity (the idea below, same title). Factor rules: rating 0-10 (10 = more of that thing), null if no evidence; basis VERIFIED only for E* ids; INFERENCE for web/judgement; never invent evidence ids.",
+    [$port, $pmap] = st_portfolio_context($pdo);
+    $r = st_ai($pdo, $run, ['system' => ST_RESEARCH_SYS . "\nReturn exactly one opportunity (the idea below, same title). Factor rules: rating 0-10 (10 = more of that thing), null if no evidence; basis VERIFIED only for E* or P* ids (ESTIMATE for P* lines marked as estimated); INFERENCE for web/judgement; never invent evidence ids.\n" . ST_PORT_GUIDE,
         'effort' => 'high', 'max_tokens' => 16000, 'schema' => st_opp_schema(),
-        'user' => "Idea title (keep exactly): {$o['title']}\nCategory: {$o['category']}\nConcept: {$o['concept']}\n\n=== Web notes (untrusted) ===\n$notes\n=== Owner's analytics ===\n$econ"]);
+        'user' => "Idea title (keep exactly): {$o['title']}\nCategory: {$o['category']}\nConcept: {$o['concept']}\n\n=== Web notes (untrusted) ===\n$notes\n=== Owner's analytics ===\n$econ"
+            . "\n=== Owner's own apps, last " . ST_PORT_DAYS . " days (verified) ===\n$port"]);
     $list = (array)($r['json']['opportunities'] ?? []);
     if (!$list) throw new RuntimeException('AI returned no evaluation');
     $list[0]['title'] = $o['title'];
     $list[0]['category'] = $list[0]['category'] ?: $o['category'];
-    st_store_opps($pdo, $run, [$list[0]], $map + $emap, (string)$o['origin']);
+    st_store_opps($pdo, $run, [$list[0]], $map + $emap + $pmap, (string)$o['origin']);
     st_rank_positions($pdo, [$oppId]);
 }
 
@@ -1372,6 +1786,8 @@ function st_opp_row(array $o, bool $full = false): array
         'final_rec' => $o['final_rec'], 'ai_rec' => $o['ai_rec'], 'rule_rec' => $o['rule_rec'], 'status' => $o['status'], 'complexity' => $o['complexity'],
         'rank_organic' => $o['rank_organic'] !== null ? (int)$o['rank_organic'] : null, 'rank_paid' => $o['rank_paid'] !== null ? (int)$o['rank_paid'] : null,
         'why_build' => $o['why_build'], 'why_avoid' => $o['why_avoid'], 'updated_at' => $o['updated_at'], 'user_note' => $o['user_note']];
+    $p = st_dec($o['profit'] ?? null, []);
+    $r['fit'] = is_array($p) && is_array($p['fit'] ?? null) ? $p['fit'] : null;   // own_fit: "fits your data" (null = portfolio data nahi tha)
     $f = st_dec($o['factors'], []);
     $r['labels'] = array_count_values(array_map(fn($x) => $x['basis'] ?? 'UNKNOWN', $f ?: []));
     if ($full) {

@@ -5,6 +5,8 @@
  * Part 2 (MySQL, TEST_DB_HOST): economics from simulated dashboard tables, rank job (evidence validation, label downgrade, policy REJECT),
  *   budget block, Gate 1 limits, competitor analysis -> Gate 2, artifact hash conflicts, request changes -> v2 + diff, approve, retries/crash recovery/cancel,
  *   notifications + dedupe, every app view over HTTP.
+ * Portfolio (your own apps, pure SQL): eCPM, earnings (ads + payments), Google Ads spend (INR + USD accounts), ROAS, exact (Ads geo report) vs estimated country spend,
+ *   unknown-country bucket, deterministic insights, AI context P ids in the rank prompt, own_fit factor, view=mine, cron once a day, schema upgrade 1 -> 2.
  * CI: .github/workflows/server-tests.yml. Local: TEST_DB_HOST=127.0.0.1 TEST_DB_NAME=mfc_test TEST_DB_USER=root TEST_DB_PASS=... php server/tests/studio_test.php
  */
 declare(strict_types=1);
@@ -20,7 +22,7 @@ function http_json(string $method, string $url, ?string $body = null, array $hea
 {
     $q = getenv('STUDIO_FAKE_Q') ?: (sys_get_temp_dir() . '/studio_fake_q.json');
     $list = is_file($q) ? (array)json_decode((string)file_get_contents($q), true) : [];
-    @file_put_contents($q . '.log', $url . ' ' . substr((string)$body, 0, 4000) . "\n", FILE_APPEND);
+    @file_put_contents($q . '.log', $url . ' ' . substr((string)$body, 0, 60000) . "\n", FILE_APPEND);
     if (!str_contains($url, 'api.anthropic.com') || !$list) return [0, '', 'network disabled in tests'];
     $next = array_shift($list);
     file_put_contents($q, json_encode($list));
@@ -77,8 +79,9 @@ function q1(string $sql, array $p = []) { return h_q1(db(), $sql, $p); }
 $fake = function (array $responses) use ($Q) { file_put_contents($Q, json_encode($responses)); };
 $left = function () use ($Q) { return count((array)json_decode((string)@file_get_contents($Q), true)); };
 $pdo = db();
-foreach (['kv', 'app_alerts', 'health_events', 'health_emails', 'day_install', 'day_user', 'imps', 'devices', 'gads_campaign_day', 'st_runs', 'st_events', 'st_evidence', 'st_snapshots', 'st_econ',
-    'st_app_meta', 'st_opps', 'st_projects', 'st_artifacts', 'st_approvals', 'st_usage', 'st_sources', 'st_notified'] as $t) $pdo->exec("DROP TABLE IF EXISTS $t");
+foreach (['kv', 'app_alerts', 'health_events', 'health_emails', 'day_install', 'day_user', 'imps', 'devices', 'gads_campaign_day', 'events', 'ga_geo_day', 'ga_camp', 'ga_accounts',
+    'zz_imps', 'zz_events', 'zz_day_install', 'zz_devices', 'zz_gads_campaign_day',
+    'st_runs', 'st_events', 'st_evidence', 'st_snapshots', 'st_econ', 'st_app_meta', 'st_opps', 'st_projects', 'st_artifacts', 'st_approvals', 'st_usage', 'st_sources', 'st_notified', 'st_port'] as $t) $pdo->exec("DROP TABLE IF EXISTS $t");
 $pdo->exec("CREATE TABLE kv (k VARCHAR(64) NOT NULL PRIMARY KEY, v TEXT NOT NULL, updated_at DATETIME NOT NULL)");
 $pdo->exec("CREATE TABLE app_alerts (id INT UNSIGNED NOT NULL AUTO_INCREMENT, akey VARCHAR(190) NOT NULL, level TINYINT NOT NULL, rule VARCHAR(40) NOT NULL, pkg VARCHAR(100) NOT NULL DEFAULT '',
   account VARCHAR(20) NOT NULL DEFAULT '', campaign VARCHAR(255) NOT NULL DEFAULT '', title VARCHAR(255) NOT NULL, body VARCHAR(2000) NOT NULL DEFAULT '', title_hi VARCHAR(255) NOT NULL DEFAULT '',
@@ -94,9 +97,18 @@ $pdo->exec("CREATE TABLE devices (pkg VARCHAR(100) NOT NULL, did CHAR(36) NOT NU
 $pdo->exec("CREATE TABLE gads_campaign_day (customer_id VARCHAR(20) NOT NULL, day DATE NOT NULL, campaign_id VARCHAR(30) NOT NULL, campaign VARCHAR(255) NOT NULL DEFAULT '', pkg VARCHAR(100) NOT NULL DEFAULT '',
   status VARCHAR(20) NOT NULL DEFAULT '', currency CHAR(3) NOT NULL DEFAULT 'INR', cost DECIMAL(16,4) NOT NULL DEFAULT 0, impressions BIGINT NOT NULL DEFAULT 0, clicks BIGINT NOT NULL DEFAULT 0,
   conversions DECIMAL(14,2) NOT NULL DEFAULT 0, conv_value DECIMAL(16,4) NOT NULL DEFAULT 0, updated_at DATETIME NOT NULL, PRIMARY KEY (customer_id, day, campaign_id))");
+// dashboard events (payments = purchase_done) + Ads Script tables (lib/gads_health.php): same columns the portfolio job reads
+$pdo->exec("CREATE TABLE events (id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY, pkg VARCHAR(100) NOT NULL, ev VARCHAR(40) NOT NULL, ts DATETIME(3) NOT NULL, did CHAR(36) NOT NULL,
+  p1 VARCHAR(255) NOT NULL DEFAULT '', p2 TEXT NULL, val DOUBLE NOT NULL DEFAULT 0, KEY k_pkg_ts (pkg, ts))");
+$pdo->exec("CREATE TABLE ga_accounts (customer_id VARCHAR(20) NOT NULL PRIMARY KEY, company VARCHAR(160) NOT NULL DEFAULT '', currency CHAR(3) NOT NULL DEFAULT '', updated_at DATETIME NULL)");
+$pdo->exec("CREATE TABLE ga_camp (customer_id VARCHAR(20) NOT NULL, campaign_id VARCHAR(30) NOT NULL, name VARCHAR(255) NOT NULL DEFAULT '', status VARCHAR(20) NOT NULL DEFAULT '',
+  pkg VARCHAR(100) NOT NULL DEFAULT '', updated_at DATETIME NULL, PRIMARY KEY (customer_id, campaign_id))");
+$pdo->exec("CREATE TABLE ga_geo_day (customer_id VARCHAR(20) NOT NULL, day DATE NOT NULL, campaign_id VARCHAR(30) NOT NULL, country CHAR(2) NOT NULL, cost DECIMAL(16,4) NOT NULL DEFAULT 0,
+  impressions BIGINT NOT NULL DEFAULT 0, clicks BIGINT NOT NULL DEFAULT 0, conversions DECIMAL(14,2) NOT NULL DEFAULT 0, conv_value DECIMAL(16,4) NOT NULL DEFAULT 0, updated_at DATETIME NULL,
+  PRIMARY KEY (customer_id, day, campaign_id, country))");
 kv_set('h_schema_v', '1');
 st_schema($pdo);
-ok((int)q1("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name LIKE 'st\\_%'") === 13, 'schema: 13 studio tables created');
+ok((int)q1("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name LIKE 'st\\_%'") === 14, 'schema: 14 studio tables created (incl. st_port)');
 
 // SIMULATED dashboard data: 2 Tools apps, IN organic + paid installs 10..20 days ago, retention, D7 ad revenue, Google Ads CPI
 $pdo->beginTransaction();
@@ -158,7 +170,11 @@ $oppA = ['title' => 'Lost Earbuds Finder', 'concept' => 'BT signal meter', 'cate
     'factors' => $fx(['demand' => $I(7), 'competition' => $I(5), 'policy_risk' => $I(2), 'differentiation' => $I(7), 'complexity' => $I(3),
         'search' => ['rating' => 6, 'basis' => 'VERIFIED', 'evidence' => ['S2'], 'note' => 'claims verified but is web'],
         'growth' => ['rating' => 8, 'basis' => 'UNKNOWN', 'evidence' => [], 'note' => 'no data'],
-        'team_fit' => ['rating' => 9, 'basis' => 'INFERENCE', 'evidence' => ['S99'], 'note' => 'fake id']])];
+        'team_fit' => ['rating' => 9, 'basis' => 'INFERENCE', 'evidence' => ['S99'], 'note' => 'fake id'],
+        // owner's-apps P ids (portfolio runs inline first): P1 = totals (VERIFIED), P2 = IN, whose spend is estimated from paid installs (ESTIMATE)
+        'monetization' => ['rating' => 6, 'basis' => 'VERIFIED', 'evidence' => ['P1'], 'note' => 'your apps earn'],
+        'expansion' => ['rating' => 5, 'basis' => 'ESTIMATE', 'evidence' => ['P2'], 'note' => 'IN estimated'],
+        'time_to_market' => ['rating' => 6, 'basis' => 'VERIFIED', 'evidence' => ['P2'], 'note' => 'claims verified but P2 is an estimate']])];
 $oppB = ['title' => 'AI Prank Voice Call', 'concept' => 'fake calls', 'category' => 'Prank apps', 'countries' => ['US'], 'competitors' => [], 'monetization' => [], 'risks' => ['impersonation'],
     'why_build' => 'viral', 'why_avoid' => 'policy', 'complexity' => 'Medium', 'recommendation' => 'STRONGLY CONSIDER', 'decision_card' => $card,
     'factors' => $fx(['demand' => $I(9), 'ad_activity' => $I(9), 'policy_risk' => $I(9)])];
@@ -171,6 +187,9 @@ ok($run['status'] === 'DONE' && $left() === 0, 'rank run DONE, all canned respon
 ok((int)$run['ai_calls'] === 3 && (int)$run['searches'] === 4 && (float)$run['cost_usd'] > 0, 'usage + cost recorded per call (3 calls, 4 searches)');
 $log = (string)@file_get_contents("$Q.log");
 ok(str_contains($log, 'web_search_20260209') && str_contains($log, 'json_schema') && str_contains($log, 'UNTRUSTED DATA'), 'requests use web search tool, structured output and the untrusted-content rule');
+ok(str_contains($log, "=== Owner's own apps, last 30 days (verified) ===\\nP1: all your apps") && preg_match('/\\\\nP\\d+: your apps in IN: 880 installs \\(220 paid\\)[^"]*\\(spend estimated from paid installs\\)/', $log)
+    && str_contains($log, "paid ROAS is below 100%") && str_contains($log, 'cite those with basis ESTIMATE') && (bool)kv_get('st_port_meta'),
+    "rank prompt: owner's-apps section with P ids (portfolio ran inline first), estimated spend marked, guidance in system prompt (estimated P lines = ESTIMATE)");
 $A = $pdo->query("SELECT * FROM st_opps WHERE title = 'Lost Earbuds Finder'")->fetch();
 $B = $pdo->query("SELECT * FROM st_opps WHERE title = 'AI Prank Voice Call'")->fetch();
 $fa = json_decode($A['factors'], true);
@@ -178,6 +197,15 @@ ok($fa['search']['basis'] === 'INFERENCE', 'factor claiming VERIFIED from a web 
 ok($fa['growth']['rating'] === null, 'rating without basis removed (UNKNOWN -> no number)');
 ok($fa['team_fit']['evidence'] === [], 'invented evidence id S99 dropped');
 ok($fa['rev_per_user']['basis'] === 'VERIFIED' && $fa['retention']['basis'] === 'VERIFIED' && $fa['acq_economics']['basis'] === 'VERIFIED', 'internal analytics override revenue/retention/acquisition factors as VERIFIED');
+$pin = (int)q1("SELECT id FROM st_evidence WHERE data_type = 'portfolio' AND cc = 'IN' AND label = 'ESTIMATE'");
+ok($fa['monetization']['basis'] === 'VERIFIED' && $fa['monetization']['evidence'] === [(int)json_decode((string)kv_get('st_port_meta'), true)['total_eid']]
+    && $fa['expansion']['basis'] === 'ESTIMATE' && $fa['expansion']['evidence'] === [$pin] && $pin > 0 && $fa['time_to_market']['basis'] === 'INFERENCE',
+    'AI cites P ids: P1 (totals) kept VERIFIED, estimated-spend country P2 kept as ESTIMATE, VERIFIED claim on P2 downgraded to INFERENCE');
+$pAid = array_map('intval', array_column(q("SELECT id FROM st_evidence WHERE data_type = 'portfolio' AND label = 'VERIFIED' AND category = 'Tools'"), 'id'));
+ok($fa['own_fit']['basis'] === 'VERIFIED' && $fa['own_fit']['rating'] !== null && array_intersect($fa['own_fit']['evidence'], $pAid) && (json_decode($A['profit'], true)['fit']['rating'] ?? null) === $fa['own_fit']['rating'],
+    'own_fit applied from your own Tools apps (VERIFIED, P evidence) + fit stored in profit JSON');
+$fb = json_decode($B['factors'], true);
+ok($fb['own_fit']['rating'] === null && $fb['own_fit']['basis'] === 'UNKNOWN' && !isset(json_decode($B['profit'], true)['fit']), 'own_fit: no own apps in Prank apps, no matching countries -> nothing invented');
 ok($A['countries'] === 'IN,US', 'countries normalised (invalid dropped)');
 ok($B['final_rec'] === 'REJECT' && $B['ai_rec'] === 'STRONGLY CONSIDER', 'AI said STRONGLY CONSIDER, policy rule says REJECT -> final REJECT');
 ok($A['organic_score'] !== null && $A['paid_score'] !== null && $A['final_rec'] !== 'STRONGLY CONSIDER', 'scores computed; single-source idea is not STRONGLY CONSIDER');
@@ -208,6 +236,159 @@ $rid = st_run_new($pdo, 'discover', ['trigger' => 'manual', 'by' => 'test']);
 st_work($pdo, 60);
 $r = $pdo->query("SELECT * FROM st_runs WHERE id = $rid")->fetch();
 ok($r['status'] === 'FAILED' && (int)$r['attempts'] === 2, 'API failure: retried once, then FAILED (never DONE)');
+
+// ---------------------------------------------------------------- portfolio: your own apps, last 30 days (pure SQL, no AI)
+// Fresh SIMULATED data so every number is exact (old cohort rows removed). rate = 95 INR/USD (stub cfg).
+//   com.sim.cam  Utilities      USD account: campaign c1 has an Ads geo report (US $3, IN $7 = exact), c2 ($6) has none -> split by cam's paid installs (US 40, BD 10)
+//   com.sim.vpn  Tools          INR account: Rs 1000, 10-14 days ago (ads off now), no paid installs -> unknown country ('')
+//   com.sim.fun  Entertainment  organic only, no spend -> ROAS null
+foreach (['imps', 'day_install', 'devices', 'gads_campaign_day', 'events', 'ga_geo_day', 'ga_camp', 'ga_accounts'] as $t) $pdo->exec("DELETE FROM $t");
+$ago = fn(int $d, string $t = '10:00:00') => gmdate('Y-m-d', time() - $d * 86400) . " $t";
+$D = fn(int $d) => gmdate('Y-m-d', time() - $d * 86400);
+$pdo->beginTransaction();
+$dids = [];
+foreach ([['com.sim.cam', 'US', 100, 40], ['com.sim.cam', 'IN', 200, 0], ['com.sim.cam', 'BD', 60, 10], ['com.sim.vpn', 'IN', 80, 0], ['com.sim.vpn', 'BD', 40, 0],
+    ['com.sim.fun', 'US', 20, 0], ['com.sim.fun', 'BD', 100, 0]] as [$pkg, $cc, $nI, $nP]) for ($i = 0; $i < $nI; $i++) {
+    $k++; $did = sprintf('p%07d-0000-0000-0000-000000000000', $k); $d = 2 + $i % 18;
+    $ins->execute([$D($d), $pkg, $did, $ago($d), $cc]);
+    $dev->execute([$pkg, $did, $ago($d), $ago($d), $cc, $i < $nP ? 'gclid-p' : '']);
+    $dids[$pkg][$cc][] = $did;
+}
+foreach ([['com.sim.cam', 'US', 200, 0.05], ['com.sim.cam', 'IN', 400, 0.005], ['com.sim.cam', 'BD', 100, 0.002], ['com.sim.vpn', 'IN', 300, 0.005], ['com.sim.vpn', 'BD', 100, 0.002],
+    ['com.sim.fun', 'US', 50, 0.04], ['com.sim.fun', 'BD', 400, 0.001]] as [$pkg, $cc, $nm, $rv]) for ($i = 0; $i < $nm; $i++) {
+    $k++; $imp->execute([sprintf('p%010d', $k), $pkg, $dids[$pkg][$cc][$i % count($dids[$pkg][$cc])], $ago(2 + $i % 18, '12:00:00'), $cc, $rv]);
+}
+$imp->execute(['p-old-0001', 'com.sim.cam', $dids['com.sim.cam']['US'][0], $ago(40), 'US', 9.0]);   // older than 30 days: must NOT count
+$evt = $pdo->prepare("INSERT INTO events (pkg, ev, ts, did, p2, val) VALUES (?,?,?,?,?,?)");
+$u = $dids['com.sim.cam']['US'];
+foreach ([['purchase_done', 3, $u[0], 'GPA.o1', 300], ['purchase_done', 3, $u[0], 'GPA.o1', 300], ['purchase_done', 5, $u[1], 'GPA.o2', 200],   // o1 sent twice: counted once
+    ['purchase_done', 40, $u[2], 'GPA.o0', 999], ['purchase_start', 4, $u[3], 'GPA.o3', 700]] as [$ev, $d, $did, $ord, $val]) $evt->execute(['com.sim.cam', $ev, $ago($d), $did, $ord, $val]);
+$gc = $pdo->prepare("INSERT INTO gads_campaign_day (customer_id, day, campaign_id, campaign, pkg, currency, cost, updated_at) VALUES (?,?,?,?,?,?,?,UTC_TIMESTAMP())");
+foreach ([['2223334444', 2, 'c1', 'com.sim.cam', 'USD', 6], ['2223334444', 12, 'c1', 'com.sim.cam', 'USD', 4], ['2223334444', 3, 'c2', 'com.sim.cam', 'USD', 2], ['2223334444', 15, 'c2', 'com.sim.cam', 'USD', 4],
+    ['1112223333', 10, 'v1', 'com.sim.vpn', 'INR', 600], ['1112223333', 14, 'v1', 'com.sim.vpn', 'INR', 400]] as [$cid, $d, $camp, $pkg, $cur, $cost]) $gc->execute([$cid, $D($d), $camp, "Camp $camp", $pkg, $cur, $cost]);
+h_x($pdo, "INSERT INTO ga_accounts (customer_id, company, currency) VALUES ('2223334444', 'Sim USD', 'USD'), ('1112223333', 'Sim INR', 'INR')");
+h_x($pdo, "INSERT INTO ga_camp (customer_id, campaign_id, pkg) VALUES ('2223334444', 'c1', 'com.sim.cam'), ('2223334444', 'c2', 'com.sim.cam'), ('1112223333', 'v1', 'com.sim.vpn')");
+$geo = $pdo->prepare("INSERT INTO ga_geo_day (customer_id, day, campaign_id, country, cost) VALUES ('2223334444', ?, 'c1', ?, ?)");
+foreach ([[2, 'US', 2], [2, 'IN', 4], [12, 'US', 1], [12, 'IN', 3]] as [$d, $cc, $cost]) $geo->execute([$D($d), $cc, $cost]);
+foreach (['com.sim.cam' => 'Utilities', 'com.sim.vpn' => 'Tools', 'com.sim.fun' => 'Entertainment'] as $p => $c) h_x($pdo, "REPLACE INTO st_app_meta (pkg, category, set_by, updated_at) VALUES (?, ?, 'test', UTC_TIMESTAMP())", [$p, $c]);
+$pdo->commit();
+$rid = st_run_new($pdo, 'portfolio', ['trigger' => 'manual', 'by' => 'test']);
+st_work($pdo, 60);
+$pr = $pdo->query("SELECT * FROM st_runs WHERE id = $rid")->fetch();
+ok($pr['status'] === 'DONE' && (int)$pr['ai_calls'] === 0 && (float)$pr['cost_usd'] === 0.0, 'portfolio run DONE, no AI call (pure SQL)' . ($pr['status'] !== 'DONE' ? ' · ' . $pr['error_text'] : ''));
+ok(str_starts_with($pr['summary'], '3 apps · 3 countries · profit -₹472 · ROAS 81%'), 'portfolio summary: apps · countries · profit · ROAS (' . $pr['summary'] . ')');
+$V = st_port_view($pdo);
+$PT = $V['totals'];
+$near = fn($a, $b, float $e = 0.006) => $a !== null && abs((float)$a - (float)$b) < $e;
+ok($V['empty'] === false && $near($PT['ad_rev_inr'], 1548.5) && $near($PT['pay_inr'], 500) && $near($PT['spend_inr'], 2520) && $PT['imps'] === 1550 && $PT['installs'] === 600,
+    'totals: ad revenue 16.30 USD x 95, payments Rs 500 (duplicate order once, old + non-purchase events ignored), spend Rs 2520 (USD x rate + INR), 1550 imps, 600 installs');
+ok($near($PT['earn_inr'], $PT['ad_rev_inr'] + $PT['pay_inr'], 0.001) && $near($PT['profit_inr'], $PT['earn_inr'] - $PT['spend_inr'], 0.001) && $near($PT['profit_inr'], -471.5) && $near($PT['roas'], 0.8129, 0.00006),
+    'totals add up: earn = ads + payments, profit = earn - spend, ROAS = earn / spend');
+ok($near(array_sum(array_column($V['apps'], 'profit_inr')), $PT['profit_inr'], 0.02) && $near(array_sum(array_column($V['countries'], 'spend_inr')), $PT['spend_inr'], 0.02)
+    && $near(array_sum(array_column($V['categories'], 'earn_inr')), $PT['earn_inr'], 0.02), 'apps, countries and categories each add up to the totals');
+$AP = array_column($V['apps'], null, 'pkg'); $CC = array_column($V['countries'], null, 'cc'); $CG = array_column($V['categories'], null, 'category');
+ok($near($AP['com.sim.cam']['ecpm_usd'], 17.4286, 0.00006) && $near($CC['US']['ecpm_usd'], 48.0, 0.00006) && $near($PT['ecpm_usd'], 10.5161, 0.00006) && $CC['']['ecpm_usd'] === null,
+    'eCPM = ad revenue USD / impressions x 1000 (app, country, portfolio); no imps -> null');
+ok($AP['com.sim.fun']['roas'] === null && $AP['com.sim.fun']['spend_inr'] == 0 && $near($AP['com.sim.fun']['profit_inr'], 228) && $CG['Entertainment']['roas'] === null, 'no ad spend -> ROAS null (app + category)');
+ok($AP['com.sim.cam']['ads_on'] === true && $near($AP['com.sim.cam']['spend7_inr'], 760) && $AP['com.sim.vpn']['ads_on'] === false && $near($AP['com.sim.vpn']['spend_inr'], 1000) && $PT['apps_ads_on'] === 1,
+    'ads_on from last-7-days spend (vpn spent 10-14 days ago: off)');
+ok(array_column($V['apps'], 'pkg') === ['com.sim.fun', 'com.sim.cam', 'com.sim.vpn'] && $AP['com.sim.cam']['category'] === 'Utilities' && $AP['com.sim.cam']['paid_installs'] === 50, 'apps sorted by profit, category + paid installs');
+ok($near($CC['IN']['spend_inr'], 665) && $CC['IN']['spend_est'] === false && $near($CC['US']['spend_inr'], 741) && $CC['US']['spend_est'] === true && $near($CC['BD']['spend_inr'], 114) && $CC['BD']['spend_est'] === true,
+    'country spend: IN exact from geo report, US = exact Rs 285 + estimated Rs 456 (paid-install share), BD estimated');
+ok(isset($CC['']) && $near($CC['']['spend_inr'], 1000) && $CC['']['spend_est'] === true && $V['spend_by_cc'] === 'mixed', "app with spend but no paid installs -> unknown country bucket (cc ''); spend_by_cc 'mixed'");
+ok($near($CC['US']['pay_inr'], 500) && $near($CC['US']['profit_inr'], 899) && $near($CC['IN']['roas'], 0.5) && $near($CC['IN']['profit_inr'], -332.5), 'country profit/loss: payments by device country, IN ROAS 50%');
+$lab = fn(?int $id) => (string)q1('SELECT label FROM st_evidence WHERE id = ?', [(int)$id]);
+ok($lab($CC['IN']['evidence_id']) === 'VERIFIED' && $lab($CC['US']['evidence_id']) === 'ESTIMATE' && $lab($AP['com.sim.cam']['evidence_id']) === 'VERIFIED' && $lab($CG['Tools']['evidence_id']) === 'VERIFIED'
+    && $lab($V['totals']['evidence_id']) === 'VERIFIED', 'evidence: app/category/exact-country rows VERIFIED, estimated-spend country ESTIMATE');
+ok(str_contains((string)q1("SELECT method FROM st_evidence WHERE id = ?", [$CC['US']['evidence_id']]), 'ESTIMATED') && (int)q1("SELECT COUNT(*) FROM st_port") === 3 + 4 + 3, 'st_port: 3 app + 4 country + 3 category rows; estimate method explained');
+$I = array_column($V['insights'], null, 'type');
+ok(($I['focus']['ccs'] ?? null) === ['US'] && $near($I['focus']['ecpm_min_usd'] ?? null, 48.0) && $near($I['focus']['profit_inr'] ?? null, 899), 'insight focus: US (profit, 120 installs, eCPM above average)');
+ok(($I['avoid_paid']['ccs'] ?? null) === ['IN'] && $near($I['avoid_paid']['roas_min'] ?? null, 0.5) && $near($I['avoid_paid']['loss_inr'] ?? null, 332.5) && ($I['avoid_paid']['est'] ?? null) === false,
+    'insight avoid_paid: IN (Rs 665 spend, ROAS 50%); BD under Rs 500 spend not judged');
+ok(($I['app_loss']['pkgs'] ?? null) === ['com.sim.vpn'] && $near($I['app_loss']['loss_inr'] ?? null, 838.5), 'insight app_loss: vpn lost Rs 838.50 on Google Ads');
+ok(($I['strong']['category'] ?? '') === 'Utilities' && $near($I['strong']['roas'] ?? null, 1.0914, 0.00006) && ($I['weak']['category'] ?? '') === 'Tools' && $near($I['weak']['profit_inr'] ?? null, -838.5),
+    'insights strong = Utilities (best paid ROAS), weak = Tools (loss)');
+[$ptxt, $pmap] = st_portfolio_context($pdo);
+ok(str_starts_with($ptxt, 'P1: all your apps') && preg_match('/P\d+: your apps in US:[^\n]*\(spend estimated from paid installs\)/', $ptxt) && preg_match('/P\d+: your apps in IN: 280 installs \(0 paid\)[^\n]*ROAS 50%, eCPM \$5\n/', $ptxt)
+    && str_contains($ptxt, '- paid acquisition unproven') && count($pmap) === 1 + 3 + 3 + 2 && !array_diff($pmap, array_map('intval', array_column(q("SELECT id FROM st_evidence WHERE data_type = 'portfolio'"), 'id')))
+    && preg_match('/P\d+: your app com\.sim\.vpn \(com\.sim\.vpn, Tools\): Google Ads off in the last 7 days/', $ptxt) && preg_match('/- apps losing money on Google Ads: com\.sim\.vpn \(P\d+\)/', $ptxt)
+    && preg_match('/unproven[^\n]*: IN \(P\d+\)/', $ptxt),
+    'AI context: P ids -> portfolio evidence (totals, 3 countries >= 50 installs, 3 categories, app with ads on + app named in app_loss), estimated spend marked, rules cite P ids');
+$base = $fx([]);
+$base['own_fit'] = ['rating' => 7, 'basis' => 'INFERENCE', 'evidence' => [], 'note' => 'ai'];
+$pf = st_apply_portfolio($pdo, 'utilities', ['us', 'IN', 'BR'], $base);
+$of = $pf['factors']['own_fit'];
+ok($of['basis'] === 'VERIFIED' && $of['rating'] === 5.5 && $pf['fit']['focus_ccs'] === ['US'] && $pf['fit']['avoid_paid_ccs'] === ['IN'] && $near($pf['fit']['category_roas'], 1.0914, 0.00006)
+    && count($of['evidence']) === 3 && str_contains($of['note'], 'organic only'), 'own_fit: Utilities ROAS 109% x5 = 5.5, +1 focus US, -1 paid-unproven IN -> 5.5 VERIFIED with P evidence');
+$pf = st_apply_portfolio($pdo, 'Tools', ['BD'], $base);
+ok($pf['factors']['own_fit']['rating'] === 0.8 && $pf['factors']['own_fit']['basis'] === 'VERIFIED', 'own_fit: losing category (Tools ROAS 16%) rated low');
+$pf = st_apply_portfolio($pdo, 'Prank apps', ['GB'], $base);
+ok($pf['fit'] === null && $pf['factors']['own_fit'] === $base['own_fit'], 'own_fit: no data for category and no matching countries -> AI rating left as is');
+$pf = st_apply_portfolio($pdo, 'Prank apps', ['US'], $base);
+ok($pf['factors']['own_fit']['rating'] === 6.0 && $pf['factors']['own_fit']['basis'] === 'ESTIMATE' && $pf['fit']['basis'] === 'ESTIMATE' && $pf['factors']['own_fit']['evidence'] === [$CC['US']['evidence_id']],
+    'own_fit from an estimated-spend country only (no category data) -> ESTIMATE, not VERIFIED');
+// insights need a real sample: a 3-impression category is never "strong", a Rs 20 loss is never "weak"
+$cg = fn(string $c, float $sp, ?float $ro, float $pr, int $in, int $im, ?float $ec) => ['category' => $c, 'apps' => 1, 'spend_inr' => $sp, 'roas' => $ro, 'profit_inr' => $pr, 'installs' => $in, 'imps' => $im, 'ecpm_usd' => $ec, 'd7' => null];
+$i1 = array_column(st_port_insights(['totals' => ['ecpm_usd' => 1.0], 'countries' => [], 'apps' => [], 'categories' => [$cg('Games', 900, 0.5, -450, 500, 50000, 1.0), $cg('Tiny', 0, null, 2, 1, 3, 9.0)]]), null, 'type');
+$i2 = array_column(st_port_insights(['totals' => ['ecpm_usd' => 1.0], 'countries' => [], 'apps' => [], 'categories' => [$cg('Games', 0, null, 100, 500, 50000, 1.0), $cg('Small', 20, 0.25, -15, 5, 100, 0.4)]]), null, 'type');
+ok(!isset($i1['strong']) && ($i1['weak']['category'] ?? '') === 'Games' && ($i2['strong']['category'] ?? '') === 'Games' && !isset($i2['weak']),
+    'insights: strong/weak categories need enough installs/impressions/spend (tiny samples ignored)');
+
+// edge cases: Ads Script-only campaign + campaign whose app comes only from ga_camp, pkg/category spelled in another case, payments-heavy category, tiny category, window start
+$fromP = (new DateTime(local_today()))->modify('-' . (ST_PORT_DAYS - 1) . ' day')->format('Y-m-d');
+$pdo->beginTransaction();
+h_x($pdo, "INSERT INTO ga_accounts (customer_id, company, currency) VALUES ('3334445555', 'Script only', 'INR')");
+h_x($pdo, "INSERT INTO ga_camp (customer_id, campaign_id, pkg) VALUES ('3334445555', 's1', 'com.sim.vpn'), ('1112223333', 'v2', 'com.sim.vpn')");
+h_x($pdo, "INSERT INTO ga_geo_day (customer_id, day, campaign_id, country, cost) VALUES ('3334445555', ?, 's1', 'GB', 600)", [$D(3)]);   // no gads_campaign_day rows for s1
+$gc->execute(['1112223333', $D(4), 'v2', 'Camp v2', '', 'INR', 200]);                // pkg only via ga_camp
+$gc->execute(['2223334444', $D(5), 'c3', 'Camp c3', 'COM.SIM.CAM', 'USD', 1]);       // same app, other case
+foreach (['com.sim.ring' => 'tools', 'com.sim.tiny' => 'Prank apps'] as $p => $c) h_x($pdo, "REPLACE INTO st_app_meta (pkg, category, set_by, updated_at) VALUES (?, ?, 'test', UTC_TIMESTAMP())", [$p, $c]);
+for ($i = 0; $i < 5; $i++) $imp->execute(["w-ring-$i", 'com.sim.ring', 'w-ring', $ago(3), 'IN', 0.01]);
+for ($i = 0; $i < 3; $i++) $imp->execute(["w-tiny-$i", 'com.sim.tiny', 'w-tiny', $ago(3), 'US', 1.0]);
+$imp->execute(['w-edge', 'com.sim.cam', $dids['com.sim.cam']['US'][0], gmdate('Y-m-d H:i:s', strtotime(day_bounds_utc($fromP)[0] . ' UTC') - 60), 'US', 9.0]);   // 1 min before the window
+$evt->execute(['com.sim.fun', 'purchase_done', $ago(3), $dids['com.sim.fun']['BD'][0], 'GPA.f1', 5000]);
+$pdo->commit();
+$rid = st_run_new($pdo, 'portfolio', ['trigger' => 'manual', 'by' => 'test']);
+st_work($pdo, 60);
+$pr = $pdo->query("SELECT * FROM st_runs WHERE id = $rid")->fetch();
+$V2 = st_port_view($pdo);
+$A2 = array_column($V2['apps'], null, 'pkg'); $C2 = array_column($V2['countries'], null, 'cc'); $G2 = array_column($V2['categories'], null, 'category');
+ok($pr['status'] === 'DONE' && count($V2['apps']) === 5 && !isset($A2['COM.SIM.CAM']) && $near($A2['com.sim.cam']['spend_inr'] ?? null, 1615) && $near($A2['com.sim.cam']['spend7_inr'] ?? null, 855)
+    && ($G2['Tools']['apps'] ?? 0) === 2 && !isset($G2['tools']), "category 'tools' vs 'Tools' and pkg in another case merge (no duplicate key, run DONE)" . ($pr['status'] !== 'DONE' ? ' · ' . $pr['error_text'] : ''));
+ok($near($A2['com.sim.vpn']['spend_inr'] ?? null, 1800) && $near($A2['com.sim.vpn']['spend7_inr'] ?? null, 800) && ($A2['com.sim.vpn']['ads_on'] ?? null) === true
+    && $near($C2['GB']['spend_inr'] ?? null, 600) && ($C2['GB']['spend_est'] ?? null) === false && $near($C2['']['spend_inr'] ?? null, 1200),
+    "geo spend subtracted per campaign: Script-only campaign adds Rs 600 (GB exact), ga_camp-only campaign adds Rs 200, old Rs 1000 still split (unknown country)");
+ok($near($V2['totals']['ad_rev_inr'], 1838.25) && $near($V2['totals']['pay_inr'], 5500), 'raw tables use the same window as day tables (impression 1 min before local day 1 not counted)');
+$I2 = array_column($V2['insights'], null, 'type');
+[$ptxt2] = st_portfolio_context($pdo);
+ok(($I2['avoid_paid']['ccs'] ?? null) === ['GB', 'IN'] && preg_match('/P\d+: your apps in GB: 0 installs/', $ptxt2) && preg_match('/unproven[^\n]*: GB \(P\d+\), IN \(P\d+\)/', $ptxt2),
+    'country named in avoid_paid gets its own P line even under 50 installs (AI can cite it)');
+$pf = st_apply_portfolio($pdo, 'Entertainment', [], $base);
+ok($pf['factors']['own_fit']['rating'] === 10.0 && $pf['factors']['own_fit']['basis'] === 'VERIFIED' && str_contains($pf['factors']['own_fit']['note'], 'per install'),
+    'own_fit without ad spend counts payments: Entertainment earns Rs 43.57/install vs Rs 12.23 average -> 10 (ad eCPM alone said 2.5)');
+$pf = st_apply_portfolio($pdo, 'Prank apps', [], $base);
+ok($pf['fit'] === null && $pf['factors']['own_fit'] === $base['own_fit'] && isset($G2['Prank apps']), 'own_fit: category with 3 impressions and no installs is too small to judge -> AI rating left as is');
+foreach (["DELETE FROM ga_geo_day WHERE customer_id = '3334445555'", "DELETE FROM ga_accounts WHERE customer_id = '3334445555'", "DELETE FROM ga_camp WHERE campaign_id IN ('s1', 'v2')",
+    "DELETE FROM gads_campaign_day WHERE campaign_id IN ('v2', 'c3')", "DELETE FROM imps WHERE rid LIKE 'w-%'", "DELETE FROM events WHERE p2 = 'GPA.f1'",
+    "DELETE FROM st_app_meta WHERE pkg IN ('com.sim.ring', 'com.sim.tiny')"] as $sql) $pdo->exec($sql);
+st_run_new($pdo, 'portfolio', ['trigger' => 'manual', 'by' => 'test']);
+st_work($pdo, 60);
+ok(str_starts_with((string)q1("SELECT summary FROM st_runs WHERE job = 'portfolio' ORDER BY id DESC LIMIT 1"), '3 apps · 3 countries · profit -₹472'), 'edge-case rows removed: portfolio back to the base numbers');
+// fresh server without dashboard tables: cron queues nothing (no daily FAILED runs)
+foreach (['st_daily', 'st_weekly', 'st_monthly'] as $sk) kv_set($sk, '0');
+$pdo->exec('RENAME TABLE imps TO zz_imps, events TO zz_events, day_install TO zz_day_install, devices TO zz_devices, gads_campaign_day TO zz_gads_campaign_day');
+$nr = (int)q1('SELECT COUNT(*) FROM st_runs');
+st_cron($pdo, fn(string $m) => null);
+ok(!st_port_ready($pdo) && (int)q1('SELECT COUNT(*) FROM st_runs') === $nr && kv_get('st_port_day') === local_today(), 'no dashboard tables: cron does not queue the portfolio job');
+$pdo->exec('RENAME TABLE zz_imps TO imps, zz_events TO events, zz_day_install TO day_install, zz_devices TO devices, zz_gads_campaign_day TO gads_campaign_day');
+$pdo->exec("DELETE FROM kv WHERE k = 'st_port_day'");
+// cron: once per local day, worker runs it (other schedules still off for this check)
+st_cron($pdo, fn(string $m) => null);
+st_cron($pdo, fn(string $m) => null);
+ok((int)q1("SELECT COUNT(*) FROM st_runs WHERE job = 'portfolio' AND trigger_type = 'scheduled'") === 1 && q1("SELECT status FROM st_runs WHERE job = 'portfolio' AND trigger_type = 'scheduled'") === 'DONE'
+    && kv_get('st_port_day') === local_today(), 'cron: portfolio queued once per local day and run by the worker');
+$pdo->exec("DELETE FROM kv WHERE k IN ('st_daily', 'st_weekly', 'st_monthly')");
+ok(!st_port_stale($pdo), 'fresh portfolio is not stale (rank will not recompute it)');
 
 // ---------------------------------------------------------------- Gate 1
 $aId = (int)$A['id']; $bId = (int)$B['id'];
@@ -288,21 +469,31 @@ $http = function (string $method, string $path, $body = null) use ($port) {
     return [$c, json_decode((string)$r, true), (string)$r];
 };
 foreach (['overview', 'research&engine=organic', 'research&engine=paid&cc=US', 'research&engine=combined&tier=1', "opp&id=$aId", "compare&ids=$aId,$bId", 'evidence&ids=1,2', 'projects', "project&id=$pid",
-    'approvals', 'history&q=Gate', 'runs', 'run&id=1', 'sources', 'settings'] as $v) {
+    'approvals', 'history&q=Gate', 'runs', 'run&id=1', 'sources', 'settings', 'mine'] as $v) {
     [$c, $j, $raw] = $http('GET', "api/studio.php?view=$v");
     ok($c === 200 && ($j['ok'] ?? false), "view $v" . ($c !== 200 ? ' -> ' . substr($raw, 0, 300) : ''));
 }
+[$c, $j] = $http('GET', 'api/studio.php?view=mine');
+$jf = array_column($j['apps'] ?? [], null, 'pkg');
+ok(($j['empty'] ?? true) === false && count($j['apps'] ?? []) === 3 && ($j['spend_by_cc'] ?? '') === 'mixed' && abs(($j['totals']['profit_inr'] ?? 0) + 471.5) < 0.006 && ($j['running'] ?? null) === false
+    && array_key_exists('roas', $jf['com.sim.fun'] ?? []) && $jf['com.sim.fun']['roas'] === null && ($jf['com.sim.cam']['ads_on'] ?? null) === true && count($j['insights'] ?? []) === 5
+    && ($j['days'] ?? 0) === 30 && ($j['rate'] ?? 0) == 95 && count($j['countries'] ?? []) === 4, 'view=mine over HTTP: totals, apps, countries, insights, not running');
+[$c, $j] = $http('GET', 'api/studio.php?view=overview');
+ok(($j['mine']['best']['cc'] ?? '') === 'US' && ($j['mine']['loss']['cc'] ?? '') === 'IN' && ($j['mine']['apps_ads_on'] ?? 0) === 1 && abs(($j['mine']['roas'] ?? 0) - 0.8129) < 0.0001,
+    'overview.mine: profit country US, biggest loss IN, 1 app with ads on, ROAS');
+[$c, $j] = $http('GET', "api/studio.php?view=opp&id=$aId");
+ok(is_array($j['item']['fit'] ?? null) && isset($j['item']['fit']['rating']), 'opp row exposes fit (own_fit summary) at top level');
 [$c, $j] = $http('GET', "api/studio.php?view=project&id=$pid");
 ok(($j['item']['gates'][1]['state'] ?? '') === 'APPROVED' && ($j['item']['gates'][2]['state'] ?? '') === 'LOCKED' && ($j['item']['features']['version'] ?? 0) === 2, 'project view: gate timeline + approved spec v2');
 [$c, $j] = $http('GET', "api/studio.php?view=opp&id=$aId");
-ok(count($j['item']['factors'] ?? []) === 16 && count($j['evidence'] ?? []) >= 2, 'idea view: 16 factors with weights + evidence list');
+ok(count($j['item']['factors'] ?? []) === count(ST_FACTORS) && count(ST_FACTORS) === 17 && count($j['evidence'] ?? []) >= 2, 'idea view: 17 factors (incl. own_fit) with weights + evidence list');
 [$c, $j] = $http('GET', 'api/studio.php?view=sources');
 $ids = array_column($j['items'] ?? [], 'status', 'id');
 ok(($ids['internal'] ?? '') === 'OK' && ($ids['appfigures'] ?? '') === 'NOT_CONFIGURED' && ($ids['play_scrape'] ?? '') === 'NOT_CONFIGURED', 'sources: internal OK, paid providers NOT_CONFIGURED, no scraping');
 foreach ([['setting', ['key' => 'st_ai_budget_usd', 'value' => '25']], ['countries', ['list' => [['cc' => 'IN', 'name' => 'India', 'tier' => 3, 'on' => true], ['cc' => 'US', 'tier' => 1, 'on' => false]]]],
     ['categories', ['list' => ['Tools', 'Prank apps']]], ['weights', ['weights' => ['demand' => 20]]], ['app_category', ['pkg' => 'com.sim.torch', 'category' => 'Tools']],
     ['idea', ['title' => 'Battery health checker', 'concept' => 'shows battery wear', 'category' => 'Tools', 'countries' => ['IN']]], ['opp', ['id' => $bId, 'decision' => 'RESTORE', 'note' => '']],
-    ['run', ['job' => 'economics']]] as [$act, $body]) {
+    ['run', ['job' => 'economics']], ['run', ['job' => 'portfolio']]] as [$act, $body]) {
     [$c, $j, $raw] = $http('POST', "api/studio.php?action=$act", $body);
     ok($c === 200 && ($j['ok'] ?? false), "action $act" . ($c !== 200 ? ' -> ' . substr($raw, 0, 300) : ''));
 }
@@ -314,6 +505,25 @@ ok($c === 400, 'bad setting value refused');
 ok($c === 409, 'HTTP gate approval with stale artifact -> 409');
 ok(st_on_countries() === ['IN'], 'country selection saved (US switched off)');
 ok((int)q1("SELECT COUNT(*) FROM st_runs WHERE job = 'evaluate_idea' AND status = 'QUEUED'") === 1, 'own idea queued for critical evaluation');
+[$c, $j] = $http('GET', 'api/studio.php?view=mine');
+ok(($j['running'] ?? null) === true, 'view=mine: queued portfolio run shows running');
+// own idea evaluation (st_reassess, also used by more research / monthly deep) gets the same owner's-apps section and accepts P ids
+@unlink("$Q.log");
+$oppE = ['title' => 'Battery health checker', 'concept' => 'shows battery wear', 'category' => 'Tools', 'countries' => ['IN'], 'competitors' => [], 'monetization' => ['banner'], 'risks' => [],
+    'why_build' => 'b', 'why_avoid' => 'a', 'complexity' => 'Low', 'recommendation' => 'TEST FIRST', 'decision_card' => $card,
+    'factors' => $fx(['demand' => ['rating' => 6, 'basis' => 'INFERENCE', 'evidence' => ['S1'], 'note' => 'n'], 'monetization' => ['rating' => 5, 'basis' => 'VERIFIED', 'evidence' => ['P1'], 'note' => 'your apps']])];
+$fake([$webResp(['https://example.com/e'], 'eval notes'), $jsonResp(['opportunities' => [$oppE]])]);
+st_work($pdo, 60);
+$er = $pdo->query("SELECT * FROM st_runs WHERE job = 'evaluate_idea' ORDER BY id DESC LIMIT 1")->fetch();
+$E = $pdo->query("SELECT * FROM st_opps WHERE title = 'Battery health checker' AND factors IS NOT NULL ORDER BY id DESC LIMIT 1")->fetch();
+$fe = $E ? json_decode($E['factors'], true) : [];
+ok($er['status'] === 'DONE' && $left() === 0 && str_contains((string)@file_get_contents("$Q.log"), "=== Owner's own apps, last 30 days (verified) ===\\nP1: all your apps")
+    && ($fe['monetization']['basis'] ?? '') === 'VERIFIED' && ($fe['monetization']['evidence'] ?? []) === [(int)json_decode((string)kv_get('st_port_meta'), true)['total_eid']] && ($fe['own_fit']['rating'] ?? null) !== null,
+    "own idea evaluation: prompt has the owner's-apps section, P1 cited as VERIFIED is kept, own_fit applied" . ($er['status'] !== 'DONE' ? ' · ' . $er['error_text'] : ''));
+$pdo->exec('DROP TABLE st_port');
+kv_set('st_schema_v', '1');
+[$c] = $http('GET', 'api/studio.php?view=mine');
+ok($c === 200 && (bool)$pdo->query("SHOW TABLES LIKE 'st_port'")->fetch() && kv_get('st_schema_v') === '2', 'schema upgrade: server already at v1 -> v2 creates st_port');
 [$c, $j, $raw] = $http('GET', 'api/studio.php?open=project/1');
 ok($c === 200 && str_contains($raw, 'intent://studio/project/1'), 'email deep link page opens the app');
 proc_terminate($srv);
