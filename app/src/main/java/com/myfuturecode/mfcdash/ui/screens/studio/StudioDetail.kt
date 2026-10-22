@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
@@ -220,6 +221,12 @@ private fun OppFacts(it0: JSONObject) {
         KKv("AI said".t(), it0.sn("ai_rec")?.let { recText(it) } ?: "–")
         KKv("Rules say".t(), it0.sn("rule_rec")?.let { recText(it) } ?: "–")
         it0.sn("complexity")?.let { KKv("Build complexity".t(), it) }
+        // factors ke label: kitne VERIFIED, kitne UNKNOWN (purane OppCard wali ginti)
+        val lab = it0.obj("labels")
+        if (lab.length() > 0) {
+            KKv("Verified factors".t(), num(lab.d("VERIFIED")), valueColor = if (lab.d("VERIFIED") > 0) c.ink else c.ink3)
+            KKv("Unknown factors".t(), num(lab.d("UNKNOWN")), valueColor = if (lab.d("UNKNOWN") > 0) c.ink else c.ink3)
+        }
         KKv("Updated".t(), sAgo(it0.s("updated_at")))
         it0.sn("user_note")?.let { Para("Your note".t(), it) }
     }
@@ -289,11 +296,11 @@ private fun OppMore(it0: JSONObject, o: JSONObject) {
         KCard(list = true) {
             dec.forEachIndexed { i, x ->
                 if (i > 0) KListDivider()
-                val k = stKind(x.s("decision"))
+                // faisla = shabd + shape + rang (kit ka "Turant" / "Theek" yahan galat matlab deta)
                 KRow(
-                    listOfNotNull(if (x.d("gate") > 0) tf("Gate %s", x.d("gate").toInt()) else null, decisionText(x.s("decision"))).joinToString(" · "),
-                    sub = listOf(x.s("user"), tFull(x.s("created_at"))).filter { it.isNotBlank() }.joinToString(" · "),
-                    value = k.word(), valueColor = if (k == KKind.NEUTRAL) c.ink3 else k.fg(), valuePlain = true,
+                    if (x.d("gate") > 0) tf("Gate %s", x.d("gate").toInt()) else decisionText(x.s("decision")),
+                    sub = decisionText(x.s("decision")), subKind = stKind(x.s("decision")),
+                    value = tFull(x.s("created_at")), valuePlain = true, valueSub = x.s("user").ifBlank { null },
                 )
                 x.sn("feedback")?.let { SNote(it, maxLines = 4) }
             }
@@ -435,27 +442,30 @@ private fun CompareTable(items: List<JSONObject>) {
         "Base margin / install".t() to { it.optJSONObject("profit")?.obj("scenarios")?.obj("base")?.dn("margin_per_install")?.let { m -> usd(m, 3) } ?: "–" },
         "Verified factors".t() to { num(it.obj("labels").d("VERIFIED")) }, "Unknown factors".t() to { num(it.obj("labels").d("UNKNOWN")) },
     )
-    val colW = 96.dp
     KCard(padding = PaddingValues(vertical = 8.dp)) {
-        Column(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
-            Row(Modifier.heightIn(min = 48.dp), verticalAlignment = Alignment.Bottom) {
-                SText("", 13.sp, c.ink3, Modifier.width(132.dp))
-                items.forEach { x ->
-                    SText(x.s("title").ifBlank { "OPP-" + x.l("id") }, 13.sp, c.ink, Modifier.width(colW).padding(start = 8.dp), weight = FontWeight.Bold, lh = 18.sp, maxLines = 2)
-                }
-            }
-            rows.forEachIndexed { ri, (l, f) ->
-                if (ri > 0) KListDividerPlain(132.dp + colW * items.size)
-                Row(Modifier.heightIn(min = 44.dp), verticalAlignment = Alignment.CenterVertically) {
-                    SText(l, 14.sp, c.ink2, Modifier.width(132.dp), lh = 18.sp, maxLines = 2)
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            // phone: 96dp column + side scroll; Fold: column khinch kar poori chaudai (khaali jagah nahi)
+            val colW = maxOf(96.dp, (maxWidth - 32.dp - 132.dp) / items.size.coerceAtLeast(1))
+            Column(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
+                Row(Modifier.heightIn(min = 48.dp), verticalAlignment = Alignment.Bottom) {
+                    SText("", 13.sp, c.ink3, Modifier.width(132.dp))
                     items.forEach { x ->
-                        val v = f(x)
-                        val col = when (ri) {
-                            5 -> x.sn("final_rec")?.let { r -> recColor(r) } ?: c.ink3
-                            3 -> if (v == "–") c.ink3 else stColor(v)
-                            else -> if (v == "–") c.ink3 else c.ink
+                        SText(x.s("title").ifBlank { "OPP-" + x.l("id") }, 13.sp, c.ink, Modifier.width(colW).padding(start = 8.dp), weight = FontWeight.Bold, lh = 18.sp, maxLines = 2)
+                    }
+                }
+                rows.forEachIndexed { ri, (l, f) ->
+                    if (ri > 0) KListDividerPlain(132.dp + colW * items.size)
+                    Row(Modifier.heightIn(min = 44.dp), verticalAlignment = Alignment.CenterVertically) {
+                        SText(l, 14.sp, c.ink2, Modifier.width(132.dp), lh = 18.sp, maxLines = 2)
+                        items.forEach { x ->
+                            val v = f(x)
+                            val col = when (ri) {
+                                5 -> x.sn("final_rec")?.let { r -> recColor(r) } ?: c.ink3
+                                3 -> if (v == "–") c.ink3 else stColor(v)
+                                else -> if (v == "–") c.ink3 else c.ink
+                            }
+                            SText(v, 14.sp, col, Modifier.width(colW).padding(start = 8.dp), weight = FontWeight.SemiBold, lh = 18.sp, maxLines = 2)
                         }
-                        SText(v, 14.sp, col, Modifier.width(colW).padding(start = 8.dp), weight = FontWeight.SemiBold, lh = 18.sp, maxLines = 2)
                     }
                 }
             }

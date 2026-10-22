@@ -143,7 +143,8 @@ private fun IssueHero(d: HIssueDetail) {
         )
         KSplit(
             listOf(
-                "Events".t() to num(i.events.toDouble()),
+                // bada number events ho to yahan pehli baar
+                if (u != null) "Events".t() to num(i.events.toDouble()) else "First seen".t() to hWhen(i.firstSeen),
                 "Version".t() to i.version.ifBlank { "–" },
                 "Last seen".t() to ago(i.lastSeen),
             ),
@@ -199,7 +200,7 @@ private fun IssueMain(d: HIssueDetail, h: HState, vm: HealthVm, nav: NavHostCont
                 KButton("Reject".t(), onReject, Modifier.weight(1f), kind = KBtn.OUTLINE, busy = "reject$id" in h.busy)
                 KButton(
                     "Mark fixed".t(), { vm.issueAction(id, "fixed", ok = "Marked fixed".t()) }, Modifier.weight(1f), kind = KBtn.OUTLINE,
-                    icon = KIcons.Check, busy = "fixed$id" in h.busy,
+                    busy = "fixed$id" in h.busy,
                 )
             } else {
                 KButton(

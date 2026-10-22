@@ -12,7 +12,6 @@ import com.myfuturecode.mfcdash.util.t
 import com.myfuturecode.mfcdash.util.tf
 import org.json.JSONObject
 import java.text.SimpleDateFormat
-import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import kotlin.math.abs
@@ -67,7 +66,9 @@ internal fun wView(
         busy -> "…"
         at <= 0L -> W_DASH
         stale -> agoText(at)
-        else -> tf("%s update", wClock(at, now))
+        // Google Ads = "9:34 check" (mockup), baaki "9:41 update"
+        kind == WKind.ADS -> tf("%s check", wClock(at))
+        else -> tf("%s update", wClock(at))
     }
     val cells = when (kind) {
         WKind.PAISA -> paisaCells(o, PaisaSnap.of(snap), target)
@@ -77,13 +78,8 @@ internal fun wView(
     return WView(kind, style, kind.title(), time, stale, cells, login = false)
 }
 
-/** "9:41" (aaj) ya "21 Oct" (purana). */
-private fun wClock(at: Long, now: Long): String {
-    val a = Calendar.getInstance().apply { timeInMillis = at }
-    val b = Calendar.getInstance().apply { timeInMillis = now }
-    val same = a.get(Calendar.YEAR) == b.get(Calendar.YEAR) && a.get(Calendar.DAY_OF_YEAR) == b.get(Calendar.DAY_OF_YEAR)
-    return SimpleDateFormat(if (same) "HH:mm" else "dd MMM", Locale.US).format(Date(at))
-}
+/** "9:41". Taaza data kuch ghante se purana nahi hota (purana = "5 ghante pehle"), isliye tareekh nahi. */
+private fun wClock(at: Long): String = SimpleDateFormat("HH:mm", Locale.US).format(Date(at))
 
 /** "+₹18,450" / "−₹2,140" (asli minus). */
 internal fun wSignedInr(v: Double?): String = when {

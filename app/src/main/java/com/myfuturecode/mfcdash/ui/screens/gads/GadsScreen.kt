@@ -225,7 +225,7 @@ fun GadsScreen(vm: GadsVm, nav: NavHostController, startTab: String) {
     val onToken: (String, String) -> Unit = { c0, t0 -> token = c0 to t0 }
 
     val bar: @Composable ColumnScope.() -> Unit = {
-        KDetailBar("Google Ads".t(), gBack(nav), sub = if (o != null) tf("%s accounts", accs.size) else updatedText(g), actions = {
+        KDetailBar("Google Ads".t(), gBack(nav), sub = if (o == null) updatedText(g) else if (accs.size == 1) "1 account".t() else tf("%s accounts", accs.size), actions = {
             if (tab != "settings" && box.rows.isNotEmpty()) KBarIcon(KIcons.Filter, "Filters".t(), { box.open = true }, badge = box.active.size, badgeUrgent = false)
             KBarIcon(KIcons.Refresh, "Refresh".t(), { reload.intValue++ })
         })
@@ -327,7 +327,9 @@ private fun GadsHero(o: JSONObject?, accs: List<JSONObject>, usdInr: Double?, dr
                     when {
                         nBad > 0 -> KPill(tf("%s act now", nBad), KKind.BAD)
                         nWarn > 0 -> KPill(tf("%s to watch", nWarn), KKind.WARN)
-                        else -> KPill("All fine".t(), KKind.OK)
+                        // sab monitor band / naye hon to "Sab theek" nahi
+                        kinds.any { it == KKind.OK } -> KPill("All fine".t(), KKind.OK)
+                        else -> {}
                     }
                 }
             } else null,
@@ -621,9 +623,10 @@ private fun MonitorCard(r: JSONObject, kind: String, nav: NavHostController, g: 
                 val p0 = r.dn("pace_pct")?.takeIf { it.isFinite() }
                 val lo = th.dn("drop_pct") ?: gDrop
                 val hi = th.dn("spike_pct") ?: gSpike
+                // KPaceMeter jaisa: seema par = theek
                 val pk = when {
                     p0 == null -> KKind.NEUTRAL
-                    p0 <= -lo || p0 >= hi -> KKind.WARN
+                    p0 < -lo || p0 > hi -> KKind.WARN
                     else -> KKind.OK
                 }
                 Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -752,7 +755,7 @@ private fun RecsTab(g: GState, vm: GadsVm, nav: NavHostController, f: Map<String
         KSection("AI".t())
         KCard(list = true) {
             KRow(
-                "AI".t(), sub = if (on) "On".t() else "AI key missing".t(), subKind = if (on) KKind.OK else KKind.WARN,
+                "AI explanations".t(), sub = if (on) "On".t() else "AI key missing".t(), subKind = if (on) KKind.OK else KKind.WARN,
                 lead = { KIconTile(KIcons.Spark, if (on) KKind.OK else KKind.WARN) },
             )
             KListDivider(lead = true)

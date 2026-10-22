@@ -10,6 +10,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
@@ -64,6 +65,7 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -226,7 +228,7 @@ internal fun gRoas(v: Double?): String = if (v == null || !v.isFinite()) "–" e
 fun money(v: Double?, cur: String, dec: Int = 2): String =
     if (v == null || !v.isFinite()) "–" else (if (v < 0) "−" else "") + gSym(cur) + num(abs(v), dec)
 
-fun signedPct(v: Double?): String = if (v == null || !v.isFinite()) "–" else (if (v > 0) "+" else "") + num(v, 1) + "%"
+fun signedPct(v: Double?): String = if (v == null || !v.isFinite()) "–" else (if (v > 0) "+" else if (v < 0) "−" else "") + num(abs(v), 1) + "%"
 
 fun ageMin(m: Int?): String = when {
     m == null -> "never".t()
@@ -580,7 +582,13 @@ private fun RowScope.GCell(s: String, i: Int, header: Boolean, wide: Boolean, fi
     )
 }
 
-/** Table (kit rang): header + rows. 5+ columns = side scroll. onRow = row tap (48dp). tint = cell ka rang (ROAS). */
+/** Number column ki kam se kam chaudai (isse kam jagah ho to table side scroll). */
+private val G_COL_MIN = 66.dp
+
+/**
+ * Table (kit rang): header + rows. Jagah kam ho (firstMin + har column 66dp) tabhi side scroll, warna poori chaudai.
+ * onRow = row tap (48dp). tint = cell ka rang (ROAS).
+ */
 @Composable
 internal fun GTable(
     headers: List<String>,
@@ -589,31 +597,34 @@ internal fun GTable(
     firstWeight: Float = 1.6f,
     onRow: ((Int) -> Unit)? = null,
     tint: (Int, Int) -> Color = { _, _ -> Color.Unspecified },
+    firstMin: Dp = 96.dp,
 ) {
     val c = Mfc.c
     if (rows.isEmpty()) {
         if (empty.isNotBlank()) KEmpty(empty)
         return
     }
-    val wide = headers.size > 4
-    val scroll = rememberScrollState()
     val chev = if (onRow != null) 18.dp else 0.dp
-    var box = Modifier.fillMaxWidth()
-    if (wide) box = box.horizontalScroll(scroll).width(128.dp + 76.dp * (headers.size - 1) + chev)
-    Column(box) {
-        Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-            headers.forEachIndexed { i, h -> GCell(h, i, true, wide, firstWeight, Color.Unspecified) }
-            if (onRow != null) Spacer(Modifier.width(chev))
-        }
-        KDivider()
-        rows.forEachIndexed { ri, r ->
-            var rm = Modifier.fillMaxWidth().heightIn(min = if (onRow != null) 48.dp else 40.dp)
-            if (onRow != null) rm = rm.clickable { onRow(ri) }
-            Row(rm.padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                r.forEachIndexed { i, s -> GCell(s, i, false, wide, firstWeight, tint(ri, i)) }
-                if (onRow != null) Icon(KIcons.Chev, null, tint = c.chev, modifier = Modifier.size(chev))
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val wide = maxWidth < firstMin + G_COL_MIN * (headers.size - 1) + chev
+        val scroll = rememberScrollState()
+        var box = Modifier.fillMaxWidth()
+        if (wide) box = box.horizontalScroll(scroll).width(128.dp + 76.dp * (headers.size - 1) + chev)
+        Column(box) {
+            Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                headers.forEachIndexed { i, h -> GCell(h, i, true, wide, firstWeight, Color.Unspecified) }
+                if (onRow != null) Spacer(Modifier.width(chev))
             }
-            if (ri < rows.lastIndex) KDivider()
+            KDivider()
+            rows.forEachIndexed { ri, r ->
+                var rm = Modifier.fillMaxWidth().heightIn(min = if (onRow != null) 48.dp else 40.dp)
+                if (onRow != null) rm = rm.clickable { onRow(ri) }
+                Row(rm.padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    r.forEachIndexed { i, s -> GCell(s, i, false, wide, firstWeight, tint(ri, i)) }
+                    if (onRow != null) Icon(KIcons.Chev, null, tint = c.chev, modifier = Modifier.size(chev))
+                }
+                if (ri < rows.lastIndex) KDivider()
+            }
         }
     }
 }

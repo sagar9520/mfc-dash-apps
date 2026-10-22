@@ -6,9 +6,9 @@ val HI_UI_HEALTH: Map<String, String> = mapOf(
     "Apps fine" to "Apps theek", "Look now" to "Turant dekho", "AI fixes" to "AI fix",
     // Aaj: Turant, AI fix taiyaar, Consoles, Scan, AI kaam
     "Nothing urgent" to "Kuch turant nahi", "All %s open" to "Sab %s khule", "AI fix ready" to "AI fix taiyaar",
-    "%s need OK" to "%s ko OK chahiye", "View" to "Dekho", "fix" to "fix", "No service account" to "Service account nahi",
+    "%s need OK" to "%s OK chahiye", "View" to "Dekho", "fix" to "fix", "No service account" to "Service account nahi",
     "%s consoles" to "%s consoles", "%s/%s OK" to "%s/%s OK", "Server zone" to "Server zone", "AI work" to "AI kaam",
-    "Monitored" to "Nazar me",
+    "Monitored" to "Nazar me", "Scans/24h" to "Scan/24h",
     // khaali haal
     "No consoles" to "Koi console nahi", "No open issue" to "Koi khula issue nahi", "No AI fixes" to "Koi AI fix nahi",
     "No builds yet" to "Abhi koi build nahi", "No app here" to "Yahan koi app nahi",

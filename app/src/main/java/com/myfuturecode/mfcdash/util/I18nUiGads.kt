@@ -3,7 +3,7 @@ package com.myfuturecode.mfcdash.util
 /** English -> Hinglish (redesign: Google Ads monitor). Missing key = English. Pehle wale maps me mile to wahi chalta hai. */
 val HI_UI_GADS: Map<String, String> = mapOf(
     // hero / accounts
-    "%s act now" to "%s turant", "Total ≈" to "Kul ≈", "Just added" to "Abhi joda", "Not monitored" to "Monitor nahi", "No scan yet" to "Abhi scan nahi",
+    "%s act now" to "%s turant", "1 account" to "1 account", "Total ≈" to "Kul ≈", "Just added" to "Abhi joda", "Not monitored" to "Monitor nahi", "No scan yet" to "Abhi scan nahi",
     "Health" to "Health", "Policy" to "Policy", "ROAS" to "ROAS", "Read-only" to "Sirf dekhna", "Never" to "Kabhi nahi",
     // setup
     "Cron off" to "Cron band", "Email alerts off" to "Email alerts band", "Email intake off" to "Email intake band", "Email intake error" to "Email intake error",

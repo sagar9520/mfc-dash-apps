@@ -286,19 +286,20 @@ private fun HealthTabs(tab: String, o: HOverview?, onPick: (String) -> Unit) {
 
 // ---------------------------------------------------------------- 1. Aaj (overview)
 
-/** "Crash · 340 users". */
+/** "Crash · 340 users" (users na ho to events). */
 private fun issueLine(i: com.myfuturecode.mfcdash.data.HIssue): String = listOfNotNull(
-    typeText(i.type).ifBlank { null }, i.users?.takeIf { it > 0 }?.let { tf("%s users", num(it.toDouble())) },
+    typeText(i.type).ifBlank { null },
+    i.users?.takeIf { it > 0 }?.let { tf("%s users", num(it.toDouble())) } ?: i.events.takeIf { it > 0 }?.let { tf("%s events", num(it.toDouble())) },
 ).joinToString(" · ")
 
-/** Turant: khule P0/P1 issues (app, kya hua, kab). */
+/** Turant: khule P0/P1 issues (app, kya hua, kab). Baaki "Sab N khule" se Issues tab. */
 @Composable
 private fun OverviewMain(h: HState, vm: HealthVm, nav: NavHostController, go: (String) -> Unit) {
     val o = h.overview ?: run {
         if (h.error != null) HProblem(h) { vm.loadOverview() } else Loading()
         return
     }
-    val att = o.attention
+    val att = o.attention.filter { it.severity == "P0" || it.severity == "P1" }
     val nApps = att.map { it.pkg.ifBlank { it.app } }.distinct().size
     val k = when {
         att.any { it.severity == "P0" } -> KKind.BAD
@@ -394,7 +395,7 @@ private fun ConsolesBlock(o: HOverview, go: (String) -> Unit) {
     val cons = o.integrations.filter { it.kind == "play" }
     val bad = cons.filter { it.status != "OK" }
     KSection("Consoles".t(), trailing = {
-        if (o.consoles > 0) KPill(tf("%s/%s OK", o.consolesOk, o.consoles), if (bad.isEmpty()) KKind.NEUTRAL else KKind.WARN, icon = null)
+        if (o.consoles > 0) KPill(tf("%s/%s OK", o.consolesOk, o.consoles), KKind.NEUTRAL, icon = null)
     })
     KCard(list = true) {
         when {
@@ -410,8 +411,10 @@ private fun ConsolesBlock(o: HOverview, go: (String) -> Unit) {
                 if (i > 0) KListDivider(true)
                 val k0 = hStatusKind(x.status)
                 val k = if (k0 == KKind.OK || k0 == KKind.NEUTRAL) KKind.WARN else k0
+                // detail sirf "12 apps" ho to status ka shabd dikhao
+                val sub = if (x.detail.isBlank() || x.detail.matches(Regex("\\d+ apps"))) statusText(x.status) else x.detail
                 KRow(
-                    x.name, sub = x.detail.ifBlank { statusText(x.status) }, subKind = k, lead = { KIconTile(k.icon() ?: KIcons.Dhyan, k) },
+                    x.name, sub = sub, subKind = k, lead = { KIconTile(k.icon() ?: KIcons.Dhyan, k) },
                     chevron = true, onClick = { go("consoles") },
                 )
             }
@@ -447,8 +450,8 @@ private fun ScanBlock(h: HState, o: HOverview, vm: HealthVm, nav: NavHostControl
             Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            KButton("Run Scan Now".t(), { vm.scan() }, Modifier.weight(1f), busy = "scan" in h.busy)
-            KButton("Live Activity".t(), { go("live") }, Modifier.weight(1f), kind = KBtn.OUTLINE)
+            KButton("Run Scan Now".t(), { vm.scan() }, Modifier.weight(1.5f), busy = "scan" in h.busy)
+            KButton("Live".t(), { go("live") }, Modifier.weight(1f), kind = KBtn.OUTLINE, icon = KIcons.Live)
         }
     }
 }
@@ -470,7 +473,7 @@ private fun NumbersBlock(o: HOverview, go: (String) -> Unit) {
                 HCell("Fixes ✓".t(), hN(o.fixesOk30), sub = "30 days".t(), color = if (o.fixesOk30 > 0) c.green else null, onClick = { go("fixes") }),
                 HCell("Fixes ✗".t(), hN(o.fixesFailed30), sub = "30 days".t(), color = if (o.fixesFailed30 > 0) c.red else null, onClick = { go("fixes") }),
                 HCell("Running".t(), hN(o.runsActive), color = if (o.runsActive > 0) c.brand else null, onClick = { go("live") }),
-                HCell("Scans 24h".t(), hN(o.runsTotal24), sub = tf("%s clean · %s failed", o.runsClean24, o.runsFailed24), onClick = { go("live") }),
+                HCell("Scans/24h".t(), hN(o.runsTotal24), sub = tf("%s clean · %s failed", o.runsClean24, o.runsFailed24), onClick = { go("live") }),
                 HCell("Consoles".t(), "${o.consolesOk}/${o.consoles}", onClick = { go("consoles") }),
                 HCell("Monitored".t(), "${o.appsMonitored}/${o.apps}", onClick = { go("apps") }),
             ),
@@ -485,7 +488,7 @@ private fun IntegrationsBlock(o: HOverview) {
     if (list.isEmpty()) return
     val ok = list.count { it.status == "OK" }
     KSection("Integrations".t(), trailing = {
-        KPill(tf("%s/%s OK", ok, list.size), if (ok < list.size) KKind.WARN else KKind.NEUTRAL, icon = null)
+        KPill(tf("%s/%s OK", ok, list.size), KKind.NEUTRAL, icon = null)
     })
     KCard(list = true) {
         list.forEachIndexed { i, x ->

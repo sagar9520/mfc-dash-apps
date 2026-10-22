@@ -247,19 +247,19 @@ private fun OverviewPage(g: GState, vm: StudioVm, nav: NavHostController, reload
     SPoll(60_000, reload) { vm.load("overview") }
     val o = g.view("overview")
     if (isWide()) {
-        // Fold: baayein hero + OK chahiye + budget, daayein top ideas + baaki
+        // Fold: baayein mockup wala kram (hero, OK chahiye, top ideas, budget, schedule), daayein Aur + haal ke runs / activity
         KScreen(top = bar) {
             SLoad(g, o, { vm.load("overview") }) { ov ->
                 KTwoPane(
                     left = {
                         StudioHero(ov)
                         OkSection(ov, nav, go)
+                        TopIdeas(ov, nav, go)
                         BudgetCard(ov, go)
+                        ScheduleCard(ov, go)
                     },
                     right = {
-                        TopIdeas(ov, nav, go)
                         MoreCard(ov, go)
-                        ScheduleCard(ov, go)
                         RecentCards(ov, nav, go)
                         NeverPublishNote()
                     },
@@ -358,7 +358,11 @@ private fun gateLine(p: JSONObject): String {
     val ms = Regex("since (\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2})").find(p.s("detail"))?.groupValues?.getOrNull(1)?.let { tsMs(it) }
         ?: return gate
     val days = ((System.currentTimeMillis() - ms) / 86_400_000L).coerceAtLeast(0L)
-    return gate + " · " + (if (days == 0L) "today".t() else tf("for %s days", days))
+    return gate + " · " + when (days) {
+        0L -> "today".t()
+        1L -> "for 1 day".t()
+        else -> tf("for %s days", days)
+    }
 }
 
 /** Kept for old callers: ek pending faisla (tap = route). */
@@ -378,7 +382,7 @@ private fun TopIdeas(o: JSONObject, nav: NavHostController, go: (String) -> Unit
     KCard(list = true) {
         top.forEachIndexed { i, x ->
             if (i > 0) KListDivider(true)
-            IdeaRow(x, "best", null, null) { nav.navigate("studio/opp/${x.l("id")}") }
+            IdeaRow(x, "best", null, null, compact = true) { nav.navigate("studio/opp/${x.l("id")}") }
         }
     }
 }
@@ -1054,7 +1058,7 @@ private fun CountriesEditor(g: GState, vm: StudioVm, o: JSONObject, reload: () -
 private fun TierChip(t: Int, on: Boolean, onClick: () -> Unit) {
     val c = Mfc.c
     Box(
-        Modifier.size(44.dp, 48.dp).clip(RoundedCornerShape(12.dp)).selectable(selected = on, role = Role.RadioButton, onClick = onClick),
+        Modifier.size(48.dp).clip(RoundedCornerShape(12.dp)).selectable(selected = on, role = Role.RadioButton, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         Box(

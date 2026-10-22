@@ -147,7 +147,7 @@ private fun AppHero(d: HAppDetail) {
 private fun AppNumbers(d: HAppDetail, h: HState, vm: HealthVm, pkg: String, days: Int, onDays: (Int) -> Unit, onTask: () -> Unit) {
     val c = Mfc.c
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        KButton("Scan this app".t(), { vm.scan(pkg) }, Modifier.weight(1f), kind = KBtn.SOFT, icon = KIcons.Refresh, busy = "scan$pkg" in h.busy)
+        KButton("Scan".t(), { vm.scan(pkg) }, Modifier.weight(1f), kind = KBtn.SOFT, icon = KIcons.Refresh, busy = "scan$pkg" in h.busy)
         KButton("New task".t(), onTask, Modifier.weight(1f), icon = KIcons.Plus)
     }
     KSegTabs(DAYS.map { tf("%s days", it) }, DAYS.indexOf(days).coerceAtLeast(0), { onDays(DAYS[it]) })
@@ -155,7 +155,7 @@ private fun AppNumbers(d: HAppDetail, h: HState, vm: HealthVm, pkg: String, days
         HGrid(
             listOf(
                 HCell("Installs".t(), hN(d.installs)),
-                HCell("Uninstalls".t(), hN(d.uninstalls), sub = d.uninstallRate?.let { pct(it, 0) + " " + "of installs".t() }),
+                HCell("Uninstalls".t(), hN(d.uninstalls), sub = d.uninstallRate?.let { pct(it, 0) }),
                 HCell("Crashes".t(), hN(d.crashes), sub = d.crashPer1k?.let { num(it, 2) + " / 1K" }, color = if (d.crashes > 0) c.red else null),
                 HCell("DAU avg".t(), hN(d.dauAvg)),
                 HCell("Revenue".t(), inr(d.revUsd * d.inrPerUsd)),

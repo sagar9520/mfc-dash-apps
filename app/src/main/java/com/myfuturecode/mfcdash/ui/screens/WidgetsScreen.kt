@@ -46,10 +46,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
@@ -186,9 +192,11 @@ private fun WList(nav: NavHostController, onEdit: (WKind) -> Unit) {
     }
 
     KScreen(top = {
-        KDetailBar("Widgets".t(), { nav.popBackStack() }, actions = {
-            KBarIcon(KIcons.Refresh, "Refresh".t(), refresh, spinning = busy)
-        })
+        KDetailBar(
+            "Widgets".t(), { nav.popBackStack() },
+            lead = { Image(painterResource(R.drawable.mfc_mark), null, Modifier.size(36.dp).clip(RoundedCornerShape(10.dp))) },
+            actions = { KBarIcon(KIcons.Refresh, "Refresh".t(), refresh, spinning = busy) },
+        )
     }) {
         if (isWide()) {
             KTwoPane(
@@ -227,14 +235,14 @@ private fun WListItem(kind: WKind, snap: JSONObject?, count: Int, canPin: Boolea
         if (kind == WKind.HEALTH) {
             // chhota (2x2) widget: baayein preview, daayein haal + kya dikhta hai
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                WPreview(v, Modifier.width(174.dp).height(168.dp).clickable(onClick = onEdit))
+                WPreview(v, Modifier.width(174.dp).height(168.dp), onEdit)
                 Column(Modifier.weight(1f).padding(top = 4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     status()
                     KT(names, 13.sp, c.ink2, maxLines = 4, lh = 18.sp)
                 }
             }
         } else {
-            WPreview(v, Modifier.fillMaxWidth().widthIn(max = 460.dp).height(168.dp).clickable(onClick = onEdit))
+            WPreview(v, Modifier.fillMaxWidth().widthIn(max = 460.dp).height(168.dp), onEdit)
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 KT(names, 13.sp, c.ink2, Modifier.weight(1f))
                 status()
@@ -406,6 +414,11 @@ private fun WConfig(kind: WKind, onClose: () -> Unit) {
         WKind.HEALTH -> if (choices.isEmpty()) "All consoles".t() else tf("All consoles (%s)", choices.size)
     }
     val pickText = if (o.pick.isEmpty()) allText else tf("%s chosen", o.pick.size)
+    val pickOne = when (kind) {
+        WKind.PAISA -> "Pick apps".t()
+        WKind.ADS -> "Pick accounts".t()
+        WKind.HEALTH -> "Pick consoles".t()
+    }
     val summary = listOfNotNull(
         if (kind == WKind.PAISA) wRangeName(o.range) else null,
         pickText, wThemeName(o.theme), wEveryName(o.every),
@@ -478,13 +491,9 @@ private fun WConfig(kind: WKind, onClose: () -> Unit) {
                         }
                     }
                     WLabel(pickTitle)
-                    Row(
-                        Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(RoundedCornerShape(14.dp)).background(c.well)
-                            .clickable(role = Role.Button, onClick = { picker = true }).padding(horizontal = 14.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        KT(pickText, 15.sp, c.ink, Modifier.weight(1f), weight = FontWeight.SemiBold)
-                        Icon(KIcons.Chev, null, tint = c.chev, modifier = Modifier.size(22.dp))
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        WChip(allText, o.pick.isEmpty()) { o = o.copy(pick = emptyList()) }
+                        WChip(if (o.pick.isEmpty()) pickOne else pickText, o.pick.isNotEmpty(), chev = true) { picker = true }
                     }
                     WLabel("Widget colour".t())
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -568,7 +577,17 @@ private fun WOptRow(name: String, num: Int?, modifier: Modifier, onToggle: () ->
         if (num != null) {
             WNumBadge(num)
         } else {
-            Box(Modifier.size(28.dp).border(1.5.dp, c.chev, RoundedCornerShape(8.dp)))
+            val dash = c.chev
+            Box(
+                Modifier.size(28.dp).drawBehind {
+                    val sw = 1.5.dp.toPx()
+                    drawRoundRect(
+                        color = dash, topLeft = Offset(sw / 2f, sw / 2f), size = Size(size.width - sw, size.height - sw),
+                        cornerRadius = CornerRadius(8.dp.toPx()),
+                        style = Stroke(width = sw, pathEffect = PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 3.dp.toPx()))),
+                    )
+                },
+            )
         }
         KT(
             name, 15.sp, if (on) c.ink else c.ink2, Modifier.weight(1f),
@@ -577,9 +596,9 @@ private fun WOptRow(name: String, num: Int?, modifier: Modifier, onToggle: () ->
     }
 }
 
-/** Option chip (48dp): chuna = brand halka + check. */
+/** Option chip (48dp): chuna = brand halka + check. chev = list kholta hai. */
 @Composable
-private fun WChip(text: String, on: Boolean, swatch: Brush? = null, onClick: () -> Unit) {
+private fun WChip(text: String, on: Boolean, swatch: Brush? = null, chev: Boolean = false, onClick: () -> Unit) {
     val c = Mfc.c
     val shape = RoundedCornerShape(24.dp)
     var m = Modifier.heightIn(min = 48.dp).clip(shape).background(if (on) c.brandSoft else c.well)
@@ -592,6 +611,7 @@ private fun WChip(text: String, on: Boolean, swatch: Brush? = null, onClick: () 
         if (on) Icon(KIcons.Check, null, tint = c.brand, modifier = Modifier.size(16.dp))
         if (swatch != null) Box(Modifier.size(18.dp).clip(CircleShape).background(swatch).border(1.dp, c.line, CircleShape))
         KT(text, 14.sp, if (on) c.brand else c.ink, weight = FontWeight.SemiBold)
+        if (chev) Icon(KIcons.Chev, null, tint = if (on) c.brand else c.chev, modifier = Modifier.size(18.dp))
     }
 }
 
@@ -658,7 +678,7 @@ private fun WCheckRow(text: String, on: Boolean, onClick: () -> Unit) {
 // ---------------------------------------------------------------- preview (home screen wale widget jaisa)
 
 @Composable
-private fun WPreview(v: WView, modifier: Modifier) {
+private fun WPreview(v: WView, modifier: Modifier, onClick: (() -> Unit)? = null) {
     val p = remember(v.style, v.kind) { wPal(v.style, v.kind) }
     val bd = mfcColors(v.style).cardBd
     val shape = RoundedCornerShape(20.dp)
@@ -666,6 +686,7 @@ private fun WPreview(v: WView, modifier: Modifier) {
     var m = modifier.shadow(4.dp, shape).clip(shape)
     m = if (p.brand) m.background(WBrandBrush) else m.background(p.bg)
     if (!p.brand && bd.alpha > 0f) m = m.border(1.dp, bd, shape)
+    if (onClick != null) m = m.clickable(role = Role.Button, onClick = onClick)
     BoxWithConstraints(m) {
         val w = maxWidth.value
         val bodyH = maxHeight.value - W_BAND

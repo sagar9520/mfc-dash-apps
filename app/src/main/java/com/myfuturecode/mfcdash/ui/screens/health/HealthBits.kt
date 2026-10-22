@@ -371,6 +371,7 @@ internal fun HRow3(
     noteColor: Color = Color.Unspecified,
     value: String? = null,
     valueSub: String? = null,
+    valueSubKind: KKind? = null,
     titleLines: Int = 1,
     onClick: (() -> Unit)? = null,
     extra: (@Composable ColumnScope.() -> Unit)? = null,
@@ -395,7 +396,11 @@ internal fun HRow3(
         }
         if (value != null || valueSub != null) Column(horizontalAlignment = Alignment.End) {
             if (value != null) Text(value, color = c.ink2, style = hStyle(14.sp, lh = 18.sp), maxLines = 1)
-            if (valueSub != null) Text(valueSub, Modifier.padding(top = 2.dp), color = c.ink3, style = hStyle(13.sp, lh = 18.sp), maxLines = 1)
+            if (valueSub != null) {
+                // status ho to shape + rang ke saath
+                if (valueSubKind != null && valueSubKind != KKind.NEUTRAL) KStatus(valueSub, valueSubKind, Modifier.padding(top = 2.dp))
+                else Text(valueSub, Modifier.padding(top = 2.dp), color = c.ink3, style = hStyle(13.sp, lh = 18.sp), maxLines = 1)
+            }
         }
         if (onClick != null) Icon(KIcons.Chev, null, tint = c.chev, modifier = Modifier.offset(x = 6.dp).size(22.dp))
     }
@@ -418,14 +423,15 @@ internal fun HLinkRow(label: String, value: String, onClick: () -> Unit) {
 
 // ---------------------------------------------------------------- rows
 
-/** Issue row: logo (ya type tile), title, "P0 · Crash · 340 users" (rang), daayein time + status. */
+/** Issue row: logo (ya type tile), title, "P0 · Crash · 340 users" (rang), daayein time + status (shape + rang). */
 @Composable
 fun IssueRow(i: HIssue, nav: NavHostController, showApp: Boolean = true) {
     val k = hSevKind(i.severity)
     val app = i.app.ifBlank { i.pkg }
     val line = listOfNotNull(
         i.severity.ifBlank { null }, typeText(i.type).ifBlank { null },
-        i.users?.takeIf { it > 0 }?.let { tf("%s users", num(it.toDouble())) },
+        i.users?.takeIf { it > 0 }?.let { tf("%s users", num(it.toDouble())) }
+            ?: if (showApp) i.events.takeIf { it > 0 }?.let { tf("%s events", num(it.toDouble())) } else null,
     ).joinToString(" · ")
     val meta = listOfNotNull(
         "ISS-${i.id}", tf("%s events", num(i.events.toDouble())), i.version.takeIf { it.isNotBlank() }?.let { "v$it" },
@@ -438,6 +444,7 @@ fun IssueRow(i: HIssue, nav: NavHostController, showApp: Boolean = true) {
         note = if (showApp) i.title else meta,
         value = hWhen(i.lastSeen),
         valueSub = statusText(i.status),
+        valueSubKind = hStatusKind(i.status),
         titleLines = if (showApp) 1 else 2,
         onClick = { nav.navigate("health/issue/${i.id}") },
     )
@@ -613,7 +620,7 @@ fun BuildCard(b: HBuild, h: HState, vm: HealthVm, nav: NavHostController?) {
         }
         if (b.reviewable) Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             KButton("Discard".t(), { discard = true }, Modifier.weight(1f), kind = KBtn.OUTLINE, busy = "bs${b.id}" in h.busy)
-            KButton("Approve & Live".t(), { publish = true }, Modifier.weight(1.4f), icon = KIcons.Send, busy = "pub${b.id}" in h.busy)
+            KButton("Approve & Live".t(), { publish = true }, Modifier.weight(1.8f), icon = KIcons.Send, busy = "pub${b.id}" in h.busy)
         }
     }
     if (publish) PublishDialog(b, onDismiss = { publish = false }) { track, rollout -> publish = false; vm.publish(b.id, track, rollout) }

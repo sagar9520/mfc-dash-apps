@@ -195,7 +195,7 @@ internal object WidgetData {
         val inr = spend.map { (c, v) -> toInr(v, c, rate) }
         val total = if (inr.isEmpty() || inr.any { it == null }) null else inr.sumOf { it ?: 0.0 }
         return AdsSnap(
-            System.currentTimeMillis(), spend, watch, kinds.count { it.second == KKind.BAD }, pace(accs),
+            System.currentTimeMillis(), spend, watch, kinds.count { it.second == KKind.BAD }, pace(accs, rate),
             accs.size, kinds.count { it.second == KKind.OK }, total, all.map { it.s("cid") to name(it) }.filter { it.first.isNotBlank() },
         )
     }
@@ -215,18 +215,23 @@ internal object WidgetData {
         }
     }
 
-    /** Sab accounts ka pace (% normal se). Ek hi currency ho to jod kar, warna average. */
-    private fun pace(accs: List<JSONObject>): Double? {
-        val rows = accs.mapNotNull { a ->
-            val p = a.dn("pace_pct")
-            if (p == null || !p.isFinite()) null else Triple(cur(a), p, a.dn("usual_by_now")?.takeIf { it.isFinite() } ?: 0.0)
+    /**
+     * Sab accounts ka pace (% normal se), app ke Google Ads jaisa: Σ aaj / Σ aam − 1, sirf taaza data wale accounts;
+     * alag currency ho to ₹ me jod kar ($ = rate se, baaki chhod do). Na bane to null.
+     */
+    private fun pace(accs: List<JSONObject>, rate: Double?): Double? {
+        val mixed = accs.map { cur(it) }.filter { it.isNotBlank() }.distinct().size > 1
+        var now = 0.0
+        var usual = 0.0
+        for (a in accs) {
+            if (!a.b("fresh")) continue
+            val p = a.dn("pace_pct")?.takeIf { it.isFinite() } ?: continue
+            val u = a.dn("usual_by_now")?.takeIf { it > 0 && it.isFinite() } ?: continue
+            val k = if (mixed) toInr(1.0, cur(a), rate) ?: continue else 1.0
+            now += u * (1 + p / 100.0) * k
+            usual += u * k
         }
-        if (rows.isEmpty()) return null
-        val oneCur = rows.all { it.third > 0.0 } && rows.map { it.first }.distinct().size == 1
-        if (!oneCur) return rows.map { it.second }.average()
-        val usual = rows.sumOf { it.third }
-        val now = rows.sumOf { it.third * (1 + it.second / 100.0) }
-        return (now - usual) / usual * 100.0
+        return if (usual > 0) (now / usual - 1) * 100 else null
     }
 
     private fun toInr(v: Double, cur: String, rate: Double?): Double? = when (cur) {

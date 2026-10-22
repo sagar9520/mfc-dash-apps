@@ -316,16 +316,18 @@ fun GadsAccountScreen(vm: GadsVm, nav: NavHostController, cid: String) {
     }
 }
 
-/** Health tab me ek account chuna ho to (bina apne bar ke). */
+/** Health tab me ek account chuna ho to (bina apne bar ke). Upar Google Ads ka hero hai, isliye summary sada card me. */
 @Composable
 fun AccountBody(g: GState, vm: GadsVm, nav: NavHostController, cid: String, reload: Int) {
     gPoll(60_000L, cid, reload) { vm.load("account", mapOf("cid" to cid)) }
-    AccountContent(g, vm, nav, cid, wide = false, heroHere = true, usdInr = gUsdInr())
+    AccountContent(g, vm, nav, cid, wide = false, heroHere = true, usdInr = gUsdInr(), asCard = true)
 }
 
 /** Account ka poora page (hero ke bina ya saath). Fold: baayein hero + alerts / campaigns, daayein sources / settings. */
 @Composable
-private fun AccountContent(g: GState, vm: GadsVm, nav: NavHostController, cid: String, wide: Boolean, heroHere: Boolean, usdInr: Double?) {
+private fun AccountContent(
+    g: GState, vm: GadsVm, nav: NavHostController, cid: String, wide: Boolean, heroHere: Boolean, usdInr: Double?, asCard: Boolean = false,
+) {
     val p = mapOf("cid" to cid)
     var edit by remember { mutableStateOf(false) }
     var token by remember { mutableStateOf<String?>(null) }
@@ -336,16 +338,21 @@ private fun AccountContent(g: GState, vm: GadsVm, nav: NavHostController, cid: S
         val side: @Composable () -> Unit = {
             AcctSide(j, a, g, vm, cid, onEdit = { edit = true }, onNewTok = { newTok = true }, onToken = { token = it }, onTh = { th = it })
         }
+        // ek screen, ek hero: Health tab ke andar summary card me (naam ke saath)
+        val head: @Composable () -> Unit = {
+            if (asCard) KCard { AcctSummary(j, g, usdInr, a.company.ifBlank { a.cidFmt } + " · " + "Spend today".t()) }
+            else KHero(KTint.Sand) { AcctSummary(j, g, usdInr) }
+        }
         if (wide) {
             KTwoPane(
                 left = {
-                    if (heroHere) KHero(KTint.Sand) { AcctSummary(j, g, usdInr) }
+                    if (heroHere) head()
                     AcctMain(j, a, nav, cid)
                 },
                 right = { side() },
             )
         } else {
-            if (heroHere) KHero(KTint.Sand) { AcctSummary(j, g, usdInr) }
+            if (heroHere) head()
             AcctMain(j, a, nav, cid)
             side()
         }
@@ -369,7 +376,7 @@ private fun AccountContent(g: GState, vm: GadsVm, nav: NavHostController, cid: S
 
 /** Hero ke andar: aaj ka kharcha (apni currency, ≈ ₹), aam / data kitna purana, raftaar meter. */
 @Composable
-private fun AcctSummary(j: JSONObject, g: GState, usdInr: Double?) {
+private fun AcctSummary(j: JSONObject, g: GState, usdInr: Double?, head: String = "Spend today".t()) {
     val c = Mfc.c
     val a = GAccount.of(j.obj("account"))
     val cur = a.currency
@@ -377,14 +384,15 @@ private fun AcctSummary(j: JSONObject, g: GState, usdInr: Double?) {
     val crit = open.count { it.level.equals("CRITICAL", ignoreCase = true) }
     val warn = open.count { it.level.equals("WARNING", ignoreCase = true) }
     val (gd, gs) = gPaceLimits(g)
-    val ths = j.arr("thresholds").mapObj { it }
+    // sirf is account ki limit (campaign / desh wali nahi)
+    val ths = j.arr("thresholds").mapObj { it }.filter { it.s("scope") == "acct:" + a.cid }
     val drop = ths.firstOrNull { it.s("key") == "drop_pct" }?.dn("value")?.takeIf { it > 0 } ?: gd
     val spike = ths.firstOrNull { it.s("key") == "spike_pct" }?.dn("value")?.takeIf { it > 0 } ?: gs
     val age = j.dn("data_age_min")?.toInt()
     val fresh = j.b("fresh")
     val pace = j.dn("pace_pct")
     val (k, word) = gAcctState(a.monitoring, a.health, age, fresh, crit, warn, pace, drop, spike)
-    KHeroHead("Spend today".t(), icon = KIcons.Ads)
+    KHeroHead(head, icon = KIcons.Ads)
     val sp = j.dn("spend_today")
     val inr = if (sp != null && !gIsInr(cur)) gToInr(sp, cur, usdInr) else null
     KBigNum(gCash(sp, cur), suffix = inr?.let { " ≈ " + gCash(it, "INR", 0) }, size = 48.sp)
@@ -661,7 +669,7 @@ private fun CampMain(j: JSONObject) {
             listOf("Day".t(), "Spend".t(), "Installs".t(), "CPI", "ROAS"),
             trend.map { d -> listOf(fmtDay(d.s("day")), gCashS(d.dn("cost"), cur), num(d.dn("installs"), 0), gCash(d.dn("cpi"), cur, 2), gRoas(d.dn("roas"))) },
             empty = "No daily data".t(), firstWeight = 1.2f,
-            tint = { ri, ci -> if (ci == 4) rc[ri] else Color.Unspecified },
+            tint = { ri, ci -> if (ci == 4) rc[ri] else Color.Unspecified }, firstMin = 56.dp,
         )
     }
 }
@@ -702,12 +710,12 @@ private fun CampSide(
             geo.map { r ->
                 listOf(r.s("country"), gCashS(r.dn("cost"), cur), num(r.dn("installs"), 0), gCash(r.dn("cpi"), cur, 2), ccT.dn(r.s("country"))?.let { gCash(it, cur, 2) } ?: "–")
             },
-            empty = if (note.s("countries").isNotBlank()) "Needs script".t() else "No country data".t(), firstWeight = 1.2f,
+            empty = if (note.s("countries").isNotBlank()) "Needs script".t() else "No country data".t(), firstWeight = .9f,
             onRow = { i ->
                 val cc = geo[i].s("country")
                 if (cc.length == 2) onTh(Triple("country:$cid:$cc", "cpi_target", gPlain(ccT.dn(cc))))
             },
-            tint = { ri, ci -> if (ci == 3) cpiCol[ri] else Color.Unspecified },
+            tint = { ri, ci -> if (ci == 3) cpiCol[ri] else Color.Unspecified }, firstMin = 56.dp,
         )
     }
     val t = j.obj("thresholds")
@@ -943,7 +951,8 @@ fun SettingsTab(g: GState, vm: GadsVm, nav: NavHostController, reload: Int, onTo
                 over.forEachIndexed { i, o ->
                     if (i > 0) KListDivider()
                     KRow(
-                        gThLabel(o.s("key")), sub = scopeText(o.s("scope")), value = o.s("value"), valuePlain = true, chevron = true,
+                        gThLabel(o.s("key")), sub = scopeText(o.s("scope")), value = o.dn("value")?.let { gThVal(o.s("key"), it, "") } ?: o.s("value").ifBlank { "–" },
+                        valuePlain = true, chevron = true,
                         onClick = { thDef = ""; th = Triple(o.s("scope"), o.s("key"), o.s("value")) },
                     )
                 }
@@ -997,7 +1006,7 @@ fun SettingsTab(g: GState, vm: GadsVm, nav: NavHostController, reload: Int, onTo
                             accs.forEach { a -> GChip(a.company.take(18) + " · " + a.cidFmt.takeLast(4), sel == a.cid) { simCid = a.cid } }
                         }
                         GLabel("Simulate".t())
-                        FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             G_SIMS.forEach { (k, l) ->
                                 KSmallAction(
                                     l.t(),

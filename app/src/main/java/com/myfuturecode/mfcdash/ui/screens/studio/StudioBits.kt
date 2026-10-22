@@ -212,6 +212,7 @@ fun JSONArray.objs(): List<JSONObject> = mapObj { it }
 fun jobName(j: String) = when (j) {
     "economics" -> "Internal economics".t(); "discover" -> "Daily discovery".t(); "rank" -> "Weekly ranking".t(); "deep" -> "Monthly deep research".t()
     "competitors" -> "Competitor analysis".t(); "revise_features" -> "Revise feature spec".t(); "evaluate_idea" -> "Evaluate idea".t(); "source_check" -> "Source test".t()
+    "more_research" -> "More research".t()
     else -> j
 }
 
@@ -226,7 +227,8 @@ internal fun sBack(nav: NavHostController): () -> Unit = { if (!nav.popBackStack
 internal fun sOpen(route: String, nav: NavHostController, go: ((String) -> Unit)?) {
     val r = if (route == "studio/ranking") "studio/research" else route
     val tab = r.removePrefix("studio/")
-    if (go != null && r.startsWith("studio/") && '/' !in tab && tab.isNotBlank()) go(tab) else if (r.isNotBlank()) nav.navigate(r)
+    // sirf jaane-pehchaane tab; anjaan route khaali page na de
+    if (go != null && r.startsWith("studio/") && STABS.any { it.first == tab }) go(tab) else if (r.isNotBlank()) nav.navigate(r)
 }
 
 /** Link browser me (Android: ACTION_VIEW). */
@@ -513,9 +515,9 @@ internal fun SExpandIcon(open: Boolean) {
     Icon(KIcons.ChevDown, null, tint = Mfc.c.chev, modifier = Modifier.size(22.dp).rotate(if (open) 180f else 0f))
 }
 
-/** Lavender idea row: avatar (ya checkbox) + naam + salah + meta, daayein score badge. */
+/** Lavender idea row: avatar (ya checkbox) + naam + salah + meta, daayein score badge. compact = sirf "Category · status" (overview mockup). */
 @Composable
-internal fun IdeaRow(o: JSONObject, engine: String, selected: Boolean?, onToggle: (() -> Unit)?, onClick: () -> Unit) {
+internal fun IdeaRow(o: JSONObject, engine: String, selected: Boolean?, onToggle: (() -> Unit)?, compact: Boolean = false, onClick: () -> Unit) {
     val c = Mfc.c
     val main = when (engine) {
         "paid" -> o.dn("paid")
@@ -532,10 +534,17 @@ internal fun IdeaRow(o: JSONObject, engine: String, selected: Boolean?, onToggle
     ) {
         if (selected != null && onToggle != null) SCheck(selected, onToggle) else KAvatar(o.s("title"))
         Column(Modifier.weight(1f)) {
-            SText(o.s("title"), 15.sp, c.ink, weight = FontWeight.SemiBold, lh = 20.sp, maxLines = 2)
+            SText(o.s("title"), 15.sp, c.ink, weight = FontWeight.SemiBold, lh = 20.sp, maxLines = if (compact) 1 else 2)
             val rec = o.sn("final_rec")
-            if (rec != null) KStatus(recText(rec), recKind(rec), Modifier.padding(top = 2.dp))
-            val meta = ideaMeta(o)
+            if (rec != null && !compact) KStatus(recText(rec), recKind(rec), Modifier.padding(top = 2.dp))
+            val meta = if (compact) {
+                // ek idea = "naya" (filter wala "New" = "Naye")
+                val st = o.s("status")
+                listOfNotNull(o.s("category").ifBlank { null }, if (st == "NEW") "New idea".t() else st.ifBlank { null }?.let { oppStatusText(it) })
+                    .joinToString(" · ")
+            } else {
+                ideaMeta(o)
+            }
             if (meta.isNotBlank()) SText(meta, 13.sp, c.ink2, Modifier.padding(top = 2.dp), lh = 18.sp)
         }
         Column(horizontalAlignment = Alignment.CenterHorizontally) {

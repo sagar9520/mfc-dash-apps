@@ -382,9 +382,10 @@ private fun SetMonitorGroup(vm: DashVm, st: UiState, open: String, flip: (String
                 )
             }
             KListDivider(true)
-            SetToggle(KIcons.Turant, KKind.BAD, "Urgent".t(), st.notifyUrgent) { vm.setNotify(3, it) }
+            // Alerts tab wale hi shabd: Turant / Dhyan do / Info
+            SetToggle(KIcons.Turant, KKind.BAD, KKind.BAD.word(), st.notifyUrgent) { vm.setNotify(3, it) }
             KListDivider(true)
-            SetToggle(KIcons.Dhyan, KKind.WARN, "Watch".t(), st.notifyWarn) { vm.setNotify(2, it) }
+            SetToggle(KIcons.Dhyan, KKind.WARN, KKind.WARN.word(), st.notifyWarn) { vm.setNotify(2, it) }
             KListDivider(true)
             SetToggle(KIcons.Info, KKind.NEUTRAL, "Info".t(), st.notifyInfo) { vm.setNotify(1, it) }
             KListDivider(true)

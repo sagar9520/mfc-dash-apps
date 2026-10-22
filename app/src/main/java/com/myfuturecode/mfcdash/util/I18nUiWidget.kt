@@ -5,6 +5,7 @@ val HI_UI_WIDGET: Map<String, String> = mapOf(
     // widget ke naam / band
     "App money" to "Apps ka paisa",
     "%s update" to "%s update",
+    "%s check" to "%s check",
     "Log in" to "Login karo",
     // Paisa widget
     "Yesterday's profit" to "Kal ka munafa",
@@ -54,6 +55,9 @@ val HI_UI_WIDGET: Map<String, String> = mapOf(
     "All consoles" to "Sab consoles",
     "All consoles (%s)" to "Sab consoles (%s)",
     "%s chosen" to "%s chune",
+    "Pick apps" to "Apps chuno",
+    "Pick accounts" to "Accounts chuno",
+    "Pick consoles" to "Consoles chuno",
     "Widget colour" to "Widget ka rang",
     "Same as app" to "App jaisa",
     "MFC brand" to "MFC brand",

@@ -4,7 +4,8 @@ package com.myfuturecode.mfcdash.util
 val HI_UI_STUDIO: Map<String, String> = mapOf(
     // overview: hero, OK chahiye, budget, aur
     "Waiting for your OK" to "Aapke OK ka wait", "Give OK" to "OK do", "See all" to "Sab dekho", "Select" to "Chuno",
-    "for %s days" to "%s din se", "%s ideas" to "%s ideas", "%s new" to "%s naye", "%s waiting" to "%s wait me",
+    "for %s days" to "%s din se", "for 1 day" to "1 din se", "New idea" to "naya",
+    "%s ideas" to "%s ideas", "%s new" to "%s naye", "%s waiting" to "%s wait me",
     "%s active" to "%s chalu", "%s published" to "%s publish", "%s evidence" to "%s saboot", "%s error" to "%s error",
     "Nothing waiting" to "Kuch pending nahi", "Budget" to "Budget", "Budget full" to "Budget poora", "No budget" to "Budget nahi",
     "Cron" to "Cron", "Cron off" to "Cron band", "Cron late" to "Cron der se", "No AI key" to "AI key nahi", "Never auto-publish" to "Khud publish kabhi nahi",
