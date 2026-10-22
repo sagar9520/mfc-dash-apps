@@ -18,6 +18,7 @@
 declare(strict_types=1);
 require_once __DIR__ . '/../lib/common.php';
 require_login_json();
+if (session_status() === PHP_SESSION_ACTIVE) session_write_close();   // session lock chhodo: warna scan/AI ka lamba kaam chalte waqt app ki baaki requests atak kar timeout hoti hain
 
 $pdo = db();
 $apps = apps();

@@ -239,7 +239,7 @@ class DashVm(private val app: App) : ViewModel() {
         viewModelScope.launch { runCatching { api.extra("all", st.range, st.from, st.to) }.onSuccess { ex -> if (ex != null) _s.update { it.copy(extra = ex) } } }
     }
 
-    /** Site jaisa: aaj ka data ho to har 20 sec refresh (alerts bhi saath me). */
+    /** Site jaisa: aaj ka data ho to har 20 sec refresh (alerts bhi saath me). App peeche ho to nahi (24x7 monitor alerts alag se dekhta hai). */
     private fun startAuto() {
         autoJob?.cancel()
         autoJob = viewModelScope.launch {
@@ -248,7 +248,7 @@ class DashVm(private val app: App) : ViewModel() {
                 delay(20_000)
                 tick++
                 val st = _s.value
-                if (!st.loggedIn) continue
+                if (!st.loggedIn || !app.foreground.value) continue
                 if (st.data == null || st.data.today) refresh()
                 else if (tick % 3 == 0) refreshAlerts()   // purana period dekh rahe ho to bhi har minute alerts
             }

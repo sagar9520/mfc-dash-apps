@@ -26,6 +26,9 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onStart() { super.onStart(); (application as App).foreground.value = true }
+    override fun onStop() { (application as App).foreground.value = false; super.onStop() }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleIntent(intent)

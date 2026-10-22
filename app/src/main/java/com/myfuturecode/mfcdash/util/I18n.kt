@@ -168,5 +168,10 @@ val HI: Map<String, String> = mapOf(
     "100% = break-even (ad revenue + payments = ad spend). Per research, scale a campaign only above 150%." to "100% = break-even (ad revenue + payments = ad kharcha). Research ke hisaab se 150% se upar hi campaign scale karo.",
     "Data source" to "Data source", "Auto refresh" to "Auto refresh", "Every 20 sec (when the period includes today)" to "Har 20 sec (jab period me aaj ho)",
     // ---- monitor service
-    "Monitoring…" to "Nazar rakh raha hoon…", "Server not reachable" to "Server se sampark nahi", "All good" to "Sab theek", "checked" to "check", "MFC live monitor" to "MFC live monitor",
+    "Monitoring…" to "Nazar rakh raha hoon…", "Server not reachable" to "Server se sampark nahi", "No internet, or the server could not be found. Check the net and try again." to "Internet nahi hai ya server nahi mila. Net check karke dobara try karo.",
+    "Could not connect to the server. Try again in a little while." to "Server se connect nahi ho paya. Thodi der baad dobara try karo.",
+    "The server took too long to answer. Try again in a little while." to "Server ne time par jawab nahi diya. Thodi der baad dobara try karo.",
+    "Secure connection to the server failed. Check the phone's date/time and the net." to "Server se secure connection nahi bana. Phone ka date/time aur net check karo.",
+    "Network problem. Try again." to "Net me dikkat hai. Dobara try karo.", "Server is busy (error %s). Try again in a little while." to "Server abhi busy hai (error %s). Thodi der baad dobara try karo.",
+    "All good" to "Sab theek", "checked" to "check", "MFC live monitor" to "MFC live monitor",
 )

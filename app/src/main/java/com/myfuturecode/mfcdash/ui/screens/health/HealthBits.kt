@@ -26,6 +26,9 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.navigation.NavHostController
 import com.myfuturecode.mfcdash.data.*
 import com.myfuturecode.mfcdash.ui.HState
@@ -73,11 +76,12 @@ fun openUrl(ctx: Context, url: String) {
     runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
 }
 
-/** Screen khuli rahe tab tak har [ms] par [tick] (pehli baar turant). */
+/** Screen khuli rahe tab tak har [ms] par [tick] (pehli baar turant). App peeche (home/doosri app) ho to ruk jata hai, wapas aate hi turant. */
 @Composable
 fun Poll(ms: Long, vararg keys: Any?, tick: () -> Unit) {
     val t by rememberUpdatedState(tick)
-    LaunchedEffect(*keys) { while (true) { t(); delay(ms) } }
+    val life = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(life, *keys) { life.repeatOnLifecycle(Lifecycle.State.STARTED) { while (true) { t(); delay(ms) } } }
 }
 
 // ---------------------------------------------------------------- top bar / frame

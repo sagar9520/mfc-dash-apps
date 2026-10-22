@@ -92,6 +92,7 @@ if (isset($_GET['s'])) {
 // ---------------------------------------------------------------- app (login)
 require_login_json();
 $me = admin_user();
+if (session_status() === PHP_SESSION_ACTIVE) session_write_close();   // session lock chhodo: warna scan/AI ka lamba kaam chalte waqt app ki baaki requests atak kar timeout hoti hain
 $action = (string)($_GET['action'] ?? '');
 $bg = false;   // response ke baad queue chalana hai?
 

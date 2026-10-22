@@ -13,6 +13,8 @@ class App : Application() {
     lateinit var api: Api
     /** Notification tap -> kaunsi screen kholni hai ("alerts"). Root isse padh kar navigate karta hai. */
     val pendingRoute = MutableStateFlow<String?>(null)
+    /** App screen par dikh rahi hai (MainActivity onStart..onStop). Peeche ho to auto refresh band: server par bekaar load nahi. */
+    val foreground = MutableStateFlow(false)
 
     override fun onCreate() {
         super.onCreate()
