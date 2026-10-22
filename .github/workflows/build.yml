@@ -1,5 +1,6 @@
 # GitHub par push karte hi APK ban jaata hai: Actions tab -> latest run -> Artifacts -> MFC-apk
-# Release key ke secrets (MFC_KEYSTORE_B64, MFC_KEYSTORE_PASS, MFC_KEY_ALIAS, MFC_KEY_PASS) hon to tez release APK, warna debug APK.
+# Hamesha release APK (debuggable nahi = tez). Release key ke secrets (MFC_KEYSTORE_B64, MFC_KEYSTORE_PASS, MFC_KEY_ALIAS,
+# MFC_KEY_PASS) hon to usi key se sign, warna debug key se.
 # ubuntu-latest runner par Android SDK pehle se hota hai (ANDROID_HOME); jo platform/build-tools kam ho, Gradle khud download kar leta hai.
 name: Build APK
 on:
@@ -25,23 +26,19 @@ jobs:
             printf '%s' "$KS_B64" | base64 -d > "$RUNNER_TEMP/mfc-release.jks"
             echo "MFC_KEYSTORE_FILE=$RUNNER_TEMP/mfc-release.jks" >> "$GITHUB_ENV"
           else
-            echo "Release key secret nahi mila: debug APK banega"
+            echo "Release key secret nahi mila: release APK debug key se sign hoga"
           fi
       - name: Build APK
         env:
           MFC_KEYSTORE_PASS: ${{ secrets.MFC_KEYSTORE_PASS }}
           MFC_KEY_ALIAS: ${{ secrets.MFC_KEY_ALIAS }}
           MFC_KEY_PASS: ${{ secrets.MFC_KEY_PASS }}
-        run: |
-          chmod +x gradlew
-          if [ -n "$MFC_KEYSTORE_FILE" ]; then ./gradlew assembleRelease --no-daemon --stacktrace; else ./gradlew assembleDebug --no-daemon --stacktrace; fi
+        run: chmod +x gradlew && ./gradlew assembleRelease --no-daemon --stacktrace
       - uses: actions/upload-artifact@v4
         with:
           name: MFC-apk
           if-no-files-found: error
-          path: |
-            app/build/outputs/apk/release/app-release.apk
-            app/build/outputs/apk/debug/app-debug.apk
+          path: app/build/outputs/apk/release/app-release.apk
       # Isi commit ki server PHP files (api/ + lib/): zip ko Plesk me mfc_dash/ folder me upload karke Extract karo (config files isme nahi hain)
       - uses: actions/upload-artifact@v4
         with:

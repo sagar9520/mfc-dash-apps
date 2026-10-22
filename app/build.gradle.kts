@@ -18,7 +18,8 @@ android {
         buildConfigField("String", "DEFAULT_BASE_URL", "\"https://tirangae-online.live/mfc_dash/\"")
     }
 
-    // Release key GitHub secret se aati hai (CI keystore file ka path + passwords env me deta hai). Local / bina secret: debug hi banta hai.
+    // Release key GitHub secret se aati hai (CI keystore file ka path + passwords env me deta hai). Secret na ho to
+    // release APK debug key se sign hota hai (Sagar ne 2026-10-22 ko yahi chuna, jab tak apni key ka secret nahi daalte).
     val ksFile = System.getenv("MFC_KEYSTORE_FILE")?.takeIf { it.isNotBlank() }
     signingConfigs {
         if (ksFile != null) create("release") {
@@ -33,7 +34,7 @@ android {
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            if (ksFile != null) signingConfig = signingConfigs.getByName("release")
+            signingConfig = signingConfigs.getByName(if (ksFile != null) "release" else "debug")
         }
     }
     compileOptions {
