@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Dhyan do: triangle (gol kone), andar "!" kata hua -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="20dp"
+    android:height="20dp"
+    android:viewportWidth="20"
+    android:viewportHeight="20">
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.2"
+        android:strokeLineJoin="round"
+        android:pathData="M10,1.2L19.4,18L0.6,18Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M10,1.2L19.4,18L0.6,18ZM8.9,7.2A1.1,1.1 0,0 1,11.1 7.2L11.1,12.2A1.1,1.1 0,0 1,8.9 12.2ZM11.2,15.2A1.2,1.2 0,0 1,8.8 15.2A1.2,1.2 0,0 1,11.2 15.2Z" />
+</vector>

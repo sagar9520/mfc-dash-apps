@@ -156,21 +156,26 @@ private fun AppOverflow(box: FilterBox, loading: Boolean, onRefresh: () -> Unit)
 
 // ---------------------------------------------------------------- app ka haal
 
-/** Badlav ka rang: -5% tak theek, -20% tak dhyan, usse zyada girawat = turant. null = neutral. */
-private fun appDeltaKind(v: Double?): KKind = when {
+/**
+ * Badlav ka rang: -5% tak theek, -20% tak dhyan, usse zyada girawat = turant. null = neutral.
+ * partial = aaj ka din abhi chal raha: poore kal se kam hona normal hai, to girawat par neutral (laal nahi).
+ */
+private fun appDeltaKind(v: Double?, partial: Boolean): KKind = when {
     v == null || !v.isFinite() -> KKind.NEUTRAL
     v >= -0.05 -> KKind.OK
+    partial -> KKind.NEUTRAL
     v > -0.20 -> KKind.WARN
     else -> KKind.BAD
 }
 
-/** Crash rate (crash / DAU): < 0.5% theek, < 1.09% dhyan, warna turant. */
+/** Crash rate (crash / DAU): < 0.5% theek, < 1.09% dhyan, warna turant (Apps list jaisa: turant sirf 5+ crash par). */
 private fun appCrashKind(crashes: Double, dau: Double): KKind {
-    if (dau <= 0) return if (crashes > 0) KKind.WARN else KKind.OK
+    if (crashes <= 0) return KKind.OK
+    if (dau <= 0) return KKind.WARN
     val r = crashes / dau
     return when {
         r < 0.005 -> KKind.OK
-        r < 0.0109 -> KKind.WARN
+        r < 0.0109 || crashes < 5 -> KKind.WARN
         else -> KKind.BAD
     }
 }
@@ -182,8 +187,8 @@ private fun AppHaal(d: DashData) {
     val prev = prevDay(d)
     val dauD = delta(k.dau, prev?.dau)
     val instD = delta(k.installs, prev?.installs)
-    val dauK = appDeltaKind(dauD)
-    val instK = appDeltaKind(instD)
+    val dauK = appDeltaKind(dauD, d.today)
+    val instK = appDeltaKind(instD, d.today)
     val crashK = appCrashKind(k.crashes, k.dau)
     val worst = listOf(crashK, dauK, instK).let { ks ->
         when {
@@ -274,7 +279,7 @@ private fun AppSections(st: UiState, nav: NavHostController, pkg: String, d: Das
         if (ex2 != null) {
             KSection("ROAS cohort".t())
             KCard {
-                RoasCohortTable(ex2.campaignRoas, all) { cr ->
+                RoasCohortTable(ex2.campaignRoas, all, st.roasTarget) { cr ->
                     val idx = all?.campaigns?.indexOfFirst { it.campaign.equals(cr.campaign, true) } ?: -1
                     if (idx >= 0) nav.navigate("campaign/$idx")
                 }
@@ -454,7 +459,7 @@ private fun AppCampaigns(vm: DashVm, st: UiState, nav: NavHostController, pkg: S
             KSection("ROAS cohort".t())
             if (ex2 == null) ExtraMissingCard("Campaign-wise ROAS cohort".t())
             else KCard {
-                RoasCohortTable(ex2.campaignRoas, st.data ?: d) { cr ->
+                RoasCohortTable(ex2.campaignRoas, st.data ?: d, st.roasTarget) { cr ->
                     val idx = st.data?.campaigns?.indexOfFirst { it.campaign.equals(cr.campaign, true) } ?: -1
                     if (idx >= 0) nav.navigate("campaign/$idx")
                 }

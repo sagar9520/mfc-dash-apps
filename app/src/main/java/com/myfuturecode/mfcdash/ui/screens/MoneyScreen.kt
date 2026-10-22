@@ -349,7 +349,7 @@ private fun PaisaCampaigns(x: PaisaCtx, back: () -> Unit) {
                 val ex2 = v.extra
                 if (ex2 == null) ExtraMissingCard("Campaign-wise ROAS cohort".t())
                 else KCard {
-                    RoasCohortTable(ex2.campaignRoas, st.data ?: d) { cr ->
+                    RoasCohortTable(ex2.campaignRoas, st.data ?: d, st.roasTarget) { cr ->
                         val idx = st.data?.campaigns?.indexOfFirst { it.campaign.equals(cr.campaign, true) } ?: -1
                         if (idx >= 0) x.nav.navigate("campaign/$idx")
                     }

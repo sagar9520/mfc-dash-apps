@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- MFC brand widget: #9C02BA -> #4A1FC4 -> #0B1F9E, upar-baayein se neeche-daayein -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <gradient
+        android:type="linear"
+        android:angle="315"
+        android:startColor="#FF9C02BA"
+        android:centerColor="#FF4A1FC4"
+        android:endColor="#FF0B1F9E" />
+    <corners android:radius="20dp" />
+</shape>

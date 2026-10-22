@@ -168,6 +168,14 @@ fun AlertsScreen(vm: DashVm, st: UiState, nav: NavHostController) {
     val nBad = fresh.count { alSev(it) == KKind.BAD }
     val nWarn = fresh.count { alSev(it) == KKind.WARN }
     val nAsk = fresh.count { alSev(it) == KKind.ASK }
+    // hero ka pill: khule alerts me sabse bura (padhe hue bhi), sirf naye nahi
+    val openSev = al.alerts.filter { it.open }.map { alSev(it) }
+    val worst = when {
+        KKind.BAD in openSev -> KKind.BAD
+        KKind.WARN in openSev -> KKind.WARN
+        KKind.ASK in openSev -> KKind.ASK
+        else -> KKind.OK
+    }
     val tabs = listOf("All".t(), "Act now".t(), "Watch".t(), "Needs OK".t())
     val plain = tab == 0 && filters == 0 && needle.isEmpty()
     val emptyText = if (plain) "No alerts".t() else "No match".t()
@@ -179,7 +187,7 @@ fun AlertsScreen(vm: DashVm, st: UiState, nav: NavHostController) {
         KScreen(top = bar) {
             KTwoPane(
                 left = {
-                    AlHero(al, nBad, nWarn, nAsk)
+                    AlHero(al, nBad, nWarn, nAsk, worst)
                     AlTabs(tabs, tab) { tab = it }
                     if (searching) KSearch(q, { q = it }, "Search alerts".t())
                     msg?.let { AlMsg(it) }
@@ -202,7 +210,7 @@ fun AlertsScreen(vm: DashVm, st: UiState, nav: NavHostController) {
     } else {
         KLazyScreen(top = {
             bar()
-            AlHero(al, nBad, nWarn, nAsk)
+            AlHero(al, nBad, nWarn, nAsk, worst)
         }) {
             if (searching) kItem(key = "al.search") { KSearch(q, { q = it }, "Search alerts".t()) }
             kItem(key = "al.tabs") { AlTabs(tabs, tab) { tab = it } }
@@ -342,17 +350,11 @@ private fun AlText(
     )
 }
 
-/** Hero: aaj ke naye alerts ka bada number + har kism ka nishaan. */
+/** Hero: aaj ke naye alerts ka bada number + har kism ka nishaan; pill = khule alerts ki sabse buri haalat. */
 @Composable
-private fun AlHero(al: AlertsData, bad: Int, warn: Int, ask: Int) {
+private fun AlHero(al: AlertsData, bad: Int, warn: Int, ask: Int, head: KKind) {
     KHero(KTint.Rose) {
         val c = Mfc.c
-        val head = when {
-            bad > 0 -> KKind.BAD
-            warn > 0 -> KKind.WARN
-            ask > 0 -> KKind.ASK
-            else -> KKind.OK
-        }
         KHeroHead("Today's alerts".t(), trailing = { KPill(if (head == KKind.BAD) "See now".t() else head.word(), head) })
         Row(
             Modifier.fillMaxWidth().padding(top = 2.dp),

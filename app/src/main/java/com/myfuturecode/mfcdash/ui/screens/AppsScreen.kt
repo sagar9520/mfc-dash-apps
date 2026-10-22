@@ -2,15 +2,13 @@ package com.myfuturecode.mfcdash.ui.screens
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.Icon
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -19,6 +17,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavHostController
@@ -29,7 +28,7 @@ import com.myfuturecode.mfcdash.ui.components.DashText
 import com.myfuturecode.mfcdash.ui.kit.KAvatar
 import com.myfuturecode.mfcdash.ui.kit.KBarIcon
 import com.myfuturecode.mfcdash.ui.kit.KCard
-import com.myfuturecode.mfcdash.ui.kit.KCount
+import com.myfuturecode.mfcdash.ui.kit.KBigNum
 import com.myfuturecode.mfcdash.ui.kit.KEmpty
 import com.myfuturecode.mfcdash.ui.kit.KHero
 import com.myfuturecode.mfcdash.ui.kit.KHeroHead
@@ -39,7 +38,6 @@ import com.myfuturecode.mfcdash.ui.kit.KLazyScreen
 import com.myfuturecode.mfcdash.ui.kit.KLegend
 import com.myfuturecode.mfcdash.ui.kit.KListDivider
 import com.myfuturecode.mfcdash.ui.kit.KLive
-import com.myfuturecode.mfcdash.ui.kit.KPageTokens
 import com.myfuturecode.mfcdash.ui.kit.KRow
 import com.myfuturecode.mfcdash.ui.kit.KScreen
 import com.myfuturecode.mfcdash.ui.kit.KSearch
@@ -67,6 +65,7 @@ import com.myfuturecode.mfcdash.util.tf
 fun AppsScreen(vm: DashVm, st: UiState, nav: NavHostController) {
     var tab by rememberSaveable { mutableIntStateOf(0) }          // 0 sab | 1 profit | 2 loss | 3 bina data
     var sort by rememberSaveable { mutableStateOf("profit") }
+    var show by rememberSaveable { mutableStateOf("") }          // "" sab | paid = ad kharch wale | organic
     var searching by rememberSaveable { mutableStateOf(false) }
     var q by rememberSaveable { mutableStateOf("") }
     BackHandler(enabled = searching) { searching = false; q = "" }
@@ -79,19 +78,41 @@ fun AppsScreen(vm: DashVm, st: UiState, nav: NavHostController) {
     val shown = appsSorted(
         rows.filter { r ->
             (tab == 0 || r.state == tab) &&
+                when (show) {
+                    "paid" -> r.spend > 0
+                    "organic" -> r.spend <= 0
+                    else -> true
+                } &&
                 (needle.isEmpty() || r.name.contains(needle, true) || r.pkg.contains(needle, true))
         },
         sort,
     )
     val open: (String) -> Unit = { p -> nav.navigate("app/$p") }
+    // Sort + Show (purane Home ke app filters) bar ke filter icon ke peeche sheet me
+    val box = remember { FilterBox() }
+    CompositionLocalProvider(LocalFilterBox provides box) {
+        FilterChips(
+            "Sort".t(),
+            listOf(
+                "profit" to "Profit".t(), "earned" to "Earnings".t(), "roas" to "ROAS", "spend" to "Ad spend".t(),
+                "installs" to "Installs".t(), "live" to "Live users".t(), "name" to "Name".t(),
+            ),
+            sort,
+        ) { sort = it }
+        FilterChips(
+            "Show".t(),
+            listOf("" to "All".t(), "paid" to "With ad spend".t(), "organic" to "Organic only".t()),
+            show,
+        ) { show = it }
+    }
     val bar: @Composable ColumnScope.() -> Unit = {
         KTabBar("Apps".t()) {
             KBarIcon(if (searching) KIcons.Close else KIcons.Search, "Search".t(), {
                 searching = !searching
                 if (!searching) q = ""
             })
+            KBarIcon(KIcons.Filter, "Filters".t(), { box.open = true }, badge = box.active.size, badgeUrgent = false)
             DashRangeIcon(vm, st)
-            AppsSortIcon(sort) { sort = it }
             KBarIcon(KIcons.Refresh, "Refresh".t(), { vm.refresh() }, spinning = st.loading)
         }
     }
@@ -108,6 +129,7 @@ fun AppsScreen(vm: DashVm, st: UiState, nav: NavHostController) {
                 },
                 right = {
                     if (searching) KSearch(q, { q = it }, "Search apps".t())
+                    FilterSummary(box)
                     if (shown.isEmpty()) KCard { KEmpty(if (rows.isEmpty()) "No apps".t() else "No match".t(), KIcons.Apps) }
                     else KCard(list = true) {
                         shown.forEachIndexed { i, r ->
@@ -125,12 +147,14 @@ fun AppsScreen(vm: DashVm, st: UiState, nav: NavHostController) {
         }) {
             if (searching) kItem(key = "apps.search") { KSearch(q, { q = it }, "Search apps".t()) }
             kItem(key = "apps.tabs") { KSegTabs(tabs, tab, { tab = it }) }
+            if (box.active.isNotEmpty()) kItem(key = "apps.filters") { FilterSummary(box) }
             if (shown.isEmpty()) kItem(key = "apps.empty") {
                 KCard { KEmpty(if (rows.isEmpty()) "No apps".t() else "No match".t(), KIcons.Apps) }
             }
             else kCardItems(shown, key = { it.pkg }, lead = true) { r -> AppsRow(r, sort, st.roasTarget) { open(r.pkg) } }
         }
     }
+    FilterSheet(box)
 }
 
 /** Ek app ki row ka data. state: 1 profit | 2 loss | 3 bina data. */
@@ -189,8 +213,10 @@ private fun AppsHero(d: DashData, range: String, nProfit: Int, nLoss: Int, nNone
         KHeroHead(label, trailing = { if (d.today) KLive("Live".t()) })
         val total = nProfit + nLoss + nNone
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            // mockup: "18" hara + "/25" chhota, neeche "apps profit mein"
             Column(Modifier.weight(1f)) {
-                KCount(num(nProfit.toDouble()), "/" + num(total.toDouble()), "apps in profit".t())
+                KBigNum(num(nProfit.toDouble()), if (nProfit > 0) c.green else Color.Unspecified, suffix = "/" + num(total.toDouble()))
+                DashText("apps in profit".t(), 15.sp, c.ink2, Modifier.padding(top = 2.dp))
             }
             KLegend(
                 listOf(
@@ -235,30 +261,4 @@ private fun AppsRow(a: AppsRowData, sort: String, target: Double, onClick: () ->
         valueSub = extra,
         chevron = true, onClick = onClick,
     )
-}
-
-/** Sort icon + menu (chuna hua = check). */
-@Composable
-private fun AppsSortIcon(sort: String, onSort: (String) -> Unit) {
-    var menu by remember { mutableStateOf(false) }
-    val opts = listOf(
-        "profit" to "Profit".t(), "earned" to "Earnings".t(), "roas" to "ROAS", "spend" to "Ad spend".t(),
-        "installs" to "Installs".t(), "live" to "Live users".t(), "name" to "Name".t(),
-    )
-    Box {
-        KBarIcon(KIcons.Sort, "Sort".t(), { menu = true })
-        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-            KPageTokens {
-                Column {
-                    opts.forEach { (k, l) ->
-                        DropdownMenuItem(
-                            text = { DashText(l, 15.sp, Mfc.c.ink) },
-                            onClick = { menu = false; onSort(k) },
-                            trailingIcon = { if (sort == k) Icon(KIcons.Check, null, tint = Mfc.c.brand) },
-                        )
-                    }
-                }
-            }
-        }
-    }
 }

@@ -1,38 +1,86 @@
 package com.myfuturecode.mfcdash.ui.screens.studio
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
-import com.myfuturecode.mfcdash.ui.GState
 import com.myfuturecode.mfcdash.ui.StudioVm
-import com.myfuturecode.mfcdash.ui.components.*
-import com.myfuturecode.mfcdash.ui.screens.gads.GLabel
-import com.myfuturecode.mfcdash.ui.screens.gads.Small
-import com.myfuturecode.mfcdash.ui.screens.gads.updatedText
-import com.myfuturecode.mfcdash.ui.screens.health.*
-import com.myfuturecode.mfcdash.ui.theme.Info
-import com.myfuturecode.mfcdash.ui.theme.extra
-import com.myfuturecode.mfcdash.util.*
+import com.myfuturecode.mfcdash.ui.kit.KAvatar
+import com.myfuturecode.mfcdash.ui.kit.KBarIcon
+import com.myfuturecode.mfcdash.ui.kit.KBigNum
+import com.myfuturecode.mfcdash.ui.kit.KBtn
+import com.myfuturecode.mfcdash.ui.kit.KButton
+import com.myfuturecode.mfcdash.ui.kit.KCard
+import com.myfuturecode.mfcdash.ui.kit.KDetailBar
+import com.myfuturecode.mfcdash.ui.kit.KEmpty
+import com.myfuturecode.mfcdash.ui.kit.KHero
+import com.myfuturecode.mfcdash.ui.kit.KHeroHead
+import com.myfuturecode.mfcdash.ui.kit.KIconTile
+import com.myfuturecode.mfcdash.ui.kit.KIcons
+import com.myfuturecode.mfcdash.ui.kit.KKind
+import com.myfuturecode.mfcdash.ui.kit.KKv
+import com.myfuturecode.mfcdash.ui.kit.KListDivider
+import com.myfuturecode.mfcdash.ui.kit.KPill
+import com.myfuturecode.mfcdash.ui.kit.KProgress
+import com.myfuturecode.mfcdash.ui.kit.KRow
+import com.myfuturecode.mfcdash.ui.kit.KScreen
+import com.myfuturecode.mfcdash.ui.kit.KSection
+import com.myfuturecode.mfcdash.ui.kit.KSmallAction
+import com.myfuturecode.mfcdash.ui.kit.KSplit
+import com.myfuturecode.mfcdash.ui.kit.KStatus
+import com.myfuturecode.mfcdash.ui.kit.KTint
+import com.myfuturecode.mfcdash.ui.kit.KTwoPane
+import com.myfuturecode.mfcdash.ui.kit.fg
+import com.myfuturecode.mfcdash.ui.kit.isWide
+import com.myfuturecode.mfcdash.ui.kit.word
+import com.myfuturecode.mfcdash.ui.theme.Mfc
+import com.myfuturecode.mfcdash.util.arr
+import com.myfuturecode.mfcdash.util.b
+import com.myfuturecode.mfcdash.util.d
+import com.myfuturecode.mfcdash.util.dn
+import com.myfuturecode.mfcdash.util.l
+import com.myfuturecode.mfcdash.util.num
+import com.myfuturecode.mfcdash.util.obj
+import com.myfuturecode.mfcdash.util.pct
+import com.myfuturecode.mfcdash.util.s
+import com.myfuturecode.mfcdash.util.sn
+import com.myfuturecode.mfcdash.util.strings
+import com.myfuturecode.mfcdash.util.t
+import com.myfuturecode.mfcdash.util.tFull
+import com.myfuturecode.mfcdash.util.tOnly
+import com.myfuturecode.mfcdash.util.tf
+import com.myfuturecode.mfcdash.util.usd
 import org.json.JSONObject
 
 @Composable
-private fun Frame(title: String, g: GState, nav: NavHostController, onRefresh: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
-    Column(Modifier.fillMaxSize()) {
-        HTopBar(title, updatedText(g), nav, busy = false, onRefresh = onRefresh)
-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(top = 4.dp, bottom = 24.dp), content = content)
-    }
-}
+private fun RefreshIcon(onClick: () -> Unit) = KBarIcon(KIcons.Refresh, "Refresh".t(), onClick)
 
 // ---------------------------------------------------------------- idea (opportunity) detail
 
@@ -40,160 +88,310 @@ private fun Frame(title: String, g: GState, nav: NavHostController, onRefresh: (
 fun StudioOppScreen(vm: StudioVm, nav: NavHostController, id: Long) {
     val g by vm.s.collectAsStateWithLifecycle()
     val p = mapOf("id" to id.toString())
-    Poll(60_000, id) { vm.load("opp", p) }
+    SPoll(60_000, id) { vm.load("opp", p) }
     var ask by remember { mutableStateOf<String?>(null) }
-    Frame("OPP-$id", g, nav, { vm.load("opp", p) }) {
-        SLoad(g, g.view("opp", p), { vm.load("opp", p) }) { o ->
-            val it0 = o.obj("item")
-            val ex = MaterialTheme.extra
-            Text(it0.s("title"), style = MaterialTheme.typography.titleLarge)
-            Small(listOfNotNull(it0.s("category").ifBlank { null }, it0.arr("countries").strings().joinToString(" ").ifBlank { null }, stText(it0.s("status")),
-                "updated".t() + " " + ago(it0.s("updated_at"))).joinToString(" · "))
-            Spacer(Modifier.height(8.dp))
-            TileGrid(listOf(Triple("Organic".t(), score(it0.dn("organic")), it0.dn("rank_organic")?.let { "#" + it.toInt() }),
-                Triple("Paid".t(), score(it0.dn("paid")), it0.dn("rank_paid")?.let { "#" + it.toInt() }),
-                Triple("Data coverage".t(), it0.dn("coverage")?.let { pct(it, 0) } ?: "–", it0.s("confidence").ifBlank { "–" } + " " + "confidence".t())))
-            Panel {
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text("Recommendation".t(), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-                    it0.sn("final_rec")?.let { Pill(it, recColor(it)) }
-                }
-                Small("AI said".t() + " " + (it0.sn("ai_rec") ?: "–") + " · " + "rules say".t() + " " + (it0.sn("rule_rec") ?: "–") + " · " + "the more cautious one is shown".t())
-                it0.sn("complexity")?.let { Small("Build complexity".t() + ": " + it) }
-                it0.sn("user_note")?.let { Small("Your note".t() + ": " + it) }
-            }
-            Spacer(Modifier.height(8.dp))
-            // Gate 1 actions (sirf NEW / WATCH / REJECTED par)
-            val st = it0.s("status")
-            o.dn("project_id")?.let { pid ->
-                Button(onClick = { nav.navigate("studio/project/${pid.toLong()}") }, modifier = Modifier.fillMaxWidth()) { Text("Open project".t()) }
-                Spacer(Modifier.height(8.dp))
-            }
-            if (st == "NEW" || st == "WATCH") {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { ask = "APPROVE" }, modifier = Modifier.weight(1f)) { Text("Approve".t()) }
-                    OutlinedButton(onClick = { ask = "REJECT" }, modifier = Modifier.weight(1f)) { Text("Reject".t()) }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (st != "WATCH") OutlinedButton(onClick = { ask = "WATCH" }, modifier = Modifier.weight(1f)) { Text("Watch".t()) }
-                    OutlinedButton(onClick = { ask = "MORE_RESEARCH" }, modifier = Modifier.weight(1f)) { Text("More research".t()) }
-                }
-                Spacer(Modifier.height(8.dp))
-            } else if (st == "REJECTED") {
-                OutlinedButton(onClick = { ask = "RESTORE" }, modifier = Modifier.fillMaxWidth()) { Text("Restore idea".t()) }
-                Spacer(Modifier.height(8.dp))
-            } else if (st == "EVALUATING") Panel { Small("Research is running for this idea. Results appear here when the run finishes.".t()) }
-
-            Para("Concept".t(), it0.sn("concept"))
-            Para("Why build it".t(), it0.sn("why_build"))
-            Para("Why avoid it".t(), it0.sn("why_avoid"))
-            Spacer(Modifier.height(8.dp))
-            DecisionCard(it0.obj("decision_card"), it0.sn("confidence"))
-
-            SectionTitle("Score factors".t(), "weight · rating 0-10 · label".t())
-            Panel {
-                it0.arr("factors").objs().forEach { f ->
-                    Column(Modifier.padding(vertical = 5.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(f.s("label"), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-                            Text(f.dn("rating")?.let { num(it, 1) } ?: "–", style = MaterialTheme.typography.titleSmall, color = if (f.dn("rating") == null) ex.muted else MaterialTheme.colorScheme.onSurface)
-                            Spacer(Modifier.width(6.dp))
-                            Pill(labelText(f.s("basis")), labelColor(f.s("basis")))
-                        }
-                        Small(listOfNotNull(stText(f.s("engine")), "w".t() + " " + num(f.d("weight")), if (f.s("higher_is") == "better") "higher is better".t() else "higher is worse".t(),
-                            f.arr("evidence").strings().filter { it.isNotBlank() }.joinToString(" ") { "#$it" }.ifBlank { null }).joinToString(" · "))
-                        f.sn("note")?.let { Small(it, maxLines = 4) }
-                    }
-                    Hairline()
-                }
-            }
-            ProfitPanel(it0.optJSONObject("profit"))
-            val comps = it0.arr("competitors").objs()
-            if (comps.isNotEmpty()) {
-                SectionTitle("Competitors seen".t())
-                Panel { comps.forEach { c -> KV(c.s("name"), c.s("package").ifBlank { "–" }) } }
-            }
-            Panel {
-                Bullets("Monetization".t(), it0.arr("monetization").strings())
-                Bullets("Risks".t(), it0.arr("risks").strings(), ex.bad)
-            }
-            val ev = o.arr("evidence").objs()
-            SectionTitle("Evidence".t(), ev.size.toString())
-            Panel {
-                if (ev.isEmpty()) Empty("No evidence stored.".t())
-                ev.forEach { EvidenceRow(it) }
-            }
-            val dec = o.arr("decisions").objs()
-            if (dec.isNotEmpty()) {
-                SectionTitle("Your decisions".t())
-                Panel { dec.forEach { d -> KV(stText(d.s("decision")) + (d.sn("feedback")?.let { " · $it" } ?: ""), d.s("user") + " · " + tFull(d.s("created_at"))) } }
-            }
-            val hist = o.arr("history").objs()
-            if (hist.isNotEmpty()) {
-                SectionTitle("History".t())
-                Panel { hist.forEach { SEventRow(it, null) } }
+    val o = g.view("opp", p)
+    val item = o?.obj("item")
+    val wide = isWide()
+    KScreen(top = {
+        KDetailBar(
+            item?.s("title")?.ifBlank { null } ?: "OPP-$id", sBack(nav),
+            sub = item?.let { oppSub(it, id) } ?: sUpdated(g),
+            actions = { RefreshIcon { vm.load("opp", p) } },
+        )
+        if (!wide && item != null) OppHero(item)
+    }) {
+        SLoad(g, o, { vm.load("opp", p) }) { oo ->
+            val it0 = oo.obj("item")
+            val pid = oo.dn("project_id")?.toLong()
+            if (wide) KTwoPane(
+                left = {
+                    OppHero(it0)
+                    OppActions(it0, pid, nav) { ask = it }
+                    OppFacts(it0)
+                    OppTexts(it0)
+                    DecisionCard(it0.obj("decision_card"), it0.sn("confidence"))
+                },
+                right = {
+                    OppFactors(it0)
+                    ProfitPanel(it0.optJSONObject("profit"))
+                    OppMore(it0, oo)
+                },
+            ) else {
+                OppActions(it0, pid, nav) { ask = it }
+                OppFacts(it0)
+                OppTexts(it0)
+                DecisionCard(it0.obj("decision_card"), it0.sn("confidence"))
+                OppFactors(it0)
+                ProfitPanel(it0.optJSONObject("profit"))
+                OppMore(it0, oo)
             }
         }
     }
-    ask?.let { d ->
-        val title = when (d) { "APPROVE" -> "Approve (Gate 1)?".t(); "REJECT" -> "Reject this idea?".t(); "WATCH" -> "Watch this market?".t(); "MORE_RESEARCH" -> "Research more?".t(); else -> "Restore idea?".t() }
+    val d = ask
+    if (d != null) {
+        val title = when (d) {
+            "APPROVE" -> "Approve (Gate 1)?".t()
+            "REJECT" -> "Reject this idea?".t()
+            "WATCH" -> "Watch this market?".t()
+            "MORE_RESEARCH" -> "Research more?".t()
+            else -> "Restore idea?".t()
+        }
         val body = when (d) {
             "APPROVE" -> "Creates a project, then competitor analysis + feature spec are prepared for Gate 2. Nothing is built or published.".t()
             "REJECT" -> "The idea stays in history with your reason. You can restore it later.".t()
             "MORE_RESEARCH" -> "Runs another AI + web research pass for this idea (uses AI budget).".t()
-            else -> "".t()
+            else -> ""
         }
         val busyKey = if (d == "APPROVE") "gate1" else "opp"
-        TextAskDialog(title, body, if (d == "REJECT") "Reason (required)".t() else "Note (optional)".t(), title.removeSuffix("?"), required = d == "REJECT", busy = busyKey in g.busy,
-            danger = d == "REJECT", onDismiss = { ask = null }) { note ->
+        TextAskDialog(
+            title, body, if (d == "REJECT") "Reason (required)".t() else "Note (optional)".t(), title.removeSuffix("?"), required = d == "REJECT",
+            busy = busyKey in g.busy, danger = d == "REJECT", onDismiss = { ask = null },
+        ) { note ->
             if (d == "APPROVE") vm.act("gate1", mapOf("select[0]" to id.toString(), "note" to note), "gate1", ok = "Approved. Competitor analysis queued.".t()) { j ->
-                ask = null; vm.load("opp", p); j.optJSONArray("projects")?.optLong(0)?.takeIf { it > 0 }?.let { nav.navigate("studio/project/$it") }
+                ask = null
+                vm.load("opp", p)
+                j.optJSONArray("projects")?.optLong(0)?.takeIf { it > 0 }?.let { nav.navigate("studio/project/$it") }
             }
             else vm.act("opp", mapOf("id" to id.toString(), "decision" to d, "note" to note), "opp", ok = "Saved".t()) { ask = null; vm.load("opp", p) }
         }
     }
 }
 
+/** "OPP-12 · Health · IN US · aapka idea". */
+private fun oppSub(it0: JSONObject, id: Long): String = listOfNotNull(
+    "OPP-$id", it0.s("category").ifBlank { null }, it0.arr("countries").strings().filter { it.isNotBlank() }.joinToString(" ").ifBlank { null },
+    if (it0.s("origin") == "user") "your idea".t() else null,
+).joinToString(" · ")
+
+/** Lavender hero: score (organic / paid me zyada) + salah pill + Organic | Paid | Data. */
+@Composable
+private fun OppHero(it0: JSONObject) {
+    KHero(KTint.Lav) {
+        val rec = it0.sn("final_rec")
+        val org = it0.dn("organic")
+        val paid = it0.dn("paid")
+        val best = bestScore(it0)
+        KHeroHead("Score".t(), icon = KIcons.Bulb, trailing = { if (rec != null) KPill(recText(rec), recKind(rec)) })
+        KBigNum(score(best), suffix = if (best != null) "/100" else null, size = 48.sp)
+        KSplit(
+            listOf(
+                "Organic".t() to (score(org) + (it0.dn("rank_organic")?.let { "  #" + it.toInt() } ?: "")),
+                "Paid".t() to (score(paid) + (it0.dn("rank_paid")?.let { "  #" + it.toInt() } ?: "")),
+                "Data".t() to (it0.dn("coverage")?.let { pct(it, 0) } ?: "–"),
+            ),
+        )
+    }
+}
+
+/** Gate 1 ke faisle (sirf NEW / WATCH / REJECTED par). Har button pehle dialog kholta hai. */
+@Composable
+private fun OppActions(it0: JSONObject, pid: Long?, nav: NavHostController, onAsk: (String) -> Unit) {
+    val st = it0.s("status")
+    if (pid != null) KButton("Open project".t(), { nav.navigate("studio/project/$pid") }, Modifier.fillMaxWidth(), kind = KBtn.SOFT, icon = KIcons.Open)
+    when (st) {
+        "NEW", "WATCH" -> {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                KButton("Approve".t(), { onAsk("APPROVE") }, Modifier.weight(1f), icon = KIcons.Check)
+                KButton("Reject".t(), { onAsk("REJECT") }, Modifier.weight(1f), kind = KBtn.OUTLINE)
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (st != "WATCH") KButton("Keep watching".t(), { onAsk("WATCH") }, Modifier.weight(1f), kind = KBtn.SOFT)
+                KButton("More research".t(), { onAsk("MORE_RESEARCH") }, Modifier.weight(1f), kind = KBtn.SOFT)
+            }
+        }
+        "REJECTED" -> KButton("Restore idea".t(), { onAsk("RESTORE") }, Modifier.fillMaxWidth(), kind = KBtn.SOFT, icon = KIcons.History)
+        "EVALUATING" -> KCard(list = true) {
+            KRow("Research running".t(), lead = { KIconTile(KIcons.Clock, KKind.ASK) })
+        }
+        else -> {}
+    }
+}
+
+/** Status, confidence, AI vs rules (jo zyada saavdhan woh dikhta hai), complexity, kab. */
+@Composable
+private fun OppFacts(it0: JSONObject) {
+    val c = Mfc.c
+    val st = it0.s("status")
+    val conf = it0.s("confidence")
+    KCard(padding = PaddingValues(horizontal = 20.dp, vertical = 4.dp)) {
+        KKv("Status".t(), oppStatusText(st), valueColor = stKind(st).let { if (it == KKind.NEUTRAL) c.ink else it.fg() })
+        KKv("Confidence".t(), conf.ifBlank { "–" }, valueColor = if (conf.isBlank()) c.ink3 else stKind(conf).fg())
+        KKv("AI said".t(), it0.sn("ai_rec")?.let { recText(it) } ?: "–")
+        KKv("Rules say".t(), it0.sn("rule_rec")?.let { recText(it) } ?: "–")
+        it0.sn("complexity")?.let { KKv("Build complexity".t(), it) }
+        KKv("Updated".t(), sAgo(it0.s("updated_at")))
+        it0.sn("user_note")?.let { Para("Your note".t(), it) }
+    }
+}
+
+@Composable
+private fun OppTexts(it0: JSONObject) {
+    if (listOf("concept", "why_build", "why_avoid").all { it0.sn(it).isNullOrBlank() }) return
+    KCard {
+        Para("Concept".t(), it0.sn("concept"))
+        Para("Why build it".t(), it0.sn("why_build"))
+        Para("Why avoid it".t(), it0.sn("why_avoid"))
+    }
+}
+
+/** Score factors: rating 0-10 + label (shape + rang) + weight; neeche engine · disha · saboot. */
+@Composable
+private fun OppFactors(it0: JSONObject) {
+    val c = Mfc.c
+    val fs = it0.arr("factors").objs()
+    if (fs.isEmpty()) return
+    KSection("Score factors".t(), trailing = { KPill("0-10", KKind.NEUTRAL, icon = null) })
+    KCard(list = true) {
+        fs.forEachIndexed { i, f ->
+            if (i > 0) KListDivider()
+            val r = f.dn("rating")
+            KRow(
+                f.s("label"), sub = labelText(f.s("basis")), subKind = labelKind(f.s("basis")),
+                value = r?.let { num(it, 1) } ?: "–", valueColor = if (r == null) c.ink3 else Color.Unspecified,
+                valueSub = tf("weight %s", num(f.d("weight"))), titleLines = 2,
+            )
+            val meta = listOfNotNull(
+                engineText(f.s("engine")),
+                if (f.s("higher_is") == "better") "higher is better".t() else "higher is worse".t(),
+                f.arr("evidence").strings().filter { it.isNotBlank() }.joinToString(" ") { "#$it" }.ifBlank { null },
+            ).joinToString(" · ")
+            SNote(meta, color = c.ink3, maxLines = 2)
+            f.sn("note")?.let { SNote(it, maxLines = 4) }
+        }
+    }
+}
+
+/** Competitors, kamaai / khatre, saboot, aapke faisle, history. */
+@Composable
+private fun OppMore(it0: JSONObject, o: JSONObject) {
+    val c = Mfc.c
+    val comps = it0.arr("competitors").objs()
+    if (comps.isNotEmpty()) {
+        KSection("Competitors seen".t())
+        KCard(list = true) {
+            comps.forEachIndexed { i, x ->
+                if (i > 0) KListDivider(true)
+                KRow(x.s("name"), sub = x.s("package").ifBlank { "–" }, lead = { KAvatar(x.s("name")) })
+            }
+        }
+    }
+    val mon = it0.arr("monetization").strings().filter { it.isNotBlank() }
+    val risks = it0.arr("risks").strings().filter { it.isNotBlank() }
+    if (mon.isNotEmpty() || risks.isNotEmpty()) KCard {
+        Bullets("Monetization".t(), mon, c.zGreen)
+        Bullets("Risks".t(), risks, c.zRed)
+    }
+    EvidenceBlock(o.arr("evidence").objs())
+    val dec = o.arr("decisions").objs()
+    if (dec.isNotEmpty()) {
+        KSection("Your decisions".t())
+        KCard(list = true) {
+            dec.forEachIndexed { i, x ->
+                if (i > 0) KListDivider()
+                val k = stKind(x.s("decision"))
+                KRow(
+                    listOfNotNull(if (x.d("gate") > 0) tf("Gate %s", x.d("gate").toInt()) else null, decisionText(x.s("decision"))).joinToString(" · "),
+                    sub = listOf(x.s("user"), tFull(x.s("created_at"))).filter { it.isNotBlank() }.joinToString(" · "),
+                    value = k.word(), valueColor = if (k == KKind.NEUTRAL) c.ink3 else k.fg(), valuePlain = true,
+                )
+                x.sn("feedback")?.let { SNote(it, maxLines = 4) }
+            }
+        }
+    }
+    HistoryBlock(o.arr("history").objs())
+}
+
+@Composable
+private fun EvidenceBlock(ev: List<JSONObject>) {
+    KSection("Evidence".t(), trailing = { KPill(num(ev.size.toDouble()), KKind.NEUTRAL, icon = null) })
+    if (ev.isEmpty()) KCard { KEmpty("No evidence".t(), KIcons.Shield) }
+    else KCard(list = true) {
+        ev.forEachIndexed { i, e ->
+            if (i > 0) KListDivider()
+            EvidenceRow(e)
+        }
+    }
+}
+
+@Composable
+private fun HistoryBlock(hist: List<JSONObject>) {
+    if (hist.isEmpty()) return
+    KSection("History".t())
+    KCard(list = true) {
+        hist.forEachIndexed { i, e ->
+            if (i > 0) KListDivider(true)
+            SEventRow(e, null)
+        }
+    }
+}
+
+/** Munafa: 3 scenario (saavdhan / base / ummeed) x LTV, CPI, margin, payback. Label: aapka data + aapki maanyataayein. */
 @Composable
 private fun ProfitPanel(pf: JSONObject?) {
     if (pf == null) return
-    val ex = MaterialTheme.extra
-    SectionTitle("Profitability".t(), if (pf.s("basis") == "portfolio") "portfolio average".t() else pf.s("category"))
-    Panel {
+    val c = Mfc.c
+    val portfolio = pf.s("basis") == "portfolio"
+    KSection("Profitability".t(), trailing = {
+        KPill(if (portfolio) "portfolio average".t() else pf.s("category").ifBlank { "–" }, if (portfolio) KKind.WARN else KKind.NEUTRAL, icon = null)
+    })
+    KCard {
         if (pf.s("status") != "ok") {
-            Text("Not enough data to judge profit".t(), style = MaterialTheme.typography.bodyMedium, color = ex.warn)
-            Small(pf.s("why"))
+            KStatus("Not enough data".t(), KKind.WARN)
+            pf.sn("why")?.let { SText(it, 14.sp, c.ink2, Modifier.padding(top = 6.dp), lh = 20.sp, maxLines = 6) }
         } else {
-            if (pf.s("basis") == "portfolio") Small("No apps of yours in this category yet: numbers are your portfolio average, a weak proxy.".t(), ex.warn)
+            if (portfolio) KStatus("Weak proxy".t(), KKind.WARN, Modifier.padding(bottom = 8.dp))
             val sc = pf.obj("scenarios")
-            Row(Modifier.fillMaxWidth()) {
-                Text("", modifier = Modifier.weight(1.4f))
-                listOf("Conservative", "Base", "Optimistic").forEach { Text(it.t(), style = MaterialTheme.typography.labelSmall, modifier = Modifier.weight(1f)) }
+            Row(Modifier.fillMaxWidth().padding(bottom = 4.dp), verticalAlignment = Alignment.Bottom) {
+                SText("", 13.sp, c.ink3, Modifier.weight(1.4f))
+                listOf("Conservative", "Base", "Optimistic").forEach {
+                    SText(it.t(), 13.sp, c.ink3, Modifier.weight(1f), weight = FontWeight.SemiBold, lh = 18.sp, maxLines = 2, align = TextAlign.End)
+                }
             }
-            listOf("ltv_usd" to "LTV / install", "cpi_usd" to "CPI", "margin_per_install" to "Margin / install", "payback_installs" to "Installs to pay dev cost").forEach { (k, l) ->
-                Row(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
-                    Text(l.t(), style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1.4f))
+            listOf(
+                "ltv_usd" to "LTV / install", "cpi_usd" to "CPI", "margin_per_install" to "Margin / install", "payback_installs" to "Installs to pay dev cost",
+            ).forEach { (k, l) ->
+                Row(Modifier.fillMaxWidth().heightIn(min = 40.dp), verticalAlignment = Alignment.CenterVertically) {
+                    SText(l.t(), 14.sp, c.ink2, Modifier.weight(1.4f), lh = 18.sp, maxLines = 2)
                     listOf("conservative", "base", "optimistic").forEach { n ->
                         val v = sc.obj(n).dn(k)
-                        Text(when { v == null -> "–"; k == "payback_installs" -> num(v); else -> usd(v, 3) }, style = MaterialTheme.typography.bodySmall,
-                            color = if (k == "margin_per_install" && v != null) (if (v >= 0) ex.good else ex.bad) else MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
+                        val col = when {
+                            v == null -> c.ink3
+                            k == "margin_per_install" -> if (v >= 0) c.green else c.red
+                            else -> c.ink
+                        }
+                        SText(
+                            when {
+                                v == null -> "–"
+                                k == "payback_installs" -> num(v)
+                                else -> usd(v, 3)
+                            },
+                            14.sp, col, Modifier.weight(1f), weight = FontWeight.SemiBold, lh = 18.sp, align = TextAlign.End,
+                        )
                     }
                 }
             }
-            sc.obj("base").sn("paid_users_basis")?.let { Small("Paid users".t() + ": " + it) }
-            pf.obj("by_type").let { bt ->
-                listOf("organic", "paid").forEach { t ->
-                    bt.optJSONObject(t)?.let { r -> Small(stText(t) + ": " + num(r.d("installs")) + " " + "installs".t() + " · D1 " + pct(r.dn("d1"), 0) + " · D7 " + pct(r.dn("d7"), 0) +
-                        " · CPI " + usd(r.dn("cpi_usd"), 3) + (if (!r.b("sufficient")) " · " + "too few".t() else "")) }
+            sc.obj("base").sn("paid_users_basis")?.let { SText("Paid users".t() + ": " + it, 13.sp, c.ink2, Modifier.padding(top = 6.dp), lh = 18.sp, maxLines = 3) }
+            val bt = pf.obj("by_type")
+            listOf("organic", "paid").forEach { t ->
+                bt.optJSONObject(t)?.let { r ->
+                    SText(
+                        engineText(t) + ": " + num(r.d("installs")) + " " + "installs".t() + " · D1 " + pct(r.dn("d1"), 0) + " · D7 " + pct(r.dn("d7"), 0) +
+                            " · CPI " + usd(r.dn("cpi_usd"), 3) + (if (!r.b("sufficient")) " · " + "too few".t() else ""),
+                        13.sp, if (r.b("sufficient")) c.ink2 else c.amber, Modifier.padding(top = 4.dp), lh = 18.sp, maxLines = 2,
+                    )
                 }
             }
-            if (pf.s("why").isNotBlank()) Small(pf.s("why"), ex.warn)
+            pf.sn("why")?.let { SText(it, 13.sp, c.amber, Modifier.padding(top = 4.dp), lh = 18.sp, maxLines = 4) }
         }
         val a = pf.obj("assumptions")
-        Small("Assumptions".t() + ": LTV ×" + a.arr("ltv_multiplier").strings().joinToString("/") + " · " + "dev cost".t() + " " + a.obj("dev_cost_usd").toString() + ". " + a.s("note"))
-        Small("Label: VERIFIED internal data (your apps) + YOUR assumptions. Not a forecast.".t())
+        SText(
+            "Assumptions".t() + ": LTV ×" + a.arr("ltv_multiplier").strings().joinToString("/") + " · " + "dev cost".t() + " " + a.obj("dev_cost_usd").toString() +
+                (a.sn("note")?.let { ". $it" } ?: ""),
+            13.sp, c.ink3, Modifier.padding(top = 8.dp), lh = 18.sp, maxLines = 4,
+        )
+        KStatus("Your data + your assumptions".t(), KKind.NEUTRAL, Modifier.padding(top = 4.dp))
     }
-    Spacer(Modifier.height(8.dp))
 }
 
 // ---------------------------------------------------------------- compare
@@ -203,229 +401,408 @@ fun StudioCompareScreen(vm: StudioVm, nav: NavHostController, ids: String) {
     val g by vm.s.collectAsStateWithLifecycle()
     val p = mapOf("ids" to ids)
     LaunchedEffect(ids) { vm.load("compare", p) }
-    Frame("Compare ideas".t(), g, nav, { vm.load("compare", p) }) {
-        SLoad(g, g.view("compare", p), { vm.load("compare", p) }) { o ->
-            val items = o.arr("items").objs()
-            val rows = listOf<Pair<String, (JSONObject) -> String>>(
-                "Organic".t() to { score(it.dn("organic")) }, "Paid".t() to { score(it.dn("paid")) }, "Combined".t() to { score(it.dn("combined")) },
-                "Confidence".t() to { it.s("confidence").ifBlank { "–" } }, "Data coverage".t() to { it.dn("coverage")?.let { c -> pct(c, 0) } ?: "–" },
-                "Recommendation".t() to { it.s("final_rec") }, "Complexity".t() to { it.s("complexity").ifBlank { "–" } },
-                "Base margin / install".t() to { it.optJSONObject("profit")?.obj("scenarios")?.obj("base")?.dn("margin_per_install")?.let { m -> usd(m, 3) } ?: "–" },
-                "Verified factors".t() to { num(it.obj("labels").d("VERIFIED")) }, "Unknown factors".t() to { num(it.obj("labels").d("UNKNOWN")) },
-            )
-            Table(listOf("") + items.map { "OPP-" + it.l("id") }, rows.map { (l, f) -> listOf(l) + items.map(f) }, firstWeight = 1.4f)
-            Spacer(Modifier.height(10.dp))
-            items.forEach { OppCard(it, nav) }
+    val o = g.view("compare", p)
+    KScreen(top = {
+        KDetailBar(
+            "Compare ideas".t(), sBack(nav), sub = o?.let { tf("%s ideas", it.arr("items").length()) } ?: sUpdated(g),
+            actions = { RefreshIcon { vm.load("compare", p) } },
+        )
+    }) {
+        SLoad(g, o, { vm.load("compare", p) }) { oo ->
+            val items = oo.arr("items").objs()
+            if (items.isEmpty()) KCard { KEmpty("No ideas".t(), KIcons.Bulb) }
+            else {
+                CompareTable(items)
+                KCard(list = true) {
+                    items.forEachIndexed { i, x ->
+                        if (i > 0) KListDivider(true)
+                        IdeaRow(x, "best", null, null) { nav.navigate("studio/opp/${x.l("id")}") }
+                    }
+                }
+            }
         }
     }
 }
 
-// ---------------------------------------------------------------- project (gates timeline + Gate 2 spec review)
+/** Ideas aamne-saamne: har idea ek column (chhoti screen par side scroll). */
+@Composable
+private fun CompareTable(items: List<JSONObject>) {
+    val c = Mfc.c
+    val rows = listOf<Pair<String, (JSONObject) -> String>>(
+        "Organic".t() to { score(it.dn("organic")) }, "Paid".t() to { score(it.dn("paid")) }, "Combined".t() to { score(it.dn("combined")) },
+        "Confidence".t() to { it.s("confidence").ifBlank { "–" } }, "Data coverage".t() to { it.dn("coverage")?.let { x -> pct(x, 0) } ?: "–" },
+        "Recommendation".t() to { it.sn("final_rec")?.let { r -> recText(r) } ?: "–" }, "Complexity".t() to { it.s("complexity").ifBlank { "–" } },
+        "Base margin / install".t() to { it.optJSONObject("profit")?.obj("scenarios")?.obj("base")?.dn("margin_per_install")?.let { m -> usd(m, 3) } ?: "–" },
+        "Verified factors".t() to { num(it.obj("labels").d("VERIFIED")) }, "Unknown factors".t() to { num(it.obj("labels").d("UNKNOWN")) },
+    )
+    val colW = 96.dp
+    KCard(padding = PaddingValues(vertical = 8.dp)) {
+        Column(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
+            Row(Modifier.heightIn(min = 48.dp), verticalAlignment = Alignment.Bottom) {
+                SText("", 13.sp, c.ink3, Modifier.width(132.dp))
+                items.forEach { x ->
+                    SText(x.s("title").ifBlank { "OPP-" + x.l("id") }, 13.sp, c.ink, Modifier.width(colW).padding(start = 8.dp), weight = FontWeight.Bold, lh = 18.sp, maxLines = 2)
+                }
+            }
+            rows.forEachIndexed { ri, (l, f) ->
+                if (ri > 0) KListDividerPlain(132.dp + colW * items.size)
+                Row(Modifier.heightIn(min = 44.dp), verticalAlignment = Alignment.CenterVertically) {
+                    SText(l, 14.sp, c.ink2, Modifier.width(132.dp), lh = 18.sp, maxLines = 2)
+                    items.forEach { x ->
+                        val v = f(x)
+                        val col = when (ri) {
+                            5 -> x.sn("final_rec")?.let { r -> recColor(r) } ?: c.ink3
+                            3 -> if (v == "–") c.ink3 else stColor(v)
+                            else -> if (v == "–") c.ink3 else c.ink
+                        }
+                        SText(v, 14.sp, col, Modifier.width(colW).padding(start = 8.dp), weight = FontWeight.SemiBold, lh = 18.sp, maxLines = 2)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Table ki patli line (fixed chaudai, side scroll ke saath). */
+@Composable
+private fun KListDividerPlain(w: Dp) {
+    Box(Modifier.width(w).height(1.dp).background(Mfc.c.line))
+}
+
+// ---------------------------------------------------------------- project (gates + Gate 2 spec review)
 
 @Composable
 fun StudioProjectScreen(vm: StudioVm, nav: NavHostController, id: Long) {
     val g by vm.s.collectAsStateWithLifecycle()
     val p = mapOf("id" to id.toString())
-    Poll(30_000, id) { vm.load("project", p) }
+    SPoll(30_000, id) { vm.load("project", p) }
     var ask by remember { mutableStateOf<String?>(null) }
-    Frame("Project".t(), g, nav, { vm.load("project", p) }) {
-        SLoad(g, g.view("project", p), { vm.load("project", p) }) { o ->
-            val pr = o.obj("item")
-            val ex = MaterialTheme.extra
-            Text(pr.s("name"), style = MaterialTheme.typography.titleLarge)
-            Small(listOfNotNull(pr.s("puid"), stText(pr.s("stage")), pr.arr("countries").strings().joinToString(" ").ifBlank { null }, "since".t() + " " + tFull(pr.s("created_at"))).joinToString(" · "))
-            TextButton(onClick = { nav.navigate("studio/opp/${pr.l("opp_id")}") }) { Text("Open the original idea".t()) }
-            pr.sn("blocker")?.let { Panel { Text(it, color = ex.bad, style = MaterialTheme.typography.bodyMedium) }; Spacer(Modifier.height(8.dp)) }
-
-            SectionTitle("Approval gates".t())
-            Panel {
-                pr.arr("gates").objs().forEach { gt ->
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
-                        Text(gt.d("gate").toInt().toString(), style = MaterialTheme.typography.titleSmall, modifier = Modifier.width(22.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(gt.s("name"), style = MaterialTheme.typography.bodyMedium)
-                            if (gt.sn("by") != null) Small(listOfNotNull(gt.dn("version")?.let { "v" + it.toInt() }, gt.s("by"), tFull(gt.s("at"))).joinToString(" · "))
-                            else if (!gt.b("available")) Small("Coming in a later release".t())
-                        }
-                        Pill(stText(gt.s("state")), stColor(gt.s("state")))
-                    }
-                }
-                Small("Publishing (Gate 8) always needs its own separate approval. Before any build you will be asked which Play Console account to use.".t())
+    val o = g.view("project", p)
+    val pr = o?.obj("item")
+    val wide = isWide()
+    KScreen(top = {
+        KDetailBar(
+            pr?.s("name")?.ifBlank { null } ?: "Project".t(), sBack(nav),
+            sub = pr?.let { projSub(it) } ?: sUpdated(g),
+            actions = { RefreshIcon { vm.load("project", p) } },
+        )
+        if (!wide && pr != null) ProjectHero(pr)
+    }) {
+        SLoad(g, o, { vm.load("project", p) }) { oo ->
+            val item = oo.obj("item")
+            val ft = item.optJSONObject("features")
+            val onAsk: (String) -> Unit = { ask = it }
+            if (wide) KTwoPane(
+                left = {
+                    ProjectHero(item)
+                    ProjDecision(item, ft, onAsk)
+                    ProjGates(item, nav)
+                    ProjLog(item, oo, nav, onAsk)
+                },
+                right = { ProjSpec(item, ft) },
+            ) else {
+                ProjDecision(item, ft, onAsk)
+                ProjGates(item, nav)
+                ProjSpec(item, ft)
+                ProjLog(item, oo, nav, onAsk)
             }
-
-            val ft = pr.optJSONObject("features")
-            val waiting2 = pr.dn("next_gate")?.toInt() == 2
-            if (ft == null) {
-                Spacer(Modifier.height(8.dp))
-                Panel {
-                    Text("Competitor analysis is being prepared".t(), style = MaterialTheme.typography.titleSmall)
-                    Small("You get a notification when the feature spec is ready for Gate 2.".t())
-                }
-            } else {
-                val c = ft.obj("content")
-                SectionTitle("Gate 2: feature scope".t(), "v" + ft.d("version").toInt() + " · " + ago(ft.s("created_at")))
-                val changes = c.arr("changes").strings()
-                if (changes.isNotEmpty()) Panel { Bullets("What changed in this version".t(), changes, Info) }
-                if (waiting2) {
-                    Spacer(Modifier.height(6.dp))
-                    Panel {
-                        Text(tf("Your decision on spec v%s", ft.d("version").toInt()), style = MaterialTheme.typography.titleSmall)
-                        Small("Approval is tied to this exact version. If the spec changes, you approve again.".t())
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 6.dp)) {
-                            Button(onClick = { ask = "APPROVE" }, modifier = Modifier.weight(1f)) { Text("Approve".t()) }
-                            OutlinedButton(onClick = { ask = "REQUEST_CHANGES" }, modifier = Modifier.weight(1f)) { Text("Request changes".t()) }
-                        }
-                        TextButton(onClick = { ask = "REJECT" }) { Text("Reject project".t(), color = ex.bad) }
-                    }
-                }
-                Spacer(Modifier.height(8.dp))
-                DecisionCard(c.obj("decision_card"))
-                Panel { Para("Strategy".t(), c.sn("strategy")); Para("Effort".t(), c.sn("effort_summary")) }
-                Spacer(Modifier.height(8.dp))
-
-                SectionTitle("Top 3 competitors".t())
-                c.arr("competitors").objs().forEach { cp -> CompetitorCard(cp) }
-
-                val cmp = c.obj("comparison")
-                if (cmp.length() > 0) {
-                    SectionTitle("Comparison".t())
-                    Panel {
-                        listOf("all_do_well" to "All do well", "users_need" to "Users need", "repeated_complaints" to "Repeated complaints", "too_complex" to "Too complex",
-                            "missing" to "Missing in all", "simplify" to "We can simplify", "avoid_technical" to "Technical traps to avoid", "differentiators" to "Our differentiators")
-                            .forEach { (k, l) -> Bullets(l.t(), cmp.arr(k).strings()) }
-                    }
-                }
-
-                SectionTitle("Features".t())
-                listOf("MUST HAVE", "SHOULD HAVE", "OPTIONAL", "REJECT").forEach { pri ->
-                    val fs = c.arr("features").objs().filter { it.s("priority") == pri }
-                    if (fs.isNotEmpty()) {
-                        GLabel(pri + " · " + fs.size)
-                        fs.forEach { FeatureCard(it) }
-                    }
-                }
-                Panel {
-                    Bullets("Do not build".t(), c.arr("avoid").strings(), ex.bad)
-                    Bullets("Permissions".t(), c.arr("permissions_summary").strings())
-                    Bullets("Technical limits".t(), c.arr("technical_limits").strings())
-                    Bullets("Monetization options".t(), c.arr("monetization_options").strings())
-                    Bullets("Risks".t(), c.arr("risks").strings(), ex.bad)
-                }
-                Spacer(Modifier.height(8.dp))
-                val ev = pr.arr("evidence").objs()
-                SectionTitle("Evidence".t(), ev.size.toString())
-                Panel { if (ev.isEmpty()) Empty("No evidence stored.".t()); ev.forEach { EvidenceRow(it) } }
-            }
-
-            val vers = pr.arr("versions").objs()
-            if (vers.isNotEmpty()) {
-                SectionTitle("Versions".t())
-                Panel { vers.forEach { v -> KV(v.s("kind") + " v" + v.d("version").toInt() + (v.sn("change_note")?.let { " · $it" } ?: ""), ago(v.s("created_at"))) } }
-            }
-            val apr = pr.arr("approvals").objs()
-            if (apr.isNotEmpty()) {
-                SectionTitle("Approvals".t())
-                Panel {
-                    apr.forEach { a ->
-                        KV("Gate".t() + " " + a.d("gate").toInt() + " · v" + a.d("artifact_version").toInt() + " · " + stText(a.s("decision")), a.s("user") + " · " + tFull(a.s("created_at")))
-                        a.sn("feedback")?.let { Small(it, maxLines = 4) }
-                    }
-                }
-            }
-            val runs = pr.arr("runs").objs()
-            if (runs.isNotEmpty()) {
-                SectionTitle("Runs".t())
-                Panel { runs.forEach { SRunRow(it, nav) } }
-            }
-            val hist = o.arr("history").objs()
-            if (hist.isNotEmpty()) {
-                SectionTitle("History".t())
-                Panel { hist.forEach { SEventRow(it, null) } }
-            }
-            if (pr.s("stage") !in setOf("CANCELLED", "REJECTED", "PUBLISHED")) {
-                Spacer(Modifier.height(8.dp))
-                TextButton(onClick = { ask = "CANCEL" }) { Text("Cancel project".t(), color = ex.bad) }
-            }
-
-            ask?.let { d ->
-                val ver = ft?.d("version")?.toInt() ?: 0
-                val title = when (d) { "APPROVE" -> tf("Approve spec v%s?", ver); "REQUEST_CHANGES" -> "Request changes".t(); "REJECT" -> "Reject project?".t(); else -> "Cancel project?".t() }
-                val body = when (d) {
-                    "APPROVE" -> "Gate 2 approved for this exact version. Design (Gate 3) is not in this release, so nothing more starts automatically.".t()
-                    "REQUEST_CHANGES" -> "Write what to change. A new version is prepared and comes back to you for approval.".t()
-                    "REJECT" -> "The project stops. Reason is saved in history.".t()
-                    else -> "The project stops. Reason is saved in history.".t()
-                }
-                val key = if (d == "CANCEL") "project_cancel" else "gate"
-                TextAskDialog(title, body, if (d == "APPROVE") "Note (optional)".t() else "Reason / feedback (required)".t(), if (d == "APPROVE") "Approve".t() else "Send".t(),
-                    required = d != "APPROVE", busy = key in g.busy, danger = d == "REJECT" || d == "CANCEL", onDismiss = { ask = null }) { txt ->
-                    if (d == "CANCEL") vm.act("project_cancel", mapOf("id" to id.toString(), "reason" to txt), key, ok = "Project cancelled".t()) { ask = null; vm.load("project", p) }
-                    else if (ft != null) vm.act("gate", mapOf("project_id" to id.toString(), "gate" to "2", "artifact_id" to ft.l("artifact_id").toString(), "hash" to ft.s("hash"),
-                        "decision" to d, "feedback" to txt), key, ok = "Saved".t()) { ask = null; vm.load("project", p) }
-                }
-            }
+        }
+    }
+    val d = ask
+    if (d != null) {
+        val ft = pr?.optJSONObject("features")
+        val ver = ft?.d("version")?.toInt() ?: 0
+        val title = when (d) {
+            "APPROVE" -> tf("Approve spec v%s?", ver)
+            "REQUEST_CHANGES" -> "Request changes".t()
+            "REJECT" -> "Reject project?".t()
+            else -> "Cancel project?".t()
+        }
+        val body = when (d) {
+            "APPROVE" -> "Gate 2 approved for this exact version. Design (Gate 3) is not in this release, so nothing more starts automatically.".t()
+            "REQUEST_CHANGES" -> "Write what to change. A new version is prepared and comes back to you for approval.".t()
+            else -> "The project stops. Reason is saved in history.".t()
+        }
+        val key = if (d == "CANCEL") "project_cancel" else "gate"
+        TextAskDialog(
+            title, body, if (d == "APPROVE") "Note (optional)".t() else "Reason / feedback (required)".t(), if (d == "APPROVE") "Approve".t() else "Send".t(),
+            required = d != "APPROVE", busy = key in g.busy, danger = d == "REJECT" || d == "CANCEL", onDismiss = { ask = null },
+        ) { txt ->
+            if (d == "CANCEL") vm.act("project_cancel", mapOf("id" to id.toString(), "reason" to txt), key, ok = "Project cancelled".t()) { ask = null; vm.load("project", p) }
+            else if (ft != null) vm.act(
+                "gate",
+                mapOf(
+                    "project_id" to id.toString(), "gate" to "2", "artifact_id" to ft.l("artifact_id").toString(), "hash" to ft.s("hash"),
+                    "decision" to d, "feedback" to txt,
+                ),
+                key, ok = "Saved".t(),
+            ) { ask = null; vm.load("project", p) }
         }
     }
 }
 
+/** "PRJ-004 · Features pending · IN US · since 20 Oct". */
+private fun projSub(pr: JSONObject): String = listOfNotNull(
+    pr.s("puid").ifBlank { null }, stText(pr.s("stage")), pr.arr("countries").strings().filter { it.isNotBlank() }.joinToString(" ").ifBlank { null },
+    "since".t() + " " + tFull(pr.s("created_at")),
+).joinToString(" · ")
+
+/** Lavender hero: kitne gates approve (x/8) + patti + agla gate / stage pill + blocker. */
 @Composable
-private fun CompetitorCard(c: JSONObject) {
-    val ctx = LocalContext.current
-    var open by remember { mutableStateOf(false) }
-    Panel(onClick = { open = !open }) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+private fun ProjectHero(pr: JSONObject) {
+    KHero(KTint.Lav) {
+        val gates = pr.arr("gates").objs()
+        val done = gates.count { it.s("state") == "APPROVED" }
+        val ng = pr.dn("next_gate")?.toInt()
+        val stage = pr.s("stage")
+        KHeroHead("Gates approved".t(), icon = KIcons.Shield, trailing = {
+            if (ng != null) SHeroPill(tf("Gate %s", ng) + " · " + KKind.ASK.word(), KKind.ASK)
+            else KPill(stText(stage), stKind(stage))
+        })
+        KBigNum(num(done.toDouble()), suffix = "/" + num(gates.size.toDouble()), size = 48.sp)
+        SGateStrip(gates, Modifier.padding(top = 12.dp))
+        pr.sn("blocker")?.let { KStatus(it, KKind.WARN, Modifier.padding(top = 12.dp)) }
+    }
+}
+
+/** Gate 2 ka faisla (sirf jab wait ho): spec version, kya badla, Approve / Badlav / Reject. */
+@Composable
+private fun ProjDecision(pr: JSONObject, ft: JSONObject?, onAsk: (String) -> Unit) {
+    if (ft == null || pr.dn("next_gate")?.toInt() != 2) return
+    val c = Mfc.c
+    KSection(tf("Your decision on spec v%s", ft.d("version").toInt()), trailing = { KPill(KKind.ASK.word(), KKind.ASK) })
+    KCard {
+        Bullets("What changed".t(), ft.obj("content").arr("changes").strings(), c.brand)
+        Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            KButton("Approve".t(), { onAsk("APPROVE") }, Modifier.weight(1f), icon = KIcons.Check)
+            KButton("Request changes".t(), { onAsk("REQUEST_CHANGES") }, Modifier.weight(1f), kind = KBtn.SOFT)
+        }
+        KButton("Reject project".t(), { onAsk("REJECT") }, Modifier.fillMaxWidth().padding(top = 10.dp), kind = KBtn.OUTLINE)
+    }
+}
+
+/** 8 gates (number tile + naam + state · version · kaun · kab) + asli idea. */
+@Composable
+private fun ProjGates(pr: JSONObject, nav: NavHostController) {
+    KSection("Approval gates".t())
+    KCard(list = true) {
+        pr.arr("gates").objs().forEachIndexed { i, gt ->
+            if (i > 0) KListDivider(true)
+            val st = gt.s("state")
+            val k = gateKind(st)
+            val sub = when {
+                gt.sn("by") != null -> listOfNotNull(stText(st), gt.dn("version")?.let { "v" + it.toInt() }, gt.s("by"), tFull(gt.s("at"))).joinToString(" · ")
+                !gt.b("available") -> stText(st) + " · " + "Later release".t()
+                else -> stText(st)
+            }
+            KRow(gt.s("name"), sub = sub, subKind = k, lead = { SGateTile(gt.d("gate").toInt(), k) }, titleLines = 2)
+        }
+        KListDivider(true)
+        KRow(
+            "Original idea".t(), lead = { KIconTile(KIcons.Bulb) }, chevron = true,
+            onClick = { nav.navigate("studio/opp/${pr.l("opp_id")}") },
+        )
+    }
+    NeverPublishNote()
+}
+
+/** Gate 2 spec: decision card, strategy, top 3 competitors, tulna, features (priority), lists, saboot. */
+@Composable
+private fun ProjSpec(pr: JSONObject, ft: JSONObject?) {
+    val c = Mfc.c
+    if (ft == null) {
+        KCard(list = true) {
+            KRow("Competitor analysis is being prepared".t(), lead = { KIconTile(KIcons.Clock, KKind.ASK) }, titleLines = 2)
+        }
+        return
+    }
+    val cc = ft.obj("content")
+    val waiting2 = pr.dn("next_gate")?.toInt() == 2
+    KSection("Gate 2: feature scope".t(), trailing = {
+        KPill("v" + ft.d("version").toInt() + " · " + sAgo(ft.s("created_at")), KKind.NEUTRAL, icon = null)
+    })
+    val changes = cc.arr("changes").strings().filter { it.isNotBlank() }
+    if (!waiting2 && changes.isNotEmpty()) KCard { Bullets("What changed".t(), changes, c.brand) }
+    DecisionCard(cc.obj("decision_card"))
+    if (!cc.sn("strategy").isNullOrBlank() || !cc.sn("effort_summary").isNullOrBlank()) KCard {
+        Para("Strategy".t(), cc.sn("strategy"))
+        Para("Effort".t(), cc.sn("effort_summary"))
+    }
+    val comps = cc.arr("competitors").objs()
+    if (comps.isNotEmpty()) {
+        KSection("Top 3 competitors".t())
+        comps.forEach { CompetitorCard(it) }
+    }
+    val cmp = cc.obj("comparison")
+    if (cmp.length() > 0) {
+        KSection("Comparison".t())
+        KCard {
+            listOf(
+                "all_do_well" to "All do well", "users_need" to "Users need", "repeated_complaints" to "Repeated complaints", "too_complex" to "Too complex",
+                "missing" to "Missing in all", "simplify" to "We can simplify", "avoid_technical" to "Technical traps to avoid", "differentiators" to "Our differentiators",
+            ).forEach { (k, l) -> Bullets(l.t(), cmp.arr(k).strings(), if (k == "differentiators") c.brand else null) }
+        }
+    }
+    val feats = cc.arr("features").objs()
+    if (feats.isNotEmpty()) {
+        KSection("Features".t(), trailing = { KPill(num(feats.size.toDouble()), KKind.NEUTRAL, icon = null) })
+        listOf("MUST HAVE", "SHOULD HAVE", "OPTIONAL", "REJECT").forEach { pri ->
+            val fs = feats.filter { it.s("priority") == pri }
+            if (fs.isNotEmpty()) {
+                Row(Modifier.fillMaxWidth().padding(start = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    KPill(priText(pri) + " · " + fs.size, priKind(pri), icon = null)
+                }
+                KCard(list = true) {
+                    fs.forEachIndexed { i, f ->
+                        if (i > 0) KListDivider()
+                        FeatureRow(f)
+                    }
+                }
+            }
+        }
+    }
+    val lists = listOf(
+        Triple("Do not build", cc.arr("avoid").strings(), c.zRed), Triple("Permissions", cc.arr("permissions_summary").strings(), null),
+        Triple("Technical limits", cc.arr("technical_limits").strings(), null), Triple("Monetization options", cc.arr("monetization_options").strings(), c.zGreen),
+        Triple("Risks", cc.arr("risks").strings(), c.zRed),
+    )
+    if (lists.any { (_, l, _) -> l.any { it.isNotBlank() } }) KCard {
+        lists.forEach { (l, items, col) -> Bullets(l.t(), items, col) }
+    }
+    EvidenceBlock(pr.arr("evidence").objs())
+}
+
+private fun priText(p: String): String = when (p) {
+    "MUST HAVE" -> "Must have".t()
+    "SHOULD HAVE" -> "Should have".t()
+    "OPTIONAL" -> "Optional".t()
+    "REJECT" -> "Rejected".t()
+    else -> p
+}
+
+private fun priKind(p: String): KKind = when (p) {
+    "MUST HAVE" -> KKind.OK
+    "SHOULD HAVE" -> KKind.ASK
+    "REJECT" -> KKind.BAD
+    else -> KKind.NEUTRAL
+}
+
+/** Versions, approvals, runs, history + project cancel. */
+@Composable
+private fun ProjLog(pr: JSONObject, o: JSONObject, nav: NavHostController, onAsk: (String) -> Unit) {
+    val vers = pr.arr("versions").objs()
+    if (vers.isNotEmpty()) {
+        KSection("Versions".t())
+        KCard(list = true) {
+            vers.forEachIndexed { i, v ->
+                if (i > 0) KListDivider()
+                KRow(
+                    v.s("kind") + " v" + v.d("version").toInt(), sub = v.sn("change_note"),
+                    value = sAgo(v.s("created_at")), valuePlain = true,
+                )
+            }
+        }
+    }
+    val apr = pr.arr("approvals").objs()
+    if (apr.isNotEmpty()) {
+        KSection("Approvals".t())
+        KCard(list = true) {
+            apr.forEachIndexed { i, a ->
+                if (i > 0) KListDivider()
+                KRow(
+                    tf("Gate %s", a.d("gate").toInt()) + " · v" + a.d("artifact_version").toInt(),
+                    sub = decisionText(a.s("decision")), subKind = stKind(a.s("decision")),
+                    value = a.s("user").ifBlank { "–" }, valuePlain = true, valueSub = tFull(a.s("created_at")),
+                )
+                a.sn("feedback")?.let { SNote(it, maxLines = 4) }
+            }
+        }
+    }
+    val runs = pr.arr("runs").objs()
+    if (runs.isNotEmpty()) {
+        KSection("Runs".t())
+        KCard(list = true) {
+            runs.forEachIndexed { i, r ->
+                if (i > 0) KListDivider(true)
+                SRunRow(r, nav)
+            }
+        }
+    }
+    HistoryBlock(o.arr("history").objs())
+    if (pr.s("stage") !in setOf("CANCELLED", "REJECTED", "PUBLISHED")) {
+        KButton("Cancel project".t(), { onAsk("CANCEL") }, Modifier.fillMaxWidth(), kind = KBtn.OUTLINE, icon = KIcons.Close)
+    }
+}
+
+/** Competitor: naam, developer · package, rating · installs; tap = poora analysis. */
+@Composable
+private fun CompetitorCard(x: JSONObject) {
+    val c = Mfc.c
+    val open = rememberOpenUrl()
+    var more by remember { mutableStateOf(false) }
+    KCard(onClick = { more = !more }) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            KAvatar(x.s("name"))
             Column(Modifier.weight(1f)) {
-                Text(c.s("name"), style = MaterialTheme.typography.titleSmall)
-                Small(listOfNotNull(c.s("developer").ifBlank { null }, c.s("package").ifBlank { null }).joinToString(" · "), maxLines = 1)
+                SText(x.s("name"), 15.sp, c.ink, weight = FontWeight.SemiBold, lh = 20.sp, maxLines = 2)
+                val dev = listOfNotNull(x.s("developer").ifBlank { null }, x.s("package").ifBlank { null }).joinToString(" · ")
+                if (dev.isNotBlank()) SText(dev, 13.sp, c.ink3, Modifier.padding(top = 2.dp), lh = 18.sp)
             }
-            Small(listOfNotNull(c.s("rating").ifBlank { null }?.let { "★ $it" }, c.s("installs_indicator").ifBlank { null }).joinToString(" · "))
+            Column(horizontalAlignment = Alignment.End) {
+                x.s("rating").ifBlank { null }?.let { SText("★ $it", 15.sp, c.ink, weight = FontWeight.Bold, lh = 20.sp) }
+                x.s("installs_indicator").ifBlank { null }?.let { SText(it, 13.sp, c.ink3, lh = 18.sp) }
+            }
+            SExpandIcon(more)
         }
-        Small(c.s("why_chosen"), maxLines = if (open) Int.MAX_VALUE else 2)
-        if (open) {
-            Para("Countries".t(), c.sn("countries")); Para("Updates".t(), c.sn("update_frequency")); Para("Navigation / UI".t(), c.sn("navigation_ui"))
-            Bullets("Core features".t(), c.arr("core_features").strings()); Bullets("Secondary features".t(), c.arr("secondary_features").strings())
-            Para("Monetization".t(), c.sn("monetization")); Para("Ads experience".t(), c.sn("ads_experience")); Para("Premium".t(), c.sn("premium"))
-            Para("Technical limits".t(), c.sn("technical_limits")); Para("User satisfaction".t(), c.sn("satisfaction"))
-            Bullets("Weak points".t(), c.arr("weak_points").strings())
-            val cm = c.arr("complaints").objs()
+        x.sn("why_chosen")?.let { SText(it, 14.sp, c.ink2, Modifier.padding(top = 8.dp), lh = 20.sp, maxLines = if (more) Int.MAX_VALUE else 2) }
+        if (more) {
+            Para("Countries".t(), x.sn("countries")); Para("Updates".t(), x.sn("update_frequency")); Para("Navigation / UI".t(), x.sn("navigation_ui"))
+            Bullets("Core features".t(), x.arr("core_features").strings()); Bullets("Secondary features".t(), x.arr("secondary_features").strings())
+            Para("Monetization".t(), x.sn("monetization")); Para("Ads experience".t(), x.sn("ads_experience")); Para("Premium".t(), x.sn("premium"))
+            Para("Technical limits".t(), x.sn("technical_limits")); Para("User satisfaction".t(), x.sn("satisfaction"))
+            Bullets("Weak points".t(), x.arr("weak_points").strings(), c.zAmber)
+            val cm = x.arr("complaints").objs()
             if (cm.isNotEmpty()) {
-                GLabel("Complaints".t())
-                cm.forEach { x ->
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
-                        Pill(x.s("class"), if (x.s("class") == "USER-REPORTED ISSUE") MaterialTheme.extra.warn else MaterialTheme.extra.muted); Spacer(Modifier.width(6.dp))
-                        Text(x.s("issue") + (x.sn("frequency")?.let { " · $it" } ?: ""), style = MaterialTheme.typography.bodySmall)
+                SText("Complaints".t(), 13.sp, c.ink3, Modifier.padding(top = 6.dp), weight = FontWeight.SemiBold, lh = 18.sp)
+                cm.forEach { y ->
+                    Column(Modifier.fillMaxWidth().padding(top = 6.dp)) {
+                        KStatus(y.s("class").ifBlank { "–" }, if (y.s("class") == "USER-REPORTED ISSUE") KKind.WARN else KKind.NEUTRAL)
+                        SText(y.s("issue") + (y.sn("frequency")?.let { " · $it" } ?: ""), 14.sp, c.ink, Modifier.padding(top = 2.dp), lh = 20.sp, maxLines = Int.MAX_VALUE)
                     }
                 }
-                Small("Complaints are what users or sources report. Nothing was reproduced or confirmed by testing.".t())
+                SText("Reported, not tested".t(), 13.sp, c.ink3, Modifier.padding(top = 6.dp), lh = 18.sp)
             }
-            c.sn("play_url")?.let { u -> TextButton(onClick = { openUrl(ctx, u) }) { Text("Open on Google Play".t()) } }
-        } else Small("Tap for full analysis".t(), Info)
+            x.sn("play_url")?.let { u ->
+                Row(Modifier.padding(top = 8.dp)) { KSmallAction("Open on Google Play".t(), { open(u) }) }
+            }
+        }
     }
-    Spacer(Modifier.height(8.dp))
 }
 
+/** Feature: naam, mushkil · din, kya karta hai; tap = poori detail. Android par na bane to laal. */
 @Composable
-private fun FeatureCard(f: JSONObject) {
-    var open by remember { mutableStateOf(false) }
-    val ex = MaterialTheme.extra
-    Panel(onClick = { open = !open }) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(f.s("name"), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-            Small(listOfNotNull(f.s("difficulty").ifBlank { null }, f.dn("effort_days")?.let { num(it, 1) + " " + "days".t() }).joinToString(" · "))
+private fun FeatureRow(f: JSONObject) {
+    val c = Mfc.c
+    var more by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable { more = !more }.padding(horizontal = 16.dp, vertical = 12.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            SText(f.s("name"), 15.sp, c.ink, Modifier.weight(1f), weight = FontWeight.SemiBold, lh = 20.sp, maxLines = 2)
+            val meta = listOfNotNull(f.s("difficulty").ifBlank { null }, f.dn("effort_days")?.let { num(it, 1) + " " + "days".t() }).joinToString(" · ")
+            if (meta.isNotBlank()) SText(meta, 13.sp, c.ink3, lh = 18.sp)
+            SExpandIcon(more)
         }
-        Small(f.s("what"), maxLines = if (open) Int.MAX_VALUE else 2)
-        if (!f.b("feasible_on_android")) Small("Not possible with public Android APIs: rejected".t(), ex.bad)
-        if (open) {
+        f.sn("what")?.let { SText(it, 14.sp, c.ink2, Modifier.padding(top = 4.dp), lh = 20.sp, maxLines = if (more) Int.MAX_VALUE else 2) }
+        if (!f.b("feasible_on_android")) KStatus("Not possible on Android".t(), KKind.BAD, Modifier.padding(top = 4.dp))
+        if (more) {
             Para("Problem it solves".t(), f.sn("problem")); Para("Why add".t(), f.sn("why_add")); Para("Why not".t(), f.sn("why_not"))
             Para("Competitor evidence".t(), f.sn("competitor_evidence")); Para("User benefit".t(), f.sn("user_benefit")); Para("Business benefit".t(), f.sn("business_benefit"))
             Para("Implementation".t(), f.sn("implementation")); Para("Android APIs".t(), f.sn("android_apis"))
             Bullets("Permissions".t(), f.arr("permissions").strings()); Para("Privacy".t(), f.sn("privacy")); Para("Battery / performance".t(), f.sn("battery_performance"))
             Para("Monetization impact".t(), f.sn("monetization_impact")); Para("Risks / alternatives".t(), f.sn("risks_alternatives"))
             val ev = f.arr("evidence").strings().filter { it.isNotBlank() }
-            if (ev.isNotEmpty()) Small("Evidence".t() + ": " + ev.joinToString(" ") { "#$it" })
+            if (ev.isNotEmpty()) SText("Evidence".t() + ": " + ev.joinToString(" ") { "#$it" }, 13.sp, c.ink3, Modifier.padding(top = 4.dp), lh = 18.sp, maxLines = 3)
         }
     }
-    Spacer(Modifier.height(6.dp))
 }
 
 // ---------------------------------------------------------------- run detail
@@ -434,46 +811,124 @@ private fun FeatureCard(f: JSONObject) {
 fun StudioRunScreen(vm: StudioVm, nav: NavHostController, id: Long) {
     val g by vm.s.collectAsStateWithLifecycle()
     val p = mapOf("id" to id.toString())
-    Poll(5_000, id) { vm.load("run", p) }
-    Frame("Run".t() + " #$id", g, nav, { vm.load("run", p) }) {
-        SLoad(g, g.view("run", p), { vm.load("run", p) }) { o ->
-            val r = o.obj("item")
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(jobName(r.s("job")), style = MaterialTheme.typography.titleLarge)
-                    Small(r.s("uid") + " · " + stText(r.s("trigger")) + (r.sn("by")?.let { " · $it" } ?: ""))
+    SPoll(5_000, id) { vm.load("run", p) }
+    val o = g.view("run", p)
+    val r = o?.obj("item")
+    val wide = isWide()
+    KScreen(top = {
+        KDetailBar(
+            r?.let { jobName(it.s("job")) } ?: ("Run".t() + " #$id"), sBack(nav),
+            sub = r?.let { listOfNotNull(it.s("uid").ifBlank { null }, stText(it.s("trigger")), it.sn("by")).joinToString(" · ") } ?: sUpdated(g),
+            actions = { RefreshIcon { vm.load("run", p) } },
+        )
+        if (!wide && r != null) RunHero(r)
+    }) {
+        SLoad(g, o, { vm.load("run", p) }) { oo ->
+            val item = oo.obj("item")
+            if (wide) KTwoPane(
+                left = {
+                    RunHero(item)
+                    RunFacts(item, g.busy, { vm.act("cancel", mapOf("id" to id.toString()), "cancel", ok = "Cancel requested".t()) { vm.load("run", p) } })
+                },
+                right = {
+                    RunUsage(oo.arr("usage").objs())
+                    RunLog(oo.arr("log").objs())
+                },
+            ) else {
+                RunFacts(item, g.busy, { vm.act("cancel", mapOf("id" to id.toString()), "cancel", ok = "Cancel requested".t()) { vm.load("run", p) } })
+                RunUsage(oo.arr("usage").objs())
+                RunLog(oo.arr("log").objs())
+            }
+        }
+    }
+}
+
+/** Lavender hero: steps x/y + stage + patti, phir AI calls | searches | kharcha. */
+@Composable
+private fun RunHero(r: JSONObject) {
+    KHero(KTint.Lav) {
+        val cc = Mfc.c
+        val st = r.s("status")
+        val tot = r.d("steps_total")
+        val done = r.d("steps_done")
+        KHeroHead("Run".t() + " #" + r.l("id"), icon = KIcons.Play, trailing = { SStatusPill(st) })
+        KBigNum(num(done), suffix = "/" + num(tot) + " " + "steps".t(), size = 48.sp)
+        r.s("stage").ifBlank { null }?.let { SText(it, 14.sp, cc.ink2, lh = 20.sp, maxLines = 2) }
+        if (tot > 0) KProgress(
+            (done / tot).toFloat(),
+            when (stKind(st)) {
+                KKind.OK -> cc.zGreen
+                KKind.BAD -> cc.zRed
+                KKind.WARN -> cc.zAmber
+                else -> cc.brand
+            },
+        )
+        KSplit(listOf("AI calls".t() to num(r.d("ai_calls")), "Searches".t() to num(r.d("searches")), "Cost".t() to usd(r.d("cost_usd"), 3)))
+    }
+}
+
+@Composable
+private fun RunFacts(r: JSONObject, busy: Set<String>, onCancel: () -> Unit) {
+    val c = Mfc.c
+    KCard(padding = PaddingValues(horizontal = 20.dp, vertical = 4.dp)) {
+        KKv("Queued".t(), tFull(r.s("queued_at")))
+        KKv("Started".t(), r.sn("started_at")?.let { tFull(it) } ?: "–")
+        KKv("Finished".t(), r.sn("finished_at")?.let { tFull(it) } ?: "–")
+        KKv("Attempts".t(), num(r.d("attempts")))
+    }
+    r.sn("summary")?.let { KCard { Para("Summary".t(), it) } }
+    r.sn("error_text")?.let {
+        KCard {
+            KStatus("Errors".t(), KKind.BAD)
+            SText(it, 14.sp, c.ink, Modifier.padding(top = 4.dp), lh = 20.sp, maxLines = Int.MAX_VALUE)
+        }
+    }
+    if (r.s("status") in setOf("QUEUED", "RUNNING")) {
+        KButton("Cancel run".t(), onCancel, Modifier.fillMaxWidth(), kind = KBtn.OUTLINE, icon = KIcons.Close, busy = "cancel" in busy)
+    }
+}
+
+/** Har AI call: kism, tokens in / out, searches, USD (fail = ✗). */
+@Composable
+private fun RunUsage(us: List<JSONObject>) {
+    if (us.isEmpty()) return
+    val c = Mfc.c
+    KSection("AI usage".t(), trailing = { KPill(usd(us.sumOf { it.d("cost_usd") }, 3), KKind.NEUTRAL, icon = null) })
+    val w = listOf(1.7f, 1f, 1f, .9f, 1.2f)
+    KCard(padding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)) {
+        Row(Modifier.fillMaxWidth().heightIn(min = 36.dp), verticalAlignment = Alignment.CenterVertically) {
+            listOf("Call".t(), "In".t(), "Out".t(), "Search".t(), "USD").forEachIndexed { i, h ->
+                SText(h, 13.sp, c.ink3, Modifier.weight(w[i]), weight = FontWeight.SemiBold, lh = 18.sp, align = if (i == 0) TextAlign.Start else TextAlign.End)
+            }
+        }
+        us.forEachIndexed { i, u ->
+            val ok = u.b("ok")
+            val cells = listOf(
+                "${i + 1} " + u.s("kind") + if (!ok) " ✗" else "", num(u.d("in_tokens")), num(u.d("out_tokens")), num(u.d("searches")), usd(u.d("cost_usd"), 4),
+            )
+            Row(Modifier.fillMaxWidth().heightIn(min = 36.dp), verticalAlignment = Alignment.CenterVertically) {
+                cells.forEachIndexed { j, v ->
+                    SText(
+                        v, 13.sp, if (j == 0 && !ok) c.red else c.ink, Modifier.weight(w[j]), weight = if (j == 4) FontWeight.SemiBold else FontWeight.Normal,
+                        lh = 18.sp, align = if (j == 0) TextAlign.Start else TextAlign.End,
+                    )
                 }
-                Pill(r.s("status"), stColor(r.s("status")))
             }
-            Spacer(Modifier.height(8.dp))
-            val tot = r.d("steps_total")
-            if (r.s("status") == "RUNNING" && tot > 0) LinearProgressIndicator(progress = { (r.d("steps_done") / tot).toFloat().coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
-            TileGrid(listOf(Triple("Steps".t(), "${r.d("steps_done").toInt()}/${tot.toInt()}", r.s("stage")), Triple("AI calls".t(), num(r.d("ai_calls")), num(r.d("searches")) + " " + "searches".t()),
-                Triple("Cost".t(), usd(r.d("cost_usd"), 3), tf("attempt %s", r.d("attempts").toInt()))))
-            Panel {
-                KV("Queued".t(), tFull(r.s("queued_at")))
-                KV("Started".t(), r.sn("started_at")?.let { tFull(it) } ?: "–")
-                KV("Finished".t(), r.sn("finished_at")?.let { tFull(it) } ?: "–")
-                r.sn("summary")?.let { Para("Summary".t(), it) }
-                r.sn("error_text")?.let { Para("Errors".t(), it) }
-                if (r.s("status") in setOf("QUEUED", "RUNNING"))
-                    BusyButton("Cancel run".t(), "cancel" in g.busy, outlined = true) { vm.act("cancel", mapOf("id" to id.toString()), "cancel", ok = "Cancel requested".t()) { vm.load("run", p) } }
-            }
-            val us = o.arr("usage").objs()
-            if (us.isNotEmpty()) {
-                SectionTitle("AI usage".t())
-                Table(listOf("Call".t(), "In".t(), "Out".t(), "Search".t(), "USD"), us.mapIndexed { i, u ->
-                    listOf("${i + 1} " + u.s("kind") + if (!u.b("ok")) " ✗" else "", num(u.d("in_tokens")), num(u.d("out_tokens")), num(u.d("searches")), usd(u.d("cost_usd"), 4))
-                })
-            }
-            SectionTitle("Log".t())
-            Panel {
-                val lg = o.arr("log").objs()
-                if (lg.isEmpty()) Empty("No log lines yet.".t())
-                lg.forEach { l ->
-                    Text(tOnly(l.s("created_at")) + "  " + l.s("msg"), style = MaterialTheme.typography.bodySmall,
-                        color = if (l.s("level") == "error") MaterialTheme.extra.bad else MaterialTheme.colorScheme.onSurface, modifier = Modifier.padding(vertical = 2.dp))
-                }
+        }
+    }
+}
+
+@Composable
+private fun RunLog(lg: List<JSONObject>) {
+    val c = Mfc.c
+    KSection("Log".t())
+    KCard(padding = PaddingValues(horizontal = 16.dp, vertical = 10.dp)) {
+        if (lg.isEmpty()) KEmpty("No log yet".t(), KIcons.History)
+        lg.forEach { l ->
+            val err = l.s("level") == "error"
+            Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                SText(tOnly(l.s("created_at")), 13.sp, c.ink3, Modifier.width(44.dp), lh = 18.sp)
+                SText(l.s("msg"), 13.sp, if (err) c.red else c.ink2, Modifier.weight(1f), lh = 18.sp, maxLines = 8)
             }
         }
     }

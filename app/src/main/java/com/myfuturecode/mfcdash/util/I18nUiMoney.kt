@@ -8,6 +8,8 @@ val HI_UI_MONEY: Map<String, String> = mapOf(
     "%s payments" to "%s payments", "Spend by account" to "Kharcha kahan", "INR accounts" to "INR accounts",
     "Other currency" to "Doosri currency", "Other accounts" to "Baaki accounts", "Full report" to "Pura hisaab",
     "%s running" to "%s chal rahe", "%s conv" to "%s conv", "App filter" to "App filter",
+    // Home map me bhi hain (wahi shabd); yahan bhi taaki Paisa / Apps akele sahi rahein
+    "Today's profit" to "Aaj ka munafa", "Earnings" to "Kamai", "Ads spend" to "Ads kharcha", "No apps" to "Koi app nahi",
     // Apps tab
     "Today's apps" to "Aaj ke apps", "Yesterday's apps" to "Kal ke apps", "Apps · 7 days" to "Apps · 7 din",
     "Apps · 30 days" to "Apps · 30 din", "apps in profit" to "apps profit mein", "loss" to "loss", "no data" to "bina data",

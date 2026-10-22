@@ -1,33 +1,112 @@
 package com.myfuturecode.mfcdash.ui.screens.gads
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
-import com.myfuturecode.mfcdash.data.*
+import com.myfuturecode.mfcdash.data.GAccount
+import com.myfuturecode.mfcdash.data.GAlert
+import com.myfuturecode.mfcdash.data.GEvent
+import com.myfuturecode.mfcdash.data.GRun
 import com.myfuturecode.mfcdash.ui.GState
 import com.myfuturecode.mfcdash.ui.GadsVm
-import com.myfuturecode.mfcdash.ui.components.*
-import com.myfuturecode.mfcdash.ui.screens.*
-import com.myfuturecode.mfcdash.ui.screens.health.*
-import com.myfuturecode.mfcdash.ui.theme.Info
-import com.myfuturecode.mfcdash.ui.theme.extra
-import com.myfuturecode.mfcdash.util.*
+import com.myfuturecode.mfcdash.ui.kit.KAvatar
+import com.myfuturecode.mfcdash.ui.kit.KBarIcon
+import com.myfuturecode.mfcdash.ui.kit.KBigNum
+import com.myfuturecode.mfcdash.ui.kit.KBtn
+import com.myfuturecode.mfcdash.ui.kit.KButton
+import com.myfuturecode.mfcdash.ui.kit.KCard
+import com.myfuturecode.mfcdash.ui.kit.KDetailBar
+import com.myfuturecode.mfcdash.ui.kit.KDivider
+import com.myfuturecode.mfcdash.ui.kit.KEmpty
+import com.myfuturecode.mfcdash.ui.kit.KHero
+import com.myfuturecode.mfcdash.ui.kit.KHeroHead
+import com.myfuturecode.mfcdash.ui.kit.KIconTile
+import com.myfuturecode.mfcdash.ui.kit.KIcons
+import com.myfuturecode.mfcdash.ui.kit.KKind
+import com.myfuturecode.mfcdash.ui.kit.KListDivider
+import com.myfuturecode.mfcdash.ui.kit.KLive
+import com.myfuturecode.mfcdash.ui.kit.KPaceMeter
+import com.myfuturecode.mfcdash.ui.kit.KPageTokens
+import com.myfuturecode.mfcdash.ui.kit.KPill
+import com.myfuturecode.mfcdash.ui.kit.KRow
+import com.myfuturecode.mfcdash.ui.kit.KScreen
+import com.myfuturecode.mfcdash.ui.kit.KSection
+import com.myfuturecode.mfcdash.ui.kit.KSectionLink
+import com.myfuturecode.mfcdash.ui.kit.KSegTabs
+import com.myfuturecode.mfcdash.ui.kit.KSmallAction
+import com.myfuturecode.mfcdash.ui.kit.KSplit
+import com.myfuturecode.mfcdash.ui.kit.KStatus
+import com.myfuturecode.mfcdash.ui.kit.KTint
+import com.myfuturecode.mfcdash.ui.kit.KTwoPane
+import com.myfuturecode.mfcdash.ui.kit.isWide
+import com.myfuturecode.mfcdash.ui.kit.kRoasColor
+import com.myfuturecode.mfcdash.ui.kit.kSignedPct
+import com.myfuturecode.mfcdash.ui.screens.FilterBox
+import com.myfuturecode.mfcdash.ui.screens.FilterChips
+import com.myfuturecode.mfcdash.ui.screens.FilterSheet
+import com.myfuturecode.mfcdash.ui.screens.FilterSummary
+import com.myfuturecode.mfcdash.ui.screens.LocalFilterBox
+import com.myfuturecode.mfcdash.ui.theme.Mfc
+import com.myfuturecode.mfcdash.util.Lang
+import com.myfuturecode.mfcdash.util.agoText
+import com.myfuturecode.mfcdash.util.arr
+import com.myfuturecode.mfcdash.util.b
+import com.myfuturecode.mfcdash.util.d
+import com.myfuturecode.mfcdash.util.dn
+import com.myfuturecode.mfcdash.util.fmtDay
+import com.myfuturecode.mfcdash.util.l
+import com.myfuturecode.mfcdash.util.mapObj
+import com.myfuturecode.mfcdash.util.num
+import com.myfuturecode.mfcdash.util.obj
+import com.myfuturecode.mfcdash.util.pct
+import com.myfuturecode.mfcdash.util.s
+import com.myfuturecode.mfcdash.util.sn
+import com.myfuturecode.mfcdash.util.strings
+import com.myfuturecode.mfcdash.util.t
+import com.myfuturecode.mfcdash.util.tOnly
+import com.myfuturecode.mfcdash.util.tf
 import org.json.JSONObject
+import java.util.Locale
 
 val GTABS = listOf(
     "accounts" to "All Accounts", "health" to "Account Health", "policy" to "Suspensions & Policy", "spend" to "Spend", "cpi" to "CPI / CPA", "roas" to "ROAS",
@@ -49,7 +128,64 @@ private fun statusOptions(tab: String): List<Pair<String, String>> = listOf("" t
     else -> emptyList()
 }
 
-/** Google Ads AI Health Monitor: 12 pages (chips upar), sab par wahi filters. Sirf monitoring, Google Ads me kuch nahi badalta. */
+// tabs: Accounts | Alerts | AI | More (baaki 9 menu me)
+private val G_MAIN = listOf("accounts", "history", "recs")
+private val G_MORE = listOf("health", "policy", "spend", "cpi", "roas", "campaigns", "creatives", "live", "settings")
+
+private fun gShortTab(k: String): String = when (k) {
+    "accounts" -> "Accounts".t()
+    "history" -> "Alerts".t()
+    "recs" -> "AI".t()
+    "health" -> "Health".t()
+    "policy" -> "Policy".t()
+    "spend" -> "Spend".t()
+    "cpi" -> "CPI"
+    "roas" -> "ROAS"
+    "campaigns" -> "Campaigns".t()
+    "creatives" -> "Creatives".t()
+    "live" -> "Live".t()
+    "settings" -> "Settings".t()
+    else -> "More".t()
+}
+
+private fun gTabIcon(k: String): ImageVector = when (k) {
+    "health" -> KIcons.Pulse
+    "policy" -> KIcons.Shield
+    "spend" -> KIcons.Rupee
+    "cpi" -> KIcons.Target
+    "roas" -> KIcons.TrendUp
+    "campaigns" -> KIcons.Ads
+    "creatives" -> KIcons.Palette
+    "live" -> KIcons.Live
+    "settings" -> KIcons.Gear
+    else -> KIcons.More
+}
+
+/** Overview ke ek account ka haal (kind, chhota shabd). */
+private fun acctState(j: JSONObject, drop: Double, spike: Double): Pair<KKind, String> = gAcctState(
+    j.b("monitoring"), j.s("health"), j.dn("data_age_min")?.toInt(), j.b("fresh"), j.d("critical").toInt(), j.d("warning").toInt(), j.dn("pace_pct"), drop, spike,
+)
+
+/** Sab accounts ki milkar raftaar: Σ aaj / Σ aam − 1 (alag currency ho to ₹ me). Na bane to null. */
+private fun portfolioPace(accs: List<JSONObject>, usdInr: Double?): Double? {
+    val mixed = accs.map { it.s("currency").trim().uppercase() }.filter { it.isNotBlank() }.distinct().size > 1
+    var now = 0.0
+    var usual = 0.0
+    for (j in accs) {
+        if (!j.b("monitoring") || !j.b("fresh")) continue
+        val p = j.dn("pace_pct")?.takeIf { it.isFinite() } ?: continue
+        val u = j.dn("usual_by_now")?.takeIf { it > 0 && it.isFinite() } ?: continue
+        val k = if (mixed) gToInr(1.0, j.s("currency"), usdInr) ?: continue else 1.0
+        now += u * (1 + p / 100.0) * k
+        usual += u * k
+    }
+    return if (usual > 0) (now / usual - 1) * 100 else null
+}
+
+/**
+ * Google Ads monitor: upar Sand hero (aaj ka kharcha + raftaar), neeche tabs (Accounts | Alerts | AI | More).
+ * Sab tabs par wahi filters (bar ka Filter icon). Sirf dekhna: Google Ads me kuch nahi badalta.
+ */
 @Composable
 fun GadsScreen(vm: GadsVm, nav: NavHostController, startTab: String) {
     val g by vm.s.collectAsStateWithLifecycle()
@@ -62,191 +198,295 @@ fun GadsScreen(vm: GadsVm, nav: NavHostController, startTab: String) {
     var adgroup by rememberSaveable { mutableStateOf("") }
     var status by rememberSaveable { mutableStateOf("") }
     var range by rememberSaveable { mutableStateOf("7d") }
-    var add by remember { mutableStateOf(false) }
+    var addPre by remember { mutableStateOf<Pair<String, String>?>(null) }
     var token by remember { mutableStateOf<Pair<String, String>?>(null) }
     val box = remember { FilterBox() }
     val reload = remember { mutableIntStateOf(0) }
-    LaunchedEffect(reload.intValue) { vm.load("filters") }
+    val r = reload.intValue
+    // filters ke options + limits (pace meter ki seema) ek baar
+    LaunchedEffect(r) { vm.load("filters"); vm.load("settings") }
     val opts = g.view("filters")
     val sOpts = statusOptions(tab).map { it.first to it.second.t() }
-    LaunchedEffect(tab) { if (sOpts.none { it.first == status }) status = "" }
-    val f = mapOf("company" to company, "account" to account, "country" to country, "currency" to currency, "campaign" to campaign, "adgroup" to adgroup,
-        "status" to status, "range" to range)
+    LaunchedEffect(tab) { if (statusOptions(tab).none { it.first == status }) status = "" }
+    val f = mapOf(
+        "company" to company, "account" to account, "country" to country, "currency" to currency, "campaign" to campaign, "adgroup" to adgroup,
+        "status" to status, "range" to range,
+    )
+    // hero har tab par dikhta hai, isliye overview yahin se
+    gPoll(60_000L, f, r) { vm.load("overview", f) }
+    val o = g.view("overview", f)
+    val accs = o?.arr("accounts")?.mapObj { it }.orEmpty()
+    val usdInr = gUsdInr()
+    val (drop, spike) = gPaceLimits(g)
+    val openAlerts = accs.sumOf { it.d("critical").toInt() + it.d("warning").toInt() }
+    val wide = isWide()
+    val go: (String) -> Unit = { tab = it }
+    val onAdd: (Pair<String, String>) -> Unit = { addPre = it }
+    val onToken: (String, String) -> Unit = { c0, t0 -> token = c0 to t0 }
 
-    Column(Modifier.fillMaxSize()) {
-        HTopBar("Google Ads AI Health".t(), updatedText(g), nav, busy = false, onRefresh = { reload.intValue++ }) {
-            IconButton(onClick = { add = true }) { Icon(Icons.Filled.Add, "Add account".t()) }
-        }
-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(top = 4.dp, bottom = 24.dp)) {
-            ChipRow { GTABS.forEach { (k, l) -> MChip(l.t(), tab == k, { tab = k }) } }
-            Spacer(Modifier.height(10.dp))
-            CompositionLocalProvider(LocalFilterBox provides box) {
-                if (tab != "settings") {
-                    // har page par wahi filters (Company, Account, Country, Currency, Campaign, Ad group, Status, Date range)
-                    val accts = opts?.arr("accounts")?.mapObj { it }.orEmpty()
-                    FilterChips("Date range".t(), G_RANGES.map { it.first to it.second.t() }, range) { range = it }
-                    FilterChips("Company".t(), listOf("" to "All".t()) + opts?.arr("companies")?.strings().orEmpty().map { it to it }, company) { company = it; account = ""; campaign = ""; adgroup = "" }
-                    FilterChips("Account".t(), listOf("" to "All".t()) + accts.filter { company.isBlank() || it.s("company") == company }.map { it.s("cid") to it.s("label") }, account) {
-                        account = it; campaign = ""; adgroup = ""
-                    }
-                    FilterChips("Currency".t(), listOf("" to "All".t()) + opts?.arr("currencies")?.strings().orEmpty().map { it to it }, currency) { currency = it }
-                    FilterChips("Country".t(), listOf("" to "All".t()) + opts?.arr("countries")?.strings().orEmpty().map { it to it }, country) { country = it }
-                    val camps = opts?.arr("campaigns")?.mapObj { it }.orEmpty().filter { c ->
-                        (account.isBlank() || c.s("cid") == account) && (company.isBlank() || accts.any { it.s("cid") == c.s("cid") && it.s("company") == company })
-                    }
-                    FilterChips("Campaign".t(), listOf("" to "All".t()) + camps.map { it.s("id") to it.s("name").ifBlank { it.s("id") } }, campaign) { campaign = it; adgroup = "" }
-                    val ags = opts?.arr("adgroups")?.mapObj { it }.orEmpty().filter { (campaign.isBlank() || it.s("campaign_id") == campaign) && (account.isBlank() || it.s("cid") == account) }
-                    FilterChips("Ad group".t(), listOf("" to "All".t()) + ags.map { it.s("id") to it.s("name").ifBlank { it.s("id") } }, adgroup) { adgroup = it }
-                    if (sOpts.size > 1) FilterChips("Status".t(), sOpts, status) { status = it }
-                    ChipRow { FilterToggle(box) }
-                    Spacer(Modifier.height(8.dp))
-                    FilterSummary(box)
+    val bar: @Composable ColumnScope.() -> Unit = {
+        KDetailBar("Google Ads".t(), gBack(nav), sub = if (o != null) tf("%s accounts", accs.size) else updatedText(g), actions = {
+            if (tab != "settings" && box.rows.isNotEmpty()) KBarIcon(KIcons.Filter, "Filters".t(), { box.open = true }, badge = box.active.size, badgeUrgent = false)
+            KBarIcon(KIcons.Refresh, "Refresh".t(), { reload.intValue++ })
+        })
+    }
+    // har tab par wahi filters (Date range, Company, Account, Currency, Country, Campaign, Ad group, Status): sheet me
+    val filters: @Composable () -> Unit = {
+        CompositionLocalProvider(LocalFilterBox provides box) {
+            if (tab != "settings") {
+                val all = "All".t()
+                val accOpts = opts?.arr("accounts")?.mapObj { it }.orEmpty()
+                FilterChips("Date range".t(), G_RANGES.map { it.first to it.second.t() }, range) { range = it }
+                FilterChips("Company".t(), listOf("" to all) + opts?.arr("companies")?.strings().orEmpty().map { it to it }, company) {
+                    company = it; account = ""; campaign = ""; adgroup = ""
                 }
+                FilterChips("Account".t(), listOf("" to all) + accOpts.filter { company.isBlank() || it.s("company") == company }.map { it.s("cid") to it.s("label") }, account) {
+                    account = it; campaign = ""; adgroup = ""
+                }
+                FilterChips("Currency".t(), listOf("" to all) + opts?.arr("currencies")?.strings().orEmpty().map { it to it }, currency) { currency = it }
+                FilterChips("Country".t(), listOf("" to all) + opts?.arr("countries")?.strings().orEmpty().map { it to it }, country) { country = it }
+                val camps = opts?.arr("campaigns")?.mapObj { it }.orEmpty().filter { cp ->
+                    (account.isBlank() || cp.s("cid") == account) && (company.isBlank() || accOpts.any { it.s("cid") == cp.s("cid") && it.s("company") == company })
+                }
+                FilterChips("Campaign".t(), listOf("" to all) + camps.map { it.s("id") to it.s("name").ifBlank { it.s("id") } }, campaign) { campaign = it; adgroup = "" }
+                val ags = opts?.arr("adgroups")?.mapObj { it }.orEmpty().filter {
+                    (campaign.isBlank() || it.s("campaign_id") == campaign) && (account.isBlank() || it.s("cid") == account)
+                }
+                FilterChips("Ad group".t(), listOf("" to all) + ags.map { it.s("id") to it.s("name").ifBlank { it.s("id") } }, adgroup) { adgroup = it }
+                if (sOpts.size > 1) FilterChips("Status".t(), sOpts, status) { status = it }
             }
-            val r = reload.intValue
-            when (tab) {
-                "accounts" -> AccountsTab(g, vm, nav, f, r) { tab = it }
-                "health" -> HealthTab(g, vm, nav, f, r)
-                "policy" -> AlertsTab(g, vm, nav, f, r, "status")
-                "spend", "cpi", "roas" -> MonitorTab(g, vm, nav, f, r, tab)
-                "campaigns" -> CampaignsTab(g, vm, nav, f, r)
-                "creatives" -> CreativesTab(g, vm, nav, f, r)
-                "recs" -> RecsTab(g, vm, nav, f, r)
-                "live" -> LiveMonTab(g, vm, nav, f, r)
-                "history" -> AlertsTab(g, vm, nav, f, r, "all")
-                "settings" -> SettingsTab(g, vm, nav, r) { cid, tok -> token = cid to tok }
-            }
+        }
+    }
+    val body: @Composable () -> Unit = { TabBody(tab, g, vm, nav, f, r, o, usdInr, drop, spike, wide, onAdd, onToken, go) }
+
+    if (wide) {
+        // Fold: tabs poori chaudai me (aadhe pane me "Accounts" kat jaata), phir baayein hero (+ setup / naye accounts), daayein tab ka data
+        KScreen(top = bar) {
+            filters()
+            GadsTabs(tab, openAlerts, go)
+            FilterSummary(box)
+            KTwoPane(
+                left = {
+                    GadsHero(o, accs, usdInr, drop, spike)
+                    if (tab == "accounts" && o != null) AccountsExtra(o, onAdd)
+                },
+                right = { body() },
+            )
+        }
+    } else {
+        KScreen(top = { bar(); GadsHero(o, accs, usdInr, drop, spike) }) {
+            filters()
+            GadsTabs(tab, openAlerts, go)
+            FilterSummary(box)
+            body()
         }
     }
     FilterSheet(box)
-    if (add) AccountSheet(null, "", "", g, vm, onSaved = { cid, tok -> add = false; reload.intValue++; if (tok != null) token = cid to tok }) { add = false }
-    token?.let { (c, t) -> TokenDialog(c, t, vm, g) { token = null } }
+    addPre?.let { (c0, n0) ->
+        AccountSheet(null, c0, n0, g, vm, onSaved = { cid, tok -> addPre = null; reload.intValue++; if (tok != null) token = cid to tok }) { addPre = null }
+    }
+    token?.let { (c0, t0) -> TokenDialog(c0, t0, vm, g) { token = null } }
 }
-
-// ---------------------------------------------------------------- A. All Accounts
 
 @Composable
-private fun AccountsTab(g: GState, vm: GadsVm, nav: NavHostController, f: Map<String, String>, reload: Int, go: (String) -> Unit) {
-    Poll(60_000, f, reload) { vm.load("overview", f) }
-    var addCid by remember { mutableStateOf<Pair<String, String>?>(null) }
-    var token by remember { mutableStateOf<Pair<String, String>?>(null) }
-    GLoad(g, g.view("overview", f), { vm.load("overview", f) }) { o ->
-        val ex = MaterialTheme.extra
-        SetupWarnings(o.obj("setup"))
-        val c = o.obj("counts")
-        GradientHeader("GOOGLE ADS PORTFOLIO".t(), "Read-only monitoring · each account separate".t()) {
-            Spacer(Modifier.height(8.dp))
-            Row {
-                listOf("Accounts".t() to c.d("accounts"), "Critical".t() to c.d("critical"), "Warning".t() to c.d("warning"), "Stale".t() to c.d("stale")).forEach { (l, v) ->
-                    Column(Modifier.weight(1f)) {
-                        Text(l.uppercase(), style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = .75f))
-                        Text(num(v), style = MaterialTheme.typography.headlineMedium, color = Color.White)
-                    }
-                }
-            }
+private fun TabBody(
+    tab: String, g: GState, vm: GadsVm, nav: NavHostController, f: Map<String, String>, r: Int, o: JSONObject?, usdInr: Double?,
+    drop: Double, spike: Double, wide: Boolean, onAdd: (Pair<String, String>) -> Unit, onToken: (String, String) -> Unit, go: (String) -> Unit,
+) {
+    when (tab) {
+        "health" -> HealthTab(g, vm, nav, f, r, o)
+        "policy" -> AlertsTab(g, vm, nav, f, r, "status")
+        "spend", "cpi", "roas" -> MonitorTab(g, vm, nav, f, r, tab)
+        "campaigns" -> CampaignsTab(g, vm, nav, f, r)
+        "creatives" -> CreativesTab(g, vm, nav, f, r)
+        "recs" -> RecsTab(g, vm, nav, f, r)
+        "live" -> LiveMonTab(g, vm, nav, f, r)
+        "history" -> AlertsTab(g, vm, nav, f, r, "all")
+        "settings" -> SettingsTab(g, vm, nav, r, onToken)
+        else -> {
+            AccountsMain(g, vm, nav, f, o, usdInr, drop, spike, onAdd, go)
+            if (!wide && o != null) AccountsExtra(o, onAdd)
         }
-        Spacer(Modifier.height(10.dp))
-        val tot = o.arr("currency_totals").mapObj { it }
-        if (tot.isNotEmpty()) {
-            SectionTitle("Spend today".t(), "per currency, never combined".t())
-            TileGrid(tot.map { Triple(it.s("currency"), num(it.d("spend_today"), 0), tf("%s accounts", it.d("accounts").toInt())) })
-        }
-        SectionTitle("Accounts".t(), o.sn("next_scan_at")?.let { "next scan".t() + " " + tOnly(it) })
-        val accs = o.arr("accounts").mapObj { it }
-        if (accs.isEmpty()) Panel {
-            Empty("No account added yet. Tap + to add one (only accounts you are authorized for).".t())
-        }
-        accs.forEach { j ->
-            val a = GAccount.of(j)
-            Panel(onClick = { nav.navigate("gads/account/${a.cid}") }) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(a.company, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Small("CID " + a.cidFmt + listOfNotNull(a.accountName.ifBlank { null }, a.currency.ifBlank { null }, j.s("tz_used").ifBlank { null }).joinToString(" · ", prefix = " · "), maxLines = 1)
-                    }
-                    Pill(a.health.ifBlank { "NEW" }, gStateColor(a.health))
-                }
-                Spacer(Modifier.height(6.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Column(Modifier.weight(1f)) { GLabel("Spend today".t()); Text(money(j.dn("spend_today"), a.currency), style = MaterialTheme.typography.titleMedium) }
-                    Column(Modifier.weight(1f)) {
-                        GLabel("Pace vs usual".t())
-                        val p = j.dn("pace_pct")
-                        Text(signedPct(p), style = MaterialTheme.typography.titleMedium, color = when { p == null -> MaterialTheme.colorScheme.onSurfaceVariant; p <= -40 || p >= 60 -> ex.bad; else -> MaterialTheme.colorScheme.onSurface })
-                    }
-                    Column(Modifier.weight(1f)) {
-                        GLabel("Data".t())
-                        Text(ageMin(j.dn("data_age_min")?.toInt()), style = MaterialTheme.typography.bodyMedium, color = if (j.b("fresh")) MaterialTheme.colorScheme.onSurface else ex.bad)
-                    }
-                }
-                if (!j.b("fresh")) Small(if (j.dn("data_age_min") == null) "DATA SOURCE DISCONNECTED: no data received yet".t() else "STALE DATA: numbers may be incomplete, no spend alerts until data is fresh".t(), ex.bad)
-                j.sn("reported_through")?.let { Small(tf("Google reported up to %s (account time)", it)) }
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(top = 6.dp)) {
-                    if (j.d("critical") > 0) Pill(tf("%s critical", j.d("critical").toInt()), ex.bad)
-                    if (j.d("warning") > 0) Pill(tf("%s warning", j.d("warning").toInt()), ex.warn)
-                    if (j.d("info") > 0) Pill(tf("%s info", j.d("info").toInt()), Info)
-                    if (!a.monitoring) Pill("monitoring off".t(), ex.muted)
-                }
-            }
-            Spacer(Modifier.height(8.dp))
-        }
-        val disc = o.arr("discovered").mapObj { it }
-        if (disc.isNotEmpty()) {
-            SectionTitle("In the dashboard, not monitored".t())
-            Panel {
-                Small("These accounts are in your existing dashboard data. They are monitored only after you add them and confirm authorization.".t())
-                disc.forEach { d ->
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
-                        Column(Modifier.weight(1f)) {
-                            Text(d.s("name").ifBlank { d.s("cid_fmt") }, style = MaterialTheme.typography.bodyMedium)
-                            Small("CID " + d.s("cid_fmt") + " · " + d.s("currency"))
-                        }
-                        TextButton(onClick = { addCid = d.s("cid_fmt") to d.s("name") }) { Text("Add".t()) }
-                    }
-                }
-            }
-        }
-        Spacer(Modifier.height(10.dp))
-        LastRunPanel(o.optJSONObject("last_run"), g, vm, nav) { go("live") }
-        ReadOnlyNote()
     }
-    addCid?.let { (c, n) -> AccountSheet(null, c, n, g, vm, onSaved = { cid, tok -> addCid = null; vm.load("overview", f); vm.load("filters"); if (tok != null) token = cid to tok }) { addCid = null } }
-    token?.let { (c, t) -> TokenDialog(c, t, vm, g) { token = null } }
 }
 
+// ---------------------------------------------------------------- hero + tabs
+
+/** Sand hero: aaj ka kharcha (₹ + doosri currency alag), "Kul ≈ ₹", raftaar meter, daayein kitne accounts par dhyan. */
+@Composable
+private fun GadsHero(o: JSONObject?, accs: List<JSONObject>, usdInr: Double?, drop: Double, spike: Double) {
+    KHero(KTint.Sand) {
+        val c = Mfc.c
+        val kinds = accs.map { acctState(it, drop, spike).first }
+        val nBad = kinds.count { it == KKind.BAD }
+        val nWarn = kinds.count { it == KKind.WARN }
+        KHeroHead(
+            "Spend today".t(), icon = KIcons.Ads,
+            trailing = if (o != null && accs.isNotEmpty()) {
+                {
+                    when {
+                        nBad > 0 -> KPill(tf("%s act now", nBad), KKind.BAD)
+                        nWarn > 0 -> KPill(tf("%s to watch", nWarn), KKind.WARN)
+                        else -> KPill("All fine".t(), KKind.OK)
+                    }
+                }
+            } else null,
+        )
+        // har currency alag: ₹ pehle, baaki " + $120"
+        val tot = o?.arr("currency_totals")?.mapObj { it.s("currency").trim().uppercase() to it.d("spend_today") }.orEmpty().filter { it.first.isNotBlank() }
+        val main = tot.firstOrNull { gIsInr(it.first) } ?: tot.maxByOrNull { it.second }
+        val rest = if (main == null) emptyList() else tot.filter { it.first != main.first }
+        KBigNum(
+            if (main == null) "–" else gCash(main.second, main.first, 0),
+            suffix = if (rest.isEmpty()) null else rest.joinToString("") { " + " + gCash(it.second, it.first, 0) },
+            size = 48.sp,
+        )
+        if (main != null && rest.isNotEmpty()) {
+            val inr = tot.map { gToInr(it.second, it.first, usdInr) }
+            if (inr.all { it != null }) {
+                val sum = inr.sumOf { it ?: 0.0 }
+                Text(
+                    buildAnnotatedString {
+                        append("Total ≈".t() + " ")
+                        withStyle(SpanStyle(color = c.ink, fontWeight = FontWeight.Bold)) { append(gCash(sum, "INR", 0)) }
+                    },
+                    Modifier.padding(top = 4.dp), color = c.ink2, style = gStyle(15.sp, lh = 20.sp), maxLines = 1,
+                )
+            }
+        }
+        if (o != null && accs.isNotEmpty()) KPaceMeter(portfolioPace(accs, usdInr), -drop, spike)
+    }
+}
+
+/** Accounts | Alerts | AI | More (menu: Health, Policy, Spend, CPI, ROAS, Campaigns, Creatives, Live, Settings). */
+@Composable
+private fun GadsTabs(tab: String, alerts: Int, onPick: (String) -> Unit) {
+    var menu by remember { mutableStateOf(false) }
+    val inMore = tab in G_MORE
+    val idx = G_MAIN.indexOf(tab).let { if (it < 0) 3 else it }
+    Box(Modifier.fillMaxWidth()) {
+        KSegTabs(
+            listOf(gShortTab("accounts"), gShortTab("history"), gShortTab("recs"), if (inMore) gShortTab(tab) else "More".t()),
+            idx,
+            { i -> if (i < G_MAIN.size) onPick(G_MAIN[i]) else menu = true },
+            badges = listOf(0, if (tab == "history") 0 else alerts, 0, 0),
+        )
+        Box(Modifier.align(Alignment.BottomEnd)) {
+            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                KPageTokens {
+                    val c = Mfc.c
+                    Column {
+                        G_MORE.forEach { k ->
+                            val on = k == tab
+                            DropdownMenuItem(
+                                text = {
+                                    GTxt(
+                                        GTABS.firstOrNull { it.first == k }?.second?.t() ?: gShortTab(k), 15.sp, if (on) c.brand else c.ink,
+                                        weight = if (on) FontWeight.Bold else FontWeight.Medium, lh = 20.sp, maxLines = 1,
+                                    )
+                                },
+                                onClick = { menu = false; onPick(k) },
+                                modifier = Modifier.heightIn(min = 48.dp),
+                                leadingIcon = { Icon(gTabIcon(k), null, tint = if (on) c.brand else c.ink2, modifier = Modifier.size(20.dp)) },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- A. Accounts
+
+@Composable
+private fun AccountsMain(
+    g: GState, vm: GadsVm, nav: NavHostController, f: Map<String, String>, o: JSONObject?, usdInr: Double?, drop: Double, spike: Double,
+    onAdd: (Pair<String, String>) -> Unit, go: (String) -> Unit,
+) {
+    GLoad(g, o, { vm.load("overview", f) }) { ov ->
+        val accs = ov.arr("accounts").mapObj { it }
+        KSection("Accounts".t())
+        KCard(list = true) {
+            accs.forEachIndexed { i, j ->
+                if (i > 0) KListDivider(lead = true)
+                val a = GAccount.of(j)
+                val (k, word) = acctState(j, drop, spike)
+                val sp = j.dn("spend_today")
+                val inr = if (sp != null && !gIsInr(a.currency)) gToInr(sp, a.currency, usdInr) else null
+                val name = a.company.ifBlank { a.accountName.ifBlank { a.cidFmt } }
+                KRow(
+                    name, sub = word, subKind = k, lead = { KAvatar(name) },
+                    value = gCash(sp, a.currency), valueSub = inr?.let { "≈ " + gCash(it, "INR", 0) }, chevron = true,
+                    onClick = { nav.navigate("gads/account/${a.cid}") },
+                )
+            }
+            if (accs.isNotEmpty()) KListDivider(lead = true)
+            KRow("Add account".t(), lead = { KIconTile(KIcons.Plus, KKind.ASK) }, onClick = { onAdd("" to "") })
+        }
+        LastScanLine(ov.optJSONObject("last_run"), go)
+        KButton(
+            "Run check now".t(), { vm.act("scan", ok = "Check started".t()) { vm.load("overview", f) } }, Modifier.fillMaxWidth(),
+            kind = KBtn.SOFT, icon = KIcons.Refresh, busy = "scan" in g.busy,
+        )
+    }
+}
+
+/** "63 campaigns · 8 min pehle" (pichhla scan). Tap = Live. */
+@Composable
+private fun LastScanLine(lr: JSONObject?, go: (String) -> Unit) {
+    val c = Mfc.c
+    val r = lr?.let { GRun.of(it) }
+    val txt = if (r == null) "No scan yet".t() else tf("%s campaigns", r.campaigns) + " · " + gAgo(r.finishedAt ?: r.startedAt)
+    Column(
+        Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(RoundedCornerShape(24.dp)).clickable { go("live") }.padding(vertical = 6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Icon(KIcons.Refresh, null, tint = c.ink3, modifier = Modifier.size(16.dp))
+            GTxt(txt, 14.sp, c.ink3, lh = 20.sp, maxLines = 1)
+        }
+        if (r != null && !r.status.equals("SUCCESS", ignoreCase = true)) KStatus(gText(r.status), gStateKind(r.status), Modifier.padding(top = 2.dp))
+    }
+}
+
+/** Setup ki kami + dashboard me dikhe par monitor nahi hote accounts. */
+@Composable
+private fun AccountsExtra(o: JSONObject, onAdd: (Pair<String, String>) -> Unit) {
+    SetupWarnings(o.obj("setup"))
+    val disc = o.arr("discovered").mapObj { it }
+    if (disc.isNotEmpty()) {
+        KSection("Not monitored".t())
+        KCard(list = true) {
+            disc.forEachIndexed { i, d ->
+                if (i > 0) KListDivider(lead = true)
+                val name = d.s("name").ifBlank { d.s("cid_fmt") }
+                KRow(
+                    name, sub = listOfNotNull("CID " + d.s("cid_fmt"), d.s("currency").ifBlank { null }).joinToString(" · "), lead = { KAvatar(name) },
+                    trailing = { KSmallAction("Add".t(), { onAdd(d.s("cid_fmt") to d.s("name")) }) },
+                )
+            }
+        }
+    }
+}
+
+/** Setup ki kami: har ek row (shape + rang + shabd). Sab theek ho to kuch nahi. */
 @Composable
 fun SetupWarnings(s: JSONObject) {
-    val items = listOfNotNull(
-        if (!s.b("cron_ok")) "Cron is not running: scheduled checks will not happen. Add the cron from the setup guide.".t() else null,
-        if (!s.b("email_out")) "Email alerts are off (email is not configured on the server).".t() else null,
-        if (!s.b("email_in")) "Google Ads email intake is not configured: suspension emails are not read.".t() else null,
-        s.s("email_in_error").ifBlank { null }?.let { "Email intake error: ".t() + it },
-        if (!s.b("ai_on")) "AI key not set: rule alerts work, AI explanations are off.".t() else null,
-        if (s.b("dev_mode")) "DEVELOPMENT MODE is on: simulated test events are allowed (labelled SIMULATED).".t() else null,
+    val items = listOfNotNull<Triple<String, KKind, String?>>(
+        if (!s.b("cron_ok")) Triple("Cron off".t(), KKind.BAD, null) else null,
+        if (!s.b("email_out")) Triple("Email alerts off".t(), KKind.WARN, null) else null,
+        if (!s.b("email_in")) Triple("Email intake off".t(), KKind.WARN, null) else null,
+        s.s("email_in_error").ifBlank { null }?.let { Triple("Email intake error".t(), KKind.BAD, it) },
+        if (!s.b("ai_on")) Triple("AI key missing".t(), KKind.WARN, null) else null,
+        if (s.b("dev_mode")) Triple("Development mode".t(), KKind.WARN, null) else null,
     )
     if (items.isEmpty()) return
-    Panel {
-        Text("Setup".t(), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.extra.warn)
-        items.forEach { Small("• $it") }
-    }
-    Spacer(Modifier.height(10.dp))
-}
-
-@Composable
-private fun LastRunPanel(lr: JSONObject?, g: GState, vm: GadsVm, nav: NavHostController, live: () -> Unit) {
-    Panel {
-        if (lr != null) {
-            val r = GRun.of(lr)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Last scan".t(), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-                Pill(r.status, gStateColor(r.status))
-            }
-            Small(r.uid + " · " + tFull(r.finishedAt ?: r.startedAt) + " · " + tf("%s accounts", r.accounts) + " · " + tf("%s campaigns", r.campaigns))
-            Spacer(Modifier.height(8.dp))
-        } else Empty("No scan has run yet".t())
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            BusyButton("Run check now".t(), "scan" in g.busy, Modifier.weight(1f)) { vm.act("scan", ok = "Check started".t()) }
-            OutlinedButton(onClick = live, modifier = Modifier.weight(1f)) { Text("Live Monitoring".t()) }
+    KCard(list = true) {
+        items.forEachIndexed { i, (t, k, e) ->
+            if (i > 0) KListDivider(lead = true)
+            GRow(t, err = e, lead = { KIconTile(gKindIcon(k), k) }, titleLines = 1)
         }
     }
 }
@@ -254,290 +494,393 @@ private fun LastRunPanel(lr: JSONObject?, g: GState, vm: GadsVm, nav: NavHostCon
 // ---------------------------------------------------------------- B. Account Health
 
 @Composable
-private fun HealthTab(g: GState, vm: GadsVm, nav: NavHostController, f: Map<String, String>, reload: Int) {
-    Poll(60_000, f, reload) { vm.load("overview", f) }
-    GLoad(g, g.view("overview", f), { vm.load("overview", f) }) { o ->
-        val accs = o.arr("accounts").mapObj { GAccount.of(it) to it }
-        if (accs.isEmpty()) { Panel { Empty("No account in this filter".t()) }; return@GLoad }
-        val sel = f["account"].orEmpty().ifBlank { if (accs.size == 1) accs[0].first.cid else "" }
-        if (sel.isNotBlank()) { AccountBody(g, vm, nav, sel, reload); return@GLoad }
-        Small("Tap an account for its checks, campaigns, alerts and emails.".t())
-        Spacer(Modifier.height(6.dp))
-        accs.forEach { (a, j) ->
-            Panel(onClick = { nav.navigate("gads/account/${a.cid}") }) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(a.company + " · " + a.cidFmt, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Small(listOfNotNull(a.lastState.ifBlank { null }, "scan".t() + " " + ago(a.lastScanAt), "data".t() + " " + ageMin(j.dn("data_age_min")?.toInt())).joinToString(" · "), maxLines = 2)
-                    }
-                    Pill(a.health.ifBlank { "NEW" }, gStateColor(a.health))
-                }
-                Spacer(Modifier.height(4.dp))
-                SourcesList(j.optJSONObject("sources"))
-            }
-            Spacer(Modifier.height(8.dp))
+private fun HealthTab(g: GState, vm: GadsVm, nav: NavHostController, f: Map<String, String>, reload: Int, o: JSONObject?) {
+    GLoad(g, o, { vm.load("overview", f) }) { ov ->
+        val accs = ov.arr("accounts").mapObj { it }
+        val sel = f["account"].orEmpty().ifBlank { if (accs.size == 1) accs[0].s("cid") else "" }
+        when {
+            accs.isEmpty() -> KCard { KEmpty("No accounts".t(), KIcons.Ads) }
+            sel.isNotBlank() -> AccountBody(g, vm, nav, sel, reload)
+            else -> accs.forEach { j -> HealthCard(j, nav) }
         }
     }
 }
 
-// ---------------------------------------------------------------- C / K. alerts lists
+@Composable
+private fun HealthCard(j: JSONObject, nav: NavHostController) {
+    val c = Mfc.c
+    val a = GAccount.of(j)
+    val h = a.health.ifBlank { "NEW" }
+    val name = a.company.ifBlank { a.cidFmt }
+    val age = j.dn("data_age_min")?.toInt()
+    val scan = a.lastScanAt
+    KCard(list = true) {
+        KRow(
+            name, sub = listOfNotNull(gText(h), a.lastState.ifBlank { null }).joinToString(" · "), subKind = gStateKind(h), lead = { KAvatar(name) },
+            value = if (scan != null) "Scan".t() + " " + gWhen(scan) else null, valuePlain = true, chevron = true,
+            onClick = { nav.navigate("gads/account/${a.cid}") },
+        )
+        KListDivider()
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+            GKv("Data".t(), if (age == null) "No data".t() else ageMin(age), if (age == null) c.red else if (!j.b("fresh")) c.amber else Color.Unspecified)
+            SourcesList(j.optJSONObject("sources"))
+        }
+    }
+}
+
+// ---------------------------------------------------------------- C / K. alert lists
 
 @Composable
 private fun AlertsTab(g: GState, vm: GadsVm, nav: NavHostController, f: Map<String, String>, reload: Int, group: String) {
     val p = f + ("group" to group)
-    Poll(30_000, p, reload) { vm.load("alerts", p) }
-    if (group == "status") Small("Account status comes only from Google: customer status (read-only script) or verified Google Ads emails. Zero spend alone is never called a suspension.".t())
-    else Small("Every alert ever raised, with when it was first seen, notified and closed.".t())
-    Spacer(Modifier.height(6.dp))
+    gPoll(30_000L, p, reload) { vm.load("alerts", p) }
     GLoad(g, g.view("alerts", p), { vm.load("alerts", p) }) { j ->
         val list = j.arr("alerts").mapObj(GAlert::of)
-        SectionTitle(tf("%s alerts", list.size), if (group == "status") "suspension · payment · policy · disapprovals".t() else null)
-        GAlertList(list, nav, if (group == "status") "No suspension, payment or policy problem found".t() else "No alerts in this filter".t())
+        KSection(
+            if (group == "status") "Policy".t() else "Alerts".t(),
+            trailing = if (list.isNotEmpty()) { { KPill(list.size.toString(), KKind.NEUTRAL, icon = null) } } else null,
+        )
+        GAlertList(list, nav, if (group == "status") "No policy issue".t() else "No alerts".t())
     }
 }
 
-// ---------------------------------------------------------------- D / E / F. monitors
+// ---------------------------------------------------------------- D / E / F. Spend / CPI / ROAS
 
 @Composable
 private fun MonitorTab(g: GState, vm: GadsVm, nav: NavHostController, f: Map<String, String>, reload: Int, kind: String) {
     val p = f + ("kind" to kind)
-    Poll(60_000, p, reload) { vm.load("monitor", p) }
+    gPoll(60_000L, p, reload) { vm.load("monitor", p) }
     GLoad(g, g.view("monitor", p), { vm.load("monitor", p) }) { j ->
-        val ex = MaterialTheme.extra
-        Small(j.s("note").t())
-        j.arr("notes").strings().forEach { Small("⚠ $it", ex.warn) }
+        val roasT = gRoasT()
+        val notes = j.arr("notes").strings()
+        if (notes.isNotEmpty()) KCard(list = true) {
+            notes.forEachIndexed { i, n ->
+                if (i > 0) KListDivider(lead = true)
+                GRow(
+                    if (':' in n) "CID " + n.substringBefore(':') else n, status = "Stale data".t() to KKind.WARN,
+                    lead = { KIconTile(KIcons.Dhyan, KKind.WARN) }, titleLines = 1,
+                )
+            }
+        }
+        // har currency alag (7 din)
         val tot = j.arr("currency_totals").mapObj { it }
         if (tot.isNotEmpty()) {
-            Spacer(Modifier.height(6.dp))
-            TileGrid(tot.map { t ->
-                val cur = t.s("currency")
-                when (kind) {
-                    "cpi" -> Triple("CPI 7d · $cur", money(t.dn("d7_cpi"), cur), tf("%s installs", num(t.dn("d7_installs"), 0)))
-                    "roas" -> Triple("ROAS 7d · $cur", t.dn("d7_roas")?.let { num(it * 100, 0) + "%" } ?: "–", money(t.dn("d7_cost"), cur, 0))
-                    else -> Triple("Spend 7d · $cur", num(t.dn("d7_cost"), 0), tf("%s installs", num(t.dn("d7_installs"), 0)))
+            KSection("7 days".t())
+            KCard(list = true) {
+                tot.forEachIndexed { i, t ->
+                    if (i > 0) KListDivider()
+                    val cur = t.s("currency")
+                    val inst = tf("%s installs", num(t.dn("d7_installs"), 0))
+                    when (kind) {
+                        "cpi" -> KRow("CPI · $cur", sub = inst, value = gCash(t.dn("d7_cpi"), cur, 2))
+                        "roas" -> KRow("ROAS · $cur", sub = gCash(t.dn("d7_cost"), cur, 0), value = gRoas(t.dn("d7_roas")), valueColor = kRoasColor(t.dn("d7_roas"), roasT))
+                        else -> KRow("Spend".t() + " · $cur", sub = inst, value = gCash(t.dn("d7_cost"), cur, 0))
+                    }
                 }
-            }, cols = 2)
+            }
         }
         val rows = j.arr("rows").mapObj { it }
-        SectionTitle(tf("%s campaigns", rows.size))
-        if (rows.isEmpty()) Panel { Empty("No campaign data in this filter".t()) }
-        rows.forEach { r ->
-            val cur = r.s("currency")
-            Panel(onClick = { nav.navigate("gads/campaign/${r.s("cid")}/${r.s("campaign_id")}") }) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(r.s("name"), style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Small(r.s("company") + " · CID " + r.s("cid_fmt") + " · " + cur, maxLines = 1)
-                    }
-                    Pill(r.s("status").ifBlank { "?" }, gStateColor(r.s("status")))
-                }
-                Spacer(Modifier.height(4.dp))
-                when (kind) {
-                    "cpi" -> Small(listOfNotNull(r.dn("cpi_target")?.let { "target".t() + " " + money(it, cur) }, r.obj("thresholds").dn("cpi_over_pct")?.let { tf("alert at +%s%%", num(it, 0)) },
-                        r.dn("min_installs")?.let { tf("min %s installs", num(it, 0)) }).joinToString(" · ").ifBlank { "No CPI target: set one in the campaign page".t() })
-                    "roas" -> Small(listOfNotNull(r.dn("roas_target")?.let { "target".t() + " " + num(it * 100, 0) + "%" }, r.obj("thresholds").dn("roas_under_pct")?.let { tf("alert at -%s%%", num(it, 0)) })
-                        .joinToString(" · ").ifBlank { "No ROAS target: set one in the campaign page".t() })
-                    else -> {
-                        val p0 = r.dn("pace_pct")
-                        Row {
-                            Small("Pace vs usual".t() + ": ")
-                            Text(signedPct(p0), style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold,
-                                color = when { p0 == null -> MaterialTheme.colorScheme.onSurfaceVariant; p0 <= -(r.obj("thresholds").dn("drop_pct") ?: 40.0) || p0 >= (r.obj("thresholds").dn("spike_pct") ?: 60.0) -> ex.bad; else -> ex.good })
-                            r.dn("budget")?.let { Small("  · " + "budget".t() + " " + money(it, cur, 0)) }
-                        }
-                    }
-                }
-                Spacer(Modifier.height(4.dp))
-                WindowsTable(r.obj("windows"), cur, kind)
-                r.arr("alerts").mapObj { it }.forEach { a -> Small("● " + a.s("level") + " · " + a.s("title"), levelColor(a.s("level")), 2) }
-                if (!r.b("fresh")) Small("STALE DATA".t(), ex.bad)
-            }
-            Spacer(Modifier.height(8.dp))
-        }
+        KSection(tf("%s campaigns", rows.size))
+        if (rows.isEmpty()) KCard { KEmpty("No campaign data".t(), KIcons.Ads) }
+        rows.forEach { r -> MonitorCard(r, kind, nav, g) }
     }
 }
 
-// ---------------------------------------------------------------- G. Campaign & Ad Group
+@Composable
+private fun MonitorCard(r: JSONObject, kind: String, nav: NavHostController, g: GState) {
+    val c = Mfc.c
+    val cur = r.s("currency")
+    val th = r.obj("thresholds")
+    val (gDrop, gSpike) = gPaceLimits(g)
+    KCard(onClick = { nav.navigate("gads/campaign/${r.s("cid")}/${r.s("campaign_id")}") }) {
+        Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(Modifier.weight(1f)) {
+                GTxt(r.s("name").ifBlank { r.s("campaign_id") }, 15.sp, c.ink, weight = FontWeight.SemiBold, lh = 20.sp, maxLines = 2)
+                GTxt(listOfNotNull(r.s("company").ifBlank { null }, "CID " + r.s("cid_fmt")).joinToString(" · "), 13.sp, c.ink3, lh = 18.sp, maxLines = 1)
+            }
+            val st = r.s("status")
+            KPill(if (st.isBlank()) "–" else gText(st), gStateKind(st))
+        }
+        when (kind) {
+            "cpi" -> {
+                val t = listOfNotNull(
+                    r.dn("cpi_target")?.let { "Target".t() + " " + gCash(it, cur, 2) },
+                    th.dn("cpi_over_pct")?.let { tf("Alert at %s", "+" + num(it, 0) + "%") },
+                    r.dn("min_installs")?.let { tf("Min %s installs", num(it, 0)) },
+                )
+                GNote(if (t.isEmpty()) "No CPI target".t() else t.joinToString(" · "), if (t.isEmpty()) KKind.WARN else KKind.NEUTRAL, Modifier.padding(top = 6.dp))
+            }
+            "roas" -> {
+                val t = listOfNotNull(
+                    r.dn("roas_target")?.let { "Target".t() + " " + gRoas(it) },
+                    th.dn("roas_under_pct")?.let { tf("Alert at %s", "−" + num(it, 0) + "%") },
+                )
+                GNote(if (t.isEmpty()) "No ROAS target".t() else t.joinToString(" · "), if (t.isEmpty()) KKind.WARN else KKind.NEUTRAL, Modifier.padding(top = 6.dp))
+            }
+            else -> {
+                val p0 = r.dn("pace_pct")?.takeIf { it.isFinite() }
+                val lo = th.dn("drop_pct") ?: gDrop
+                val hi = th.dn("spike_pct") ?: gSpike
+                val pk = when {
+                    p0 == null -> KKind.NEUTRAL
+                    p0 <= -lo || p0 >= hi -> KKind.WARN
+                    else -> KKind.OK
+                }
+                Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    GTxt("Pace".t(), 14.sp, c.ink2, lh = 20.sp, maxLines = 1)
+                    KStatus(if (p0 == null) "–" else kSignedPct(p0), pk)
+                    val bud = r.dn("budget")
+                    if (bud != null) GTxt("· " + "Budget".t() + " " + gCash(bud, cur, 0), 14.sp, c.ink2, lh = 20.sp, maxLines = 1)
+                }
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        WindowsTable(r.obj("windows"), cur, kind)
+        r.arr("alerts").mapObj { it }.forEach { a ->
+            val lv = a.s("level")
+            Row(
+                Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable { nav.navigate("gads/alert/${a.l("id")}") },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                KStatus(gLevelWord(lv) + " · " + a.s("title"), gLevelKind(lv), Modifier.weight(1f))
+                Icon(KIcons.Chev, null, tint = c.chev, modifier = Modifier.size(18.dp))
+            }
+        }
+        if (!r.b("fresh")) GNote("Stale data".t(), KKind.WARN, Modifier.padding(top = 4.dp))
+    }
+}
+
+// ---------------------------------------------------------------- G. Campaigns & ad groups
 
 @Composable
 private fun CampaignsTab(g: GState, vm: GadsVm, nav: NavHostController, f: Map<String, String>, reload: Int) {
-    Poll(120_000, f, reload) { vm.load("campaigns", f) }
+    gPoll(120_000L, f, reload) { vm.load("campaigns", f) }
     GLoad(g, g.view("campaigns", f), { vm.load("campaigns", f) }) { j ->
+        val roasT = gRoasT()
         val rows = j.arr("rows").mapObj { it }
-        Small(j.s("note").t())
-        Spacer(Modifier.height(6.dp))
+        if (rows.isEmpty()) KCard { KEmpty("No campaign data".t(), KIcons.Ads) }
         rows.groupBy { it.s("cid") }.forEach { (cid, list) ->
-            val cur = list.first().s("currency")
-            SectionTitle(list.first().s("company") + " · " + list.first().s("cid_fmt"), cur)
-            Panel {
-                Table(listOf("Campaign".t(), "Spend".t(), "Installs".t(), "CPI", "CTR", "ROAS"), list.map { r ->
-                    listOf(r.s("name") + (if (r.s("scope") != "campaign" && r.s("scope").isNotBlank()) " · " + r.s("scope") else ""), num(r.dn("cost"), 0), num(r.dn("installs"), 0),
-                        r.dn("cpi")?.let { num(it, 2) } ?: "–", pct(r.dn("ctr"), 2), r.dn("roas")?.let { num(it * 100, 0) + "%" } ?: "–")
-                }, firstWeight = 2.2f, onRow = { i -> nav.navigate("gads/campaign/$cid/${list[i].s("campaign_id")}") })
-                Small("Money columns in " + cur)
+            val first = list.first()
+            val cur = first.s("currency")
+            KSection(
+                listOfNotNull(first.s("company").ifBlank { null }, first.s("cid_fmt").ifBlank { null }).joinToString(" · ").ifBlank { cid },
+                trailing = if (cur.isNotBlank()) { { KPill(cur, KKind.NEUTRAL, icon = null) } } else null,
+            )
+            val rc = list.map { kRoasColor(it.dn("roas"), roasT) }
+            KCard(padding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
+                GTable(
+                    listOf("Campaign".t(), "Spend".t(), "Installs".t(), "CPI", "CTR", "ROAS"),
+                    list.map { r ->
+                        val sc = r.s("scope")
+                        listOf(
+                            r.s("name").ifBlank { r.s("campaign_id") } + (if (sc.isNotBlank() && sc != "campaign") " · " + gText(sc) else ""),
+                            gCashS(r.dn("cost"), cur), num(r.dn("installs"), 0), gCash(r.dn("cpi"), cur, 2), pct(r.dn("ctr"), 2), gRoas(r.dn("roas")),
+                        )
+                    },
+                    onRow = { i -> nav.navigate("gads/campaign/$cid/${list[i].s("campaign_id")}") },
+                    tint = { ri, ci -> if (ci == 5) rc[ri] else Color.Unspecified },
+                )
             }
-            Spacer(Modifier.height(10.dp))
         }
-        if (rows.isEmpty()) Panel { Empty("No campaign data in this filter".t()) }
     }
 }
 
-// ---------------------------------------------------------------- H. AI Creative Review
+// ---------------------------------------------------------------- H. Creatives
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun CreativesTab(g: GState, vm: GadsVm, nav: NavHostController, f: Map<String, String>, reload: Int) {
-    Poll(300_000, f, reload) { vm.load("creatives", f) }
+    gPoll(300_000L, f, reload) { vm.load("creatives", f) }
     GLoad(g, g.view("creatives", f), { vm.load("creatives", f) }) { j ->
-        Small(j.s("note").t())
-        Spacer(Modifier.height(6.dp))
         val list = j.arr("campaigns").mapObj { it }
-        if (list.isEmpty()) Panel { Empty("No creative data yet (needs asset data from the dashboard or the read-only script)".t()) }
-        list.forEach { c ->
-            Panel(onClick = { nav.navigate("gads/campaign/${c.s("cid")}/${c.s("campaign_id")}") }) {
-                Text(c.s("campaign"), style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Small(c.s("company") + " · CID " + c.s("cid_fmt") + " · " + c.s("source") + " · " + c.s("window"))
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(vertical = 4.dp)) {
-                    val l = c.obj("labels")
-                    l.keys().forEach { k -> Pill("$k ${l.optInt(k)}", gStateColor(k)) }
+        if (list.isEmpty()) KCard { KEmpty("No creative data".t(), KIcons.Palette) }
+        list.forEach { cp ->
+            KCard(onClick = { nav.navigate("gads/campaign/${cp.s("cid")}/${cp.s("campaign_id")}") }) {
+                val c = Mfc.c
+                GTxt(cp.s("campaign").ifBlank { cp.s("campaign_id") }, 15.sp, c.ink, weight = FontWeight.SemiBold, lh = 20.sp, maxLines = 2)
+                GTxt(
+                    listOfNotNull(
+                        cp.s("company").ifBlank { null }, "CID " + cp.s("cid_fmt"), cp.s("source").ifBlank { null }?.t(), cp.s("window").ifBlank { null }?.t(),
+                    ).joinToString(" · "),
+                    13.sp, c.ink3, lh = 18.sp, maxLines = 2,
+                )
+                val lb = cp.obj("labels")
+                FlowRow(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    lb.keys().forEach { k -> if (k.isNotBlank()) KPill(gText(k) + " " + lb.optInt(k), gStateKind(k)) }
                 }
-                c.optJSONObject("ai")?.let { ai ->
-                    ai.sn("suggestion")?.let { AiBox("AI idea for manual review".t(), it) }
-                    if (ai.sn("suggestion") == null) TextButton(onClick = { nav.navigate("gads/alert/${ai.optLong("alert_id")}") }, contentPadding = PaddingValues(0.dp)) { Text("Low-performing assets: open alert →".t()) }
+                cp.optJSONObject("ai")?.let { ai ->
+                    val sug = ai.sn("suggestion")
+                    if (sug != null) AiBox("AI idea".t(), sug)
+                    else KSectionLink("Open alert".t()) { nav.navigate("gads/alert/${ai.optLong("alert_id")}") }
                 }
-                c.arr("assets").mapObj { it }.take(12).forEach { a ->
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 3.dp)) {
-                        Pill(a.s("label").ifBlank { "–" }, gStateColor(a.s("label")))
-                        Spacer(Modifier.width(8.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(a.s("name").ifBlank { a.s("url") }.ifBlank { a.s("asset_id") }, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Small(listOf(gText(a.s("field_type")), gText(a.s("asset_type")), short(a.dn("impressions")) + " impr.", "CTR " + pct(a.dn("ctr"), 2)).joinToString(" · "), maxLines = 1)
-                        }
-                    }
+                cp.arr("assets").mapObj { it }.take(12).forEachIndexed { i, a ->
+                    if (i > 0) KDivider()
+                    GAssetRow(a, ctr = true)
                 }
             }
-            Spacer(Modifier.height(8.dp))
         }
     }
 }
 
+/** AI ka text: chhota spark + label (brand), neeche text. Bina box (card ke andar seedha). */
 @Composable
 fun AiBox(title: String, text: String) {
-    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp).clip(androidx.compose.foundation.shape.RoundedCornerShape(10.dp))
-        .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = .5f)).padding(10.dp)) {
-        Text(title.uppercase(), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(2.dp))
-        Text(text, style = MaterialTheme.typography.bodySmall)
+    val c = Mfc.c
+    Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Icon(KIcons.Spark, null, tint = c.brand, modifier = Modifier.size(16.dp))
+            GTxt(title, 13.sp, c.brand, weight = FontWeight.SemiBold, lh = 18.sp, maxLines = 1)
+        }
+        GTxt(text, 15.sp, c.ink, Modifier.padding(top = 4.dp), lh = 22.sp)
     }
 }
 
-// ---------------------------------------------------------------- I. AI Recommendations
+// ---------------------------------------------------------------- I. AI: kya karna hai
 
 @Composable
 private fun RecsTab(g: GState, vm: GadsVm, nav: NavHostController, f: Map<String, String>, reload: Int) {
-    Poll(60_000, f, reload) { vm.load("recs", f) }
+    gPoll(60_000L, f, reload) { vm.load("recs", f) }
     GLoad(g, g.view("recs", f), { vm.load("recs", f) }) { j ->
-        ReadOnlyNote()
-        Panel {
-            KV("AI".t(), if (j.b("ai_on")) "on".t() else "off (no key)".t(), valueColor = if (j.b("ai_on")) MaterialTheme.extra.good else MaterialTheme.extra.warn)
-            KV("AI calls today".t(), j.d("ai_used_today").toInt().toString() + " / " + j.d("ai_cap").toInt())
-            KV("Last deep analysis".t(), j.sn("last_deep")?.let { tFull(it) } ?: "–")
-            Small("AI runs only when the rules find something (and every 6 hours for a deeper look), so it stays cheap.".t())
-            Spacer(Modifier.height(6.dp))
-            BusyButton("Run deep analysis now".t(), "deep_now" in g.busy, Modifier.fillMaxWidth(), enabled = j.b("ai_on"), outlined = true) {
-                vm.act("deep_now", ok = "Started".t()) { vm.load("recs", f) }
-            }
-        }
-        Spacer(Modifier.height(10.dp))
-        j.optJSONObject("daily")?.let { d ->
-            SectionTitle("Daily portfolio review".t(), tFull(d.sn("at")))
-            val ai = d.optJSONObject("ai")
-            ai?.sn("overall")?.let { AiBox("AI overall".t(), it) }
-            val recs = ai?.arr("accounts")?.mapObj { it }.orEmpty()
-            d.arr("accounts").mapObj { it }.forEach { a ->
-                val cur = a.s("currency")
-                Panel(onClick = { nav.navigate("gads/account/${a.s("cid")}") }) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(a.s("company") + " · " + a.s("cid"), style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Pill(a.s("health").ifBlank { "?" }, gStateColor(a.s("health")))
-                    }
-                    Small(fmtDay(a.s("yesterday")) + ": " + "spend".t() + " " + money(a.dn("spend"), cur) + " (" + "7d avg".t() + " " + money(a.dn("spend_avg7"), cur) + ") · " +
-                        "installs".t() + " " + num(a.dn("installs"), 0) + " · CPI " + money(a.dn("cpi"), cur) + " · ROAS " + (a.dn("roas")?.let { num(it * 100, 0) + "%" } ?: "–"))
-                    val r = recs.firstOrNull { it.s("cid").filter { c -> c.isDigit() } == a.s("cid").filter { c -> c.isDigit() } }
-                    val lines = (if (Lang.hi) r?.arr("recommendations_hi")?.strings() else null)?.takeIf { it.isNotEmpty() } ?: r?.arr("recommendations")?.strings().orEmpty()
-                    lines.forEach { Text("→ $it", style = MaterialTheme.typography.bodySmall) }
-                }
-                Spacer(Modifier.height(8.dp))
-            }
-        }
+        val roasT = gRoasT()
         val lv = f["status"].orEmpty().uppercase()
         val list = j.arr("alerts").mapObj(GAlert::of).filter { lv.isBlank() || it.level == lv }
-        SectionTitle("Open issues and what to do".t(), tf("%s alerts", list.size))
-        if (list.isEmpty()) Panel { Empty("Nothing to fix right now".t()) }
-        list.forEach { a ->
-            Panel(onClick = { nav.navigate("gads/alert/${a.id}") }) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Pill(a.level, levelColor(a.level)); Spacer(Modifier.width(5.dp)); Pill(a.klass, gStateColor(a.klass))
-                    Spacer(Modifier.weight(1f))
-                    a.aiConf?.let { Small(tf("AI %s%% sure", it)) }
+        KSection("What to do".t(), trailing = if (list.isNotEmpty()) { { KPill(list.size.toString(), KKind.NEUTRAL, icon = null) } } else null)
+        if (list.isEmpty()) KCard { KEmpty("Nothing to fix".t(), KIcons.Ok) }
+        list.forEach { a -> RecCard(a, nav) }
+        j.optJSONObject("daily")?.let { d -> DailyReview(d, nav, roasT) }
+        val on = j.b("ai_on")
+        KSection("AI".t())
+        KCard(list = true) {
+            KRow(
+                "AI".t(), sub = if (on) "On".t() else "AI key missing".t(), subKind = if (on) KKind.OK else KKind.WARN,
+                lead = { KIconTile(KIcons.Spark, if (on) KKind.OK else KKind.WARN) },
+            )
+            KListDivider(lead = true)
+            KRow("AI calls today".t(), lead = { KIconTile(KIcons.Chart) }, value = "${j.d("ai_used_today").toInt()} / ${j.d("ai_cap").toInt()}")
+            KListDivider(lead = true)
+            KRow("Last deep analysis".t(), lead = { KIconTile(KIcons.Clock) }, value = j.sn("last_deep")?.let { gWhen(it) } ?: "–", valuePlain = true)
+        }
+        KButton(
+            "Run deep analysis now".t(), { vm.act("deep_now", ok = "Started".t()) { vm.load("recs", f) } }, Modifier.fillMaxWidth(),
+            kind = KBtn.SOFT, icon = KIcons.Spark, enabled = on, busy = "deep_now" in g.busy,
+        )
+        ReadOnlyNote()
+    }
+}
+
+@Composable
+private fun RecCard(a: GAlert, nav: NavHostController) {
+    val c = Mfc.c
+    KCard(onClick = { nav.navigate("gads/alert/${a.id}") }) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            KStatus(listOfNotNull(gLevelWord(a.level), gText(a.klass).ifBlank { null }).joinToString(" · "), gLevelKind(a.level), Modifier.weight(1f))
+            a.aiConf?.let { GTxt(tf("AI %s%% sure", it), 13.sp, c.ink3, lh = 18.sp, maxLines = 1) }
+        }
+        GTxt(a.titleL, 16.sp, c.ink, Modifier.padding(top = 4.dp), weight = FontWeight.SemiBold, lh = 22.sp, maxLines = 3)
+        GTxt(listOfNotNull(a.company.ifBlank { null }, "CID " + a.cidFmt, a.campaign.ifBlank { null }).joinToString(" · "), 13.sp, c.ink3, lh = 18.sp, maxLines = 2)
+        val ai = a.ai
+        if (ai != null) {
+            val sum = if (Lang.hi) ai.s("summary_hi").ifBlank { ai.s("summary") } else ai.s("summary")
+            if (sum.isNotBlank()) AiBox("AI".t(), sum)
+            val acts = (if (Lang.hi) ai.arr("manual_actions_hi").strings() else emptyList()).ifEmpty { ai.arr("manual_actions").strings() }
+            acts.forEach { GStep(it) }
+        } else if (a.nextL.isNotBlank()) GStep(a.nextL)
+    }
+}
+
+/** Roz ka review: har account ka kal (kharcha, installs, CPI, ROAS) + AI ki salah. */
+@Composable
+private fun DailyReview(d: JSONObject, nav: NavHostController, roasT: Double) {
+    val c = Mfc.c
+    val at = d.sn("at")
+    KSection("Daily review".t(), trailing = if (at != null) { { GTxt(gWhen(at), 13.sp, c.ink3, lh = 18.sp, maxLines = 1) } } else null)
+    val ai = d.optJSONObject("ai")
+    ai?.sn("overall")?.let { KCard { AiBox("AI overall".t(), it) } }
+    val recs = ai?.arr("accounts")?.mapObj { it }.orEmpty()
+    d.arr("accounts").mapObj { it }.forEach { a ->
+        val cur = a.s("currency")
+        val digits = a.s("cid").filter { it.isDigit() }
+        KCard(onClick = { nav.navigate("gads/account/${a.s("cid")}") }) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(Modifier.weight(1f)) {
+                    GTxt(a.s("company").ifBlank { a.s("cid") }, 15.sp, c.ink, weight = FontWeight.SemiBold, lh = 20.sp, maxLines = 1)
+                    GTxt("CID " + a.s("cid") + " · " + fmtDay(a.s("yesterday")), 13.sp, c.ink3, lh = 18.sp, maxLines = 1)
                 }
-                Text(a.titleL, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
-                Small(a.company + " · CID " + a.cidFmt + (if (a.campaign.isNotBlank()) " · " + a.campaign else ""))
-                val ai = a.ai
-                if (ai != null) {
-                    val sum = if (Lang.hi) ai.s("summary_hi").ifBlank { ai.s("summary") } else ai.s("summary")
-                    if (sum.isNotBlank()) AiBox("AI", sum)
-                    val acts = (if (Lang.hi) ai.arr("manual_actions_hi").strings() else emptyList()).ifEmpty { ai.arr("manual_actions").strings() }
-                    acts.forEach { Text("→ $it", style = MaterialTheme.typography.bodySmall) }
-                } else Text("→ " + a.nextL, style = MaterialTheme.typography.bodySmall)
+                val h = a.s("health")
+                KPill(if (h.isBlank()) "–" else gText(h), gStateKind(h))
             }
-            Spacer(Modifier.height(8.dp))
+            KSplit(
+                listOf(
+                    "Spend".t() to gCash(a.dn("spend"), cur, 0), "Installs".t() to num(a.dn("installs"), 0),
+                    "CPI" to gCash(a.dn("cpi"), cur, 2), "ROAS" to gRoas(a.dn("roas")),
+                ),
+                listOf(null, null, null, kRoasColor(a.dn("roas"), roasT)),
+            )
+            GTxt(tf("7 day avg %s", gCash(a.dn("spend_avg7"), cur, 0)), 13.sp, c.ink3, Modifier.padding(top = 6.dp), lh = 18.sp, maxLines = 1)
+            val r = recs.firstOrNull { it.s("cid").filter { ch -> ch.isDigit() } == digits }
+            val lines = (if (Lang.hi) r?.arr("recommendations_hi")?.strings() else null)?.takeIf { it.isNotEmpty() } ?: r?.arr("recommendations")?.strings().orEmpty()
+            lines.forEach { GStep(it) }
         }
     }
 }
 
-// ---------------------------------------------------------------- J. Live Monitoring Activity
+// ---------------------------------------------------------------- J. Live
 
 @Composable
 private fun LiveMonTab(g: GState, vm: GadsVm, nav: NavHostController, f: Map<String, String>, reload: Int) {
-    Poll(10_000, f, reload) { vm.load("live", f) }
+    gPoll(10_000L, f, reload) { vm.load("live", f) }
     GLoad(g, g.view("live", f), { vm.load("live", f) }) { j ->
         SetupWarnings(j.obj("setup"))
+        j.optJSONObject("running")?.let { rr ->
+            KCard(list = true) {
+                GRunRow(GRun.of(rr), nav)
+                LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp))
+            }
+        }
         val sc = j.obj("schedule")
         val last = j.obj("last")
-        val lastTs = { k: String -> last.sn(k)?.toLongOrNull()?.let { agoText(it * 1000) } ?: "never".t() }
-        TileGrid(listOf(
-            Triple("Next scan".t(), j.sn("next_scan_at")?.let { tOnly(it) } ?: "–", tf("every %s min", sc.d("scan_min").toInt())),
-            Triple("Last scan".t(), lastTs("scan"), null),
-            Triple("Email check".t(), lastTs("email"), tf("every %s min", sc.d("email_min").toInt())),
-            Triple("Deep AI".t(), lastTs("deep"), tf("every %s h", sc.d("deep_h").toInt())),
-            Triple("Daily review".t(), String.format("%02d:00", sc.d("daily_hour").toInt()), "server time".t()),
-        ))
-        j.optJSONObject("running")?.let { r ->
-            Panel {
-                Text("Running now".t(), style = MaterialTheme.typography.titleSmall, color = Info)
-                GRunRow(GRun.of(r), nav)
-                LinearProgressIndicator(Modifier.fillMaxWidth())
-            }
-            Spacer(Modifier.height(10.dp))
+        val lastTs = { k: String -> last.sn(k)?.toLongOrNull()?.let { agoText(it * 1000) } ?: "Never".t() }
+        KSection("Schedule".t())
+        KCard(list = true) {
+            KRow(
+                "Next scan".t(), lead = { KIconTile(KIcons.Refresh) }, value = j.sn("next_scan_at")?.let { tOnly(it) } ?: "–",
+                valueSub = tf("every %s min", sc.d("scan_min").toInt()),
+            )
+            KListDivider(lead = true)
+            KRow("Last scan".t(), lead = { KIconTile(KIcons.History) }, value = lastTs("scan"), valuePlain = true)
+            KListDivider(lead = true)
+            KRow("Email check".t(), lead = { KIconTile(KIcons.Send) }, value = lastTs("email"), valuePlain = true, valueSub = tf("every %s min", sc.d("email_min").toInt()))
+            KListDivider(lead = true)
+            KRow("Deep AI".t(), lead = { KIconTile(KIcons.Spark) }, value = lastTs("deep"), valuePlain = true, valueSub = tf("every %s h", sc.d("deep_h").toInt()))
+            KListDivider(lead = true)
+            KRow(
+                "Daily review".t(), lead = { KIconTile(KIcons.Calendar) }, value = String.format(Locale.US, "%02d:00", sc.d("daily_hour").toInt()),
+                valueSub = "server time".t(),
+            )
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            BusyButton("Run check now".t(), "scan" in g.busy, Modifier.weight(1f)) { vm.act("scan", ok = "Check started".t()) { vm.load("live", f) } }
-            BusyButton("Check email".t(), "mail_check" in g.busy, Modifier.weight(1f), outlined = true) { vm.act("mail_check", ok = "Started".t()) { vm.load("live", f) } }
+            KButton(
+                "Check now".t(), { vm.act("scan", ok = "Check started".t()) { vm.load("live", f) } }, Modifier.weight(1f),
+                kind = KBtn.SOFT, busy = "scan" in g.busy,
+            )
+            KButton(
+                "Check email".t(), { vm.act("mail_check", ok = "Started".t()) { vm.load("live", f) } }, Modifier.weight(1f),
+                kind = KBtn.OUTLINE, busy = "mail_check" in g.busy,
+            )
         }
-        Spacer(Modifier.height(4.dp))
-        Small("A run that could not fetch data is shown as PARTIAL or FAILED, never as success.".t())
-        Spacer(Modifier.height(8.dp))
         val runs = j.arr("runs").mapObj(GRun::of)
-        SectionTitle("Runs".t(), "auto 10 sec".t())
-        Panel {
-            if (runs.isEmpty()) Empty("No runs yet".t())
-            runs.forEachIndexed { i, r -> GRunRow(r, nav); if (i < runs.lastIndex) Hairline() }
+        KSection("Runs".t(), trailing = { KLive("auto 10 sec".t()) })
+        KCard(list = true) {
+            if (runs.isEmpty()) KEmpty("No runs yet".t())
+            runs.forEachIndexed { i, r ->
+                if (i > 0) KListDivider(lead = true)
+                GRunRow(r, nav)
+            }
         }
-        Spacer(Modifier.height(12.dp))
-        SectionTitle("Activity".t())
-        Panel {
-            val ev = j.arr("events").mapObj(GEvent::of)
-            if (ev.isEmpty()) Empty("Nothing yet".t())
+        val ev = j.arr("events").mapObj(GEvent::of)
+        KSection("Activity".t())
+        KCard {
+            if (ev.isEmpty()) KEmpty("Nothing yet".t())
             ev.forEach { GEventRow(it, nav) }
         }
     }

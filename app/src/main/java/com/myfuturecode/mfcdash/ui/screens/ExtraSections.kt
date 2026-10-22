@@ -49,6 +49,7 @@ import com.myfuturecode.mfcdash.ui.kit.KIcons
 import com.myfuturecode.mfcdash.ui.kit.KKind
 import com.myfuturecode.mfcdash.ui.kit.KRow
 import com.myfuturecode.mfcdash.ui.kit.kRoasColor
+import com.myfuturecode.mfcdash.ui.kit.kRoasKind
 import com.myfuturecode.mfcdash.ui.theme.Mfc
 import com.myfuturecode.mfcdash.util.fmtDay
 import com.myfuturecode.mfcdash.util.inr
@@ -66,9 +67,12 @@ fun ExtraMissingCard(what: String) {
     }
 }
 
-/** ROAS cohort: campaign × D0/D1/D3/D7/Total, har cell target curve ke saamne rangeen. Card ke andar. */
+/**
+ * ROAS cohort: campaign × D0/D1/D3/D7/Total, D-cells target curve ke saamne rangeen. Card ke andar.
+ * Total = ROAS rang niyam (target = Settings ka ROAS target, 100% = break-even).
+ */
 @Composable
-fun RoasCohortTable(rows: List<CampaignRoas>, d: DashData?, onRow: ((CampaignRoas) -> Unit)? = null) {
+fun RoasCohortTable(rows: List<CampaignRoas>, d: DashData?, target: Double = 1.0, onRow: ((CampaignRoas) -> Unit)? = null) {
     val c = Mfc.c
     if (rows.isEmpty()) { Empty("No cohort data".t()); return }
     val heads = listOf("Campaign".t()) + ROAS_TARGET_CURVE.keys + listOf("Total".t())
@@ -84,7 +88,7 @@ fun RoasCohortTable(rows: List<CampaignRoas>, d: DashData?, onRow: ((CampaignRoa
     Row(Modifier.fillMaxWidth()) {
         Spacer(Modifier.weight(1.6f))
         ROAS_TARGET_CURVE.values.forEach { DashText("≥" + pctText(it), 13.sp, c.ink3, Modifier.weight(1f), align = TextAlign.Center) }
-        DashText("≥100%", 13.sp, c.ink3, Modifier.weight(1f), align = TextAlign.Center)
+        DashText("≥" + pctText(maxOf(target, 1.0)), 13.sp, c.ink3, Modifier.weight(1f), align = TextAlign.Center)
     }
     rows.forEach { cr ->
         val m = if (onRow != null) Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable { onRow(cr) } else Modifier.fillMaxWidth()
@@ -95,8 +99,23 @@ fun RoasCohortTable(rows: List<CampaignRoas>, d: DashData?, onRow: ((CampaignRoa
             }
             val vals = listOf(cr.roasD0, cr.roasD1, cr.roasD3, cr.roasD7)
             ROAS_TARGET_CURVE.values.forEachIndexed { i, t -> HeatCell(vals[i], t, roasPct(vals[i]), Modifier.weight(1f)) }
-            HeatCell(cr.roasTotal, 1.0, roasPct(cr.roasTotal), Modifier.weight(1f))
+            CohortTotalCell(cr.roasTotal, target, Modifier.weight(1f))
         }
+    }
+}
+
+/** Total ROAS cell: laal < min(target,100%), amber beech me, hara >= max(target,100%) (kit pill rang). */
+@Composable
+private fun CohortTotalCell(roas: Double?, target: Double, modifier: Modifier) {
+    val c = Mfc.c
+    val (bg, fg) = when (kRoasKind(roas, target)) {
+        KKind.OK -> c.pOkBg to c.pOkFg
+        KKind.WARN -> c.pWarnBg to c.pWarnFg
+        KKind.BAD -> c.pBadBg to c.pBadFg
+        else -> c.pNBg to c.ink3
+    }
+    Box(modifier.padding(2.dp).clip(RoundedCornerShape(8.dp)).background(bg).padding(vertical = 7.dp), contentAlignment = Alignment.Center) {
+        DashText(roasPct(roas?.takeIf { it.isFinite() }), 13.sp, fg, weight = FontWeight.SemiBold, align = TextAlign.Center)
     }
 }
 

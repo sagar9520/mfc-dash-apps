@@ -267,7 +267,8 @@ private fun CoHero(m: JSONObject) {
         val c = Mfc.c
         val r = m.d("inr_per_usd", 95.0)
         val p = m.dn("pct")
-        val k = coKind(p)
+        // koi module ruka = dhyan do (Settings ke hero jaisa)
+        val k = coKind(p).let { if (it == KKind.OK && m.arr("modules").objs().any { x -> x.b("paused") }) KKind.WARN else it }
         val budget = m.d("budget_usd")
         val rem = m.d("remaining_usd")
         val fc = m.d("forecast_usd")

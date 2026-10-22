@@ -57,5 +57,40 @@
                 <action android:name="android.intent.action.QUICKBOOT_POWERON" />
             </intent-filter>
         </receiver>
+
+        <!-- Home-screen widgets (Jetpack Glance): Paisa, Google Ads, App Health -->
+        <receiver
+            android:name=".widget.PaisaWidgetReceiver"
+            android:exported="true"
+            android:label="@string/widget_paisa_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_paisa_info" />
+        </receiver>
+        <receiver
+            android:name=".widget.AdsWidgetReceiver"
+            android:exported="true"
+            android:label="@string/widget_ads_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_ads_info" />
+        </receiver>
+        <receiver
+            android:name=".widget.HealthWidgetReceiver"
+            android:exported="true"
+            android:label="@string/widget_health_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_health_info" />
+        </receiver>
     </application>
 </manifest>

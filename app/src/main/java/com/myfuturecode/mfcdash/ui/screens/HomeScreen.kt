@@ -137,7 +137,8 @@ fun HomeScreen(vm: DashVm, st: UiState, nav: NavHostController, hvm: HealthVm, g
     val gOv = g.view("overview", GADS_P)
     val sOv = sg.view("overview")
     val hk = h.overview?.let { healthKind(it) }
-    val gk = gOv?.let { gadsKind(it) }
+    val (gDrop, gSpike) = gLimits(g)
+    val gk = gOv?.let { gadsKind(it, gDrop, gSpike) }
     val sk = sOv?.let { studioKind(it) }
     val kinds = listOfNotNull(hk, gk, sk)
     val todo = kinds.count { it == KKind.BAD || it == KKind.WARN || it == KKind.ASK }
@@ -179,14 +180,14 @@ fun HomeScreen(vm: DashVm, st: UiState, nav: NavHostController, hvm: HealthVm, g
                     },
                     right = {
                         HealthModule(h, hk, open)
-                        GadsModule(g, gk, open)
+                        GadsModule(g, gk, dash?.r, open)
                         StudioModule(sg, sk, open)
                     },
                 )
             } else {
                 KSection("Today's status".t(), trailing = { HaalPill(todo, known) })
                 HealthModule(h, hk, open)
-                GadsModule(g, gk, open)
+                GadsModule(g, gk, dash?.r, open)
                 StudioModule(sg, sk, open)
                 TopApps(st, money, open, tab)
                 MoreLinks(open)
@@ -235,20 +236,26 @@ private fun NavHostController.goTab(route: String) = navigate(route) {
 
 // ---------------------------------------------------------------- money (hero + top apps)
 
-/** Home ka paisa: Kamai = ad revenue + payments, kharcha = Google Ads. Loss app = kharcha > ₹50 aur ROAS < 100%. */
+/** Home ka paisa: Kamai = ad revenue + payments, kharcha = Google Ads. Profit / loss Apps tab jaisa hi (ginti mile). */
 private class HomeMoney(
     val profit: Double, val earned: Double, val spend: Double, val roas: Double?, val r: Double,
-    val wins: List<PerApp>, val losses: List<PerApp>, val appCount: Int,
-)
+    val wins: List<PerApp>, val losses: List<PerApp>, val appCount: Int, private val names: Map<String, String>,
+) {
+    /** Apps tab jaisa naam: apps list ka naam, warna per_app ka, warna pkg ka aakhri hissa. */
+    fun name(a: PerApp): String = names[a.pkg] ?: a.name.ifBlank { a.pkg.substringAfterLast('.') }
+}
 
 private fun homeMoney(dd: DashData): HomeMoney {
     val k = dd.kpi
     val r = dd.r
     val earned = k.revInr + k.purchaseInr
     val roas = k.roasTotal ?: (if (k.gadsCostInr > 0) earned / k.gadsCostInr else null)
-    val wins = dd.perApp.filter { it.profit(r) > 0 }.sortedByDescending { it.profit(r) }
-    val losses = dd.perApp.filter { a -> a.gadsCostInr > 50 && (a.roas(r) ?: 1.0) < 1.0 }.sortedBy { it.profit(r) }
-    return HomeMoney(k.profitInr, earned, k.gadsCostInr, roas, r, wins, losses, dd.perApp.size)
+    // bina kamai/kharche wale apps kisi taraf nahi (Apps tab me "No data")
+    val active = dd.perApp.filter { it.revInr(r) + it.purchaseInr > 0 || it.gadsCostInr > 0 }
+    val wins = active.filter { it.profit(r) >= 0 }.sortedByDescending { it.profit(r) }
+    val losses = active.filter { it.profit(r) < 0 }.sortedBy { it.profit(r) }
+    val names = dd.apps.filter { it.name.isNotBlank() }.distinctBy { it.pkg }.associate { it.pkg to it.name }
+    return HomeMoney(k.profitInr, earned, k.gadsCostInr, roas, r, wins, losses, dd.perApp.size, names)
 }
 
 /** "+₹18,450" / "−₹2,140" (asli minus). */
@@ -261,6 +268,15 @@ private fun signedInr(v: Double): String = when {
 private fun periodLabel(dd: DashData): String = if (dd.single) fmtDay(dd.from) else fmtDay(dd.from) + " – " + fmtDay(dd.to)
 
 private fun isTodayView(dd: DashData?): Boolean = dd == null || (dd.today && dd.single)
+
+/** Hero ka label, Paisa screen jaisa: Aaj / Kal / 7 din / 30 din ka munafa, custom par tareekh. */
+private fun profitLabel(range: String, dd: DashData): String = when {
+    isTodayView(dd) -> "Today's profit".t()
+    range == "yesterday" -> "Yesterday's profit".t()
+    range == "7d" -> "7 days profit".t()
+    range == "30d" -> "30 days profit".t()
+    else -> "Profit".t() + " · " + periodLabel(dd)
+}
 
 @Composable
 private fun HomeHero(st: UiState, m: HomeMoney?, vm: DashVm, open: (String) -> Unit, tab: (String) -> Unit) {
@@ -278,10 +294,7 @@ private fun HomeHero(st: UiState, m: HomeMoney?, vm: DashVm, open: (String) -> U
     }
     KHero(KTint.Green, onClick = { open("money") }) {
         val c = Mfc.c
-        KHeroHead(
-            if (isTodayView(dd)) "Today's profit".t() else "Profit".t() + " · " + periodLabel(dd),
-            trailing = { HeroFresh(st, dd) },
-        )
+        KHeroHead(profitLabel(st.range, dd), trailing = { HeroFresh(st, dd) })
         KBigNum(signedInr(m.profit), if (m.profit >= 0) c.green else c.red, size = 48.sp)
         KSplit(listOf("Earnings".t() to inr(m.earned), "Ads spend".t() to inr(m.spend)))
         KRoasMeter(m.roas, st.roasTarget)
@@ -300,7 +313,7 @@ private fun winSide(m: HomeMoney): KDuoSide? {
     if (m.appCount == 0) return null
     val a = m.wins.firstOrNull()
     return KDuoSide(
-        tf("%s in profit", m.wins.size), a?.name ?: "None".t(), if (a == null) "–" else signedInr(a.profit(m.r)),
+        tf("%s in profit", m.wins.size), a?.let { m.name(it) } ?: "None".t(), if (a == null) "–" else signedInr(a.profit(m.r)),
         KKind.OK, true, if (a == null) null else "Top:",
     )
 }
@@ -309,7 +322,7 @@ private fun lossSide(m: HomeMoney): KDuoSide? {
     if (m.appCount == 0) return null
     val a = m.losses.firstOrNull()
     return KDuoSide(
-        tf("%s in loss", m.losses.size), a?.name ?: "None".t(), if (a == null) "–" else signedInr(a.profit(m.r)),
+        tf("%s in loss", m.losses.size), a?.let { m.name(it) } ?: "None".t(), if (a == null) "–" else signedInr(a.profit(m.r)),
         KKind.BAD, false, if (a == null) null else "Top:",
     )
 }
@@ -333,15 +346,16 @@ private fun TopApps(st: UiState, m: HomeMoney?, open: (String) -> Unit, tab: (St
                 drawLine(line, Offset(x, 0f), Offset(x, size.height), strokeWidth = 1.dp.toPx())
             },
         ) {
-            TopCol(m.wins, m.r, true, st.roasTarget, open, Modifier.weight(1f).padding(start = 20.dp, end = 16.dp))
-            TopCol(m.losses, m.r, false, st.roasTarget, open, Modifier.weight(1f).padding(start = 18.dp, end = 16.dp))
+            TopCol(m.wins, m, true, st.roasTarget, open, Modifier.weight(1f).padding(start = 20.dp, end = 16.dp))
+            TopCol(m.losses, m, false, st.roasTarget, open, Modifier.weight(1f).padding(start = 18.dp, end = 16.dp))
         }
     }
 }
 
 @Composable
-private fun TopCol(apps: List<PerApp>, r: Double, up: Boolean, target: Double, open: (String) -> Unit, modifier: Modifier) {
+private fun TopCol(apps: List<PerApp>, m: HomeMoney, up: Boolean, target: Double, open: (String) -> Unit, modifier: Modifier) {
     val c = Mfc.c
+    val r = m.r
     val col = if (up) c.green else c.red
     Column(modifier) {
         Column(Modifier.fillMaxWidth().padding(bottom = 12.dp)) {
@@ -363,7 +377,7 @@ private fun TopCol(apps: List<PerApp>, r: Double, up: Boolean, target: Double, o
                     .clickable(role = Role.Button) { open("app/${a.pkg}") }
                     .padding(top = 12.dp, bottom = 10.dp),
             ) {
-                HT(a.name, 15.sp, c.ink, weight = FontWeight.SemiBold, lh = 20.sp)
+                HT(m.name(a), 15.sp, c.ink, weight = FontWeight.SemiBold, lh = 20.sp)
                 Box(Modifier.padding(top = 2.dp)) { KBigNum(signedInr(p), col, size = 18.sp) }
                 HT(
                     if (ro == null) "No spend".t() else "ROAS " + roasPct(ro), 13.sp,
@@ -486,20 +500,49 @@ private fun HealthBody(o: HOverview, open: (String) -> Unit) {
 private fun gAccounts(o: JSONObject): List<JSONObject> =
     o.arr("accounts").mapObj { it }.filter { !it.has("monitoring") || it.b("monitoring") }
 
-private fun gAcctKind(a: JSONObject): KKind {
-    val hl = a.s("health").uppercase()
+/** Pace ki limits (drop %, spike %): Google Ads Settings load ho to wahan se, warna 40 / 60 (Gads screen jaisa). */
+private fun gLimits(g: GState): Pair<Double, Double> {
+    val th = g.view("settings")?.arr("thresholds")?.mapObj { it }.orEmpty()
+    fun v(k: String, d: Double): Double = th.firstOrNull { it.s("key") == k }?.let { it.dn("value") ?: it.dn("default") }?.takeIf { it > 0 } ?: d
+    return v("drop_pct", 40.0) to v("spike_pct", 60.0)
+}
+
+private fun ageShort(m: Int): String = when {
+    m < 120 -> tf("%s min", m)
+    m < 2880 -> tf("%s hours", m / 60)
+    else -> tf("%s days", m / 1440)
+}
+
+/** Account ka haal + chhota shabd, Google Ads screen ke niyam se hi (ginti dono jagah same). */
+private fun gAcct(a: JSONObject, drop: Double, spike: Double): Pair<KKind, String> {
+    val age = a.dn("data_age_min")?.toInt()
+    val crit = a.d("critical").toInt()
+    val warn = a.d("warning").toInt()
+    val health = a.s("health")
+    val paceTxt = a.dn("pace_pct")?.takeIf { it.isFinite() }?.let { p ->
+        when {
+            p < -drop -> tf("Spend %s lower", num(-p, 0) + "%")
+            p > spike -> tf("Spend %s higher", num(p, 0) + "%")
+            else -> null
+        }
+    }
+    val fresh0 = health.isBlank() || health.equals("UNKNOWN", ignoreCase = true)
     return when {
-        a.d("critical") > 0 || hl == "CRITICAL" -> KKind.BAD
-        a.d("warning") > 0 || hl == "WARNING" || hl == "STALE" || hl == "NO_DATA" || (a.has("fresh") && !a.b("fresh")) -> KKind.WARN
-        else -> KKind.OK
+        fresh0 && age == null -> KKind.NEUTRAL to "Just added".t()
+        age == null -> KKind.BAD to "No data".t()
+        !a.b("fresh") -> KKind.WARN to tf("Data %s late", ageShort(age))
+        crit > 0 -> KKind.BAD to tf("%s alerts", crit + warn)
+        warn > 0 -> KKind.WARN to (paceTxt ?: tf("%s alerts", warn))
+        paceTxt != null -> KKind.WARN to paceTxt
+        else -> KKind.OK to KKind.OK.word()
     }
 }
 
-private fun gadsKind(o: JSONObject): KKind {
+private fun gadsKind(o: JSONObject, drop: Double, spike: Double): KKind {
     val accs = gAccounts(o)
     val setup = o.obj("setup")
     val run = o.optJSONObject("last_run")?.s("status").orEmpty()
-    val ks = accs.map { gAcctKind(it) }
+    val ks = accs.map { gAcct(it, drop, spike).first }
     return when {
         accs.isEmpty() -> KKind.NEUTRAL
         (setup.has("cron_ok") && !setup.b("cron_ok")) || run == "FAILED" || KKind.BAD in ks -> KKind.BAD
@@ -508,44 +551,33 @@ private fun gadsKind(o: JSONObject): KKind {
     }
 }
 
-private fun ageShort(m: Int): String = if (m < 120) tf("%s min", m) else tf("%s hours", m / 60)
-
-/** Account ki ek line: "2 critical" / "Data 4 ghante late" / "Kharcha 40% kam". */
-private fun gAcctLine(a: JSONObject): String {
-    val crit = a.d("critical").toInt()
-    val warn = a.d("warning").toInt()
-    val pace = a.dn("pace_pct")
-    return when {
-        crit > 0 -> tf("%s critical", crit)
-        a.has("fresh") && !a.b("fresh") -> a.dn("data_age_min")?.let { tf("Data %s late", ageShort(it.toInt())) } ?: "No data".t()
-        pace != null && pace < -40.0 -> tf("Spend %s lower", num(-pace, 0) + "%")
-        pace != null && pace > 60.0 -> tf("Spend %s higher", num(pace, 0) + "%")
-        warn > 0 -> tf("%s warning", warn)
-        else -> "Watch".t()
+/** Sab accounts ki milkar raftaar: Σ aaj / Σ aam − 1 (alag currency ho to ₹ me), Gads hero jaisa. Na bane to null. */
+private fun gPace(accs: List<JSONObject>, usdInr: Double?): Double? {
+    val mixed = accs.map { it.s("currency").trim().uppercase() }.filter { it.isNotBlank() }.distinct().size > 1
+    var now = 0.0
+    var usual = 0.0
+    for (a in accs) {
+        if (!a.b("fresh")) continue
+        val p = a.dn("pace_pct")?.takeIf { it.isFinite() } ?: continue
+        val u = a.dn("usual_by_now")?.takeIf { it > 0 && it.isFinite() } ?: continue
+        val k = if (!mixed) 1.0 else when (a.s("currency").trim().uppercase()) {
+            "INR" -> 1.0
+            "USD" -> usdInr?.takeIf { it > 0 && it.isFinite() } ?: continue
+            else -> continue
+        }
+        now += u * (1 + p / 100.0) * k
+        usual += u * k
     }
-}
-
-/** Sab accounts ka pace (% normal se). Ek hi currency ho to jod kar, warna average. */
-private fun gPace(accs: List<JSONObject>): Double? {
-    val rows = accs.mapNotNull { a ->
-        val p = a.dn("pace_pct")
-        if (p == null || !p.isFinite()) null else Triple(a.s("currency"), p, a.dn("usual_by_now") ?: 0.0)
-    }
-    if (rows.isEmpty()) return null
-    val oneCur = rows.all { it.third > 0.0 } && rows.map { it.first }.distinct().size == 1
-    if (!oneCur) return rows.map { it.second }.average()
-    val usual = rows.sumOf { it.third }
-    val now = rows.sumOf { it.third * (1 + it.second / 100.0) }
-    return (now - usual) / usual * 100.0
+    return if (usual > 0) (now / usual - 1) * 100 else null
 }
 
 @Composable
-private fun PaceLine(p: Double) {
+private fun PaceLine(p: Double, drop: Double, spike: Double) {
     val c = Mfc.c
-    val k = if (p < -40.0 || p > 60.0) KKind.WARN else KKind.OK
+    val k = if (p < -drop || p > spike) KKind.WARN else KKind.OK
     val w = when {
-        p < -40.0 -> "Below normal".t()
-        p > 60.0 -> "Above normal".t()
+        p < -drop -> "Below normal".t()
+        p > spike -> "Above normal".t()
         else -> "Normal".t()
     }
     Row(
@@ -565,23 +597,24 @@ private fun PaceLine(p: Double) {
 }
 
 @Composable
-private fun GadsModule(g: GState, kind: KKind?, open: (String) -> Unit) {
+private fun GadsModule(g: GState, kind: KKind?, usdInr: Double?, open: (String) -> Unit) {
     val o = g.view("overview", GADS_P)
     KModule(KTint.Sand, { open("gads") }) {
         KModuleHead(KIcons.Ads, "Google Ads".t()) {
             ModPill(kind, o == null && g.missing, o == null && g.error != null, idle = "Not set up".t())
         }
-        if (o == null) ModWait() else GadsBody(o, open)
+        if (o == null) ModWait() else GadsBody(o, gLimits(g), usdInr, open)
     }
 }
 
 @Composable
-private fun GadsBody(o: JSONObject, open: (String) -> Unit) {
+private fun GadsBody(o: JSONObject, lim: Pair<Double, Double>, usdInr: Double?, open: (String) -> Unit) {
+    val (drop, spike) = lim
     val accs = gAccounts(o)
-    val ks = accs.map { gAcctKind(it) }
-    val bad = ks.count { it == KKind.BAD }
-    val warn = ks.count { it == KKind.WARN }
-    val ok = ks.size - bad - warn
+    val st = accs.map { gAcct(it, drop, spike) }
+    val bad = st.count { it.first == KKind.BAD }
+    val warn = st.count { it.first == KKind.WARN }
+    val ok = st.count { it.first == KKind.OK }
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         Column(Modifier.weight(1f)) {
             if (accs.isEmpty()) KCount("0", caption = "No accounts".t())
@@ -589,11 +622,12 @@ private fun GadsBody(o: JSONObject, open: (String) -> Unit) {
         }
         if (accs.isNotEmpty()) KMarks(ok, warn, bad)
     }
-    gPace(accs)?.let { PaceLine(it) }
+    gPace(accs, usdInr)?.let { PaceLine(it, drop, spike) }
     // dikkat wale 2 accounts (turant wale pehle)
-    val worst = accs.zip(ks).filter { it.second != KKind.OK }.sortedBy { if (it.second == KKind.BAD) 0 else 1 }.take(2)
-    val items = worst.map { (a, k) ->
-        KDuoItem(a.s("company").ifBlank { a.s("account_name").ifBlank { a.s("cid_fmt") } }, gAcctLine(a), k)
+    val worst = accs.zip(st).filter { it.second.first == KKind.BAD || it.second.first == KKind.WARN }
+        .sortedBy { if (it.second.first == KKind.BAD) 0 else 1 }.take(2)
+    val items = worst.map { (a, kw) ->
+        KDuoItem(a.s("company").ifBlank { a.s("account_name").ifBlank { a.s("cid_fmt") } }, kw.second, kw.first)
     }
     val cid = worst.singleOrNull()?.first?.s("cid")
     KDuo(items.getOrNull(0), items.getOrNull(1)) { open(if (cid.isNullOrBlank()) "gads" else "gads/account/$cid") }
@@ -608,10 +642,10 @@ private fun studioKind(o: JSONObject): KKind {
     val cron = tsMs(o.sn("cron_last"))
     val now = tsMs(o.sn("server_time")) ?: System.currentTimeMillis()
     val key = o.arr("sources").mapObj { it }.firstOrNull { it.s("id") == "claude_web" }?.s("status")
+    // Studio screen ke hero jaisa: cron band / AI key nahi / budget = turant, cron late = dhyan do
     return when {
-        cron == null || now - cron > 20 * 60_000L -> KKind.BAD
-        lim <= 0.0 || used >= lim -> KKind.BAD
-        key == "NOT_CONFIGURED" -> KKind.BAD
+        cron == null || key == "NOT_CONFIGURED" || lim <= 0.0 || used >= lim -> KKind.BAD
+        now - cron > 20 * 60_000L -> KKind.WARN
         o.arr("pending").length() > 0 -> KKind.ASK
         else -> KKind.OK
     }
@@ -652,6 +686,7 @@ private fun StudioBody(o: JSONObject, open: (String) -> Unit) {
         active = when {
             gates.isNotEmpty() -> 2
             newN > 0 -> 0
+            watchN > 0 -> 1
             else -> -1
         },
     )
@@ -708,7 +743,7 @@ private fun HLine(color: Color) {
     Box(Modifier.fillMaxWidth().height(1.dp).background(color))
 }
 
-/** Chhota label + value (Money / Campaign screens use karti hain). */
+/** Chhota label + value (purana public helper; abhi koi screen use nahi karti, rakha hai taaki kuch na toote). */
 @Composable
 fun Mini(l: String, v: String, modifier: Modifier = Modifier, color: Color? = null) {
     Column(modifier) {

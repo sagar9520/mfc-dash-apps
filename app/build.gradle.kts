@@ -12,8 +12,8 @@ android {
         applicationId = "com.myfuturecode.mfcdash"
         minSdk = 24
         targetSdk = 35
-        versionCode = 11
-        versionName = "1.6.3"
+        versionCode = 12
+        versionName = "1.7.0"
         // Dashboard ka address (aakhri slash ke saath). App ke andar Settings se bhi badal sakte ho.
         buildConfigField("String", "DEFAULT_BASE_URL", "\"https://tirangae-online.live/mfc_dash/\"")
     }
@@ -54,5 +54,8 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("androidx.work:work-runtime-ktx:2.9.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+    // home-screen widgets
+    implementation("androidx.glance:glance-appwidget:1.1.1")
+    implementation("androidx.glance:glance-material3:1.1.1")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

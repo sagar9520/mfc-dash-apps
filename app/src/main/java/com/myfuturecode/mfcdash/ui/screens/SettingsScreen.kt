@@ -12,12 +12,14 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.selection.selectable
@@ -121,6 +123,10 @@ val AI_MODELS = listOf("claude-opus-5-5" to "Opus 5.5 (best)", "claude-sonnet-5-
 
 private val SET_MINUTES = listOf(15, 30, 60)
 
+// ROAS target slider: 50% se 400% (purana 100-400% bhi isme), 10% ke kadam
+private const val SET_ROAS_MIN = .5f
+private const val SET_ROAS_MAX = 4f
+
 /**
  * Settings tab: upar AI Kharcha (mahine ka kharcha / budget, tap = AI Cost screen), phir rows:
  * Claude AI, Bhasha, ROAS target, Rang (Light / Dark / Brand), Widgets | 24x7 monitor, Notifications | account, version.
@@ -179,7 +185,9 @@ private fun SetCostHero(m: JSONObject?, g: GState, onOpen: () -> Unit) {
     KHero(KTint.Sand, onClick = onOpen) {
         val c = Mfc.c
         val p = m?.dn("pct")
-        val k = setCostKind(p)
+        val paused = m?.arr("modules")?.mapObj { it }?.filter { it.b("paused") }.orEmpty()
+        // koi module ruka = dhyan do (kul kharcha kam ho tab bhi)
+        val k = setCostKind(p).let { if (it == KKind.OK && paused.isNotEmpty()) KKind.WARN else it }
         val pill: (@Composable () -> Unit)? = if (m != null && k != KKind.NEUTRAL) { { KPill(k.word(), k) } } else null
         KHeroHead("AI spend".t(), icon = KIcons.Spark, trailing = pill)
         if (m == null) {
@@ -206,7 +214,6 @@ private fun SetCostHero(m: JSONObject?, g: GState, onOpen: () -> Unit) {
                 }
             }
             KProgress((p ?: 0.0).toFloat(), k.zone())
-            val paused = m.arr("modules").mapObj { it }.filter { it.b("paused") }
             if (paused.isNotEmpty()) SetPausedLine(paused)
         }
     }
@@ -244,7 +251,6 @@ private fun setCostKind(p: Double?): KKind = when {
 /** Claude AI, Bhasha, ROAS target, Rang, Widgets. */
 @Composable
 private fun SetMainGroup(vm: DashVm, st: UiState, open: String, flip: (String) -> Unit, placed: Int?, onWidgets: () -> Unit) {
-    val c = Mfc.c
     val app = LocalContext.current.applicationContext as App
     val ai = st.alerts?.ai
     val aiVal = if (ai != null && ai.enabled) "On".t() + " · " + setModelName(ai.model) else "Off".t()
@@ -273,14 +279,10 @@ private fun SetMainGroup(vm: DashVm, st: UiState, open: String, flip: (String) -
         )
         if (open == "roas") SetPanel {
             KSlider(
-                target.coerceIn(.5f, 3f), { target = it }, range = .5f..3f, steps = 24,
+                target.coerceIn(SET_ROAS_MIN, SET_ROAS_MAX), { target = it }, range = SET_ROAS_MIN..SET_ROAS_MAX, steps = 34,
                 onDone = { vm.setRoasTarget((target * 10f).roundToInt() / 10.0) },
             )
-            Row(Modifier.fillMaxWidth()) {
-                SetText("50%", 12.sp, c.ink3)
-                SetText("100% " + "break-even".t(), 12.sp, c.ink3, Modifier.weight(1f), align = TextAlign.Center)
-                SetText("300%", 12.sp, c.ink3)
-            }
+            SetRoasTicks()
         }
         // ---- Rang: teen roop, tap = poori app turant
         KListDivider(true)
@@ -450,6 +452,19 @@ private fun SetText(
     )
 }
 
+/** Slider ke neeche: 50% | 100% break-even (thumb ki sahi jagah par) | 400%. */
+@Composable
+private fun SetRoasTicks() {
+    val c = Mfc.c
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        // KSlider ka thumb 24dp: track 12dp se (width - 12dp) tak
+        val x = 12.dp + (maxWidth - 24.dp) * ((1f - SET_ROAS_MIN) / (SET_ROAS_MAX - SET_ROAS_MIN))
+        SetText("50%", 12.sp, c.ink3, Modifier.align(Alignment.CenterStart))
+        SetText("100% " + "break-even".t(), 12.sp, c.ink2, Modifier.align(Alignment.CenterStart).offset(x = x - 14.dp))
+        SetText(num(SET_ROAS_MAX * 100.0, 0) + "%", 12.sp, c.ink3, Modifier.align(Alignment.CenterEnd))
+    }
+}
+
 /** Row ke shuru ka chhota grey tile (36dp). */
 @Composable
 private fun SetTile(icon: ImageVector) = KIconTile(icon, KKind.NEUTRAL, 36.dp)
@@ -475,22 +490,21 @@ private fun SetToggle(icon: ImageVector, kind: KKind, title: String, on: Boolean
     KRow(title, lead = { KIconTile(icon, kind, 36.dp) }, trailing = { KSwitch(on, onChange) }, onClick = { onChange(!on) })
 }
 
-/** Rang ka chhota preview: page, upar ki patti (brand = gradient), card + button. */
+/** Rang ka chhota preview: page, upar ki patti (brand = gradient), card + button. Chuna hua = brand ring + tick (dibbe me dibba nahi). */
 @Composable
 private fun SetThemeChip(s: ThemeStyle, on: Boolean, modifier: Modifier, onClick: () -> Unit) {
     val c = Mfc.c
     val p = mfcColors(s)
-    val shape = RoundedCornerShape(16.dp)
-    val mini = RoundedCornerShape(10.dp)
+    val mini = RoundedCornerShape(12.dp)
     Column(
-        modifier.clip(shape).border(if (on) 2.dp else 1.dp, if (on) c.brand else c.line, shape)
-            .selectable(selected = on, role = Role.RadioButton, onClick = onClick).padding(8.dp),
+        modifier.clip(RoundedCornerShape(14.dp)).selectable(selected = on, role = Role.RadioButton, onClick = onClick).padding(4.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Box(Modifier.fillMaxWidth()) {
             Column(
-                Modifier.fillMaxWidth().height(48.dp).clip(mini).background(p.page).border(1.dp, p.line, mini).padding(6.dp),
+                Modifier.fillMaxWidth().height(56.dp).clip(mini).background(p.page)
+                    .border(if (on) 2.dp else 1.dp, if (on) c.brand else c.line, mini).padding(7.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 val band = Modifier.fillMaxWidth().height(14.dp).clip(RoundedCornerShape(4.dp))
@@ -502,9 +516,9 @@ private fun SetThemeChip(s: ThemeStyle, on: Boolean, modifier: Modifier, onClick
             }
             // chuna hua: preview ke kone me brand rang ka gol tick
             if (on) Box(
-                Modifier.align(Alignment.TopEnd).padding(top = 2.dp, end = 2.dp).size(20.dp).clip(CircleShape).background(c.brand),
+                Modifier.align(Alignment.TopEnd).padding(top = 4.dp, end = 4.dp).size(20.dp).clip(CircleShape).background(c.btnBg),
                 contentAlignment = Alignment.Center,
-            ) { Icon(KIcons.Check, null, tint = Color.White, modifier = Modifier.size(14.dp)) }
+            ) { Icon(KIcons.Check, null, tint = c.btnFg, modifier = Modifier.size(14.dp)) }
         }
         SetText(
             setThemeName(s), 13.sp, if (on) c.ink else c.ink2, Modifier.fillMaxWidth(),
