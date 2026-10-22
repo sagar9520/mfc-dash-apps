@@ -18,10 +18,22 @@ android {
         buildConfigField("String", "DEFAULT_BASE_URL", "\"https://tirangae-online.live/mfc_dash/\"")
     }
 
+    // Release key GitHub secret se aati hai (CI keystore file ka path + passwords env me deta hai). Local / bina secret: debug hi banta hai.
+    val ksFile = System.getenv("MFC_KEYSTORE_FILE")?.takeIf { it.isNotBlank() }
+    signingConfigs {
+        if (ksFile != null) create("release") {
+            storeFile = file(ksFile)
+            storePassword = System.getenv("MFC_KEYSTORE_PASS")
+            keyAlias = System.getenv("MFC_KEY_ALIAS")
+            keyPassword = System.getenv("MFC_KEY_PASS")
+        }
+    }
     buildTypes {
+        // Sagar ko release APK jaata hai: debuggable nahi, isliye ART poori speed se chalata hai (debug APK se kaafi smooth).
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            if (ksFile != null) signingConfig = signingConfigs.getByName("release")
         }
     }
     compileOptions {
