@@ -37,10 +37,13 @@ internal class WPillM(val text: String, val kind: KKind)
 /** Paisa ki neeche wali line ka ek khana (Live par hara dot). */
 internal class WStat(val label: String, val value: String, val live: Boolean = false)
 
-/** Paisa: bada munafa, ROAS (% + Loss/Profit pill), meter par dot (0..1 = 0..200%, null = kharcha nahi), 3 khane. */
+/**
+ * Paisa: bada munafa, ROAS (% + Loss/Profit pill), meter par dot (0..1 = 0..200%, null = kharcha nahi),
+ * 4 khane (Kamai | Ads se | Payments | Ads kharcha). live = abhi live users ("100"), header me; null = pata nahi.
+ */
 internal class WPaisaV(
     val big: String, val bigTone: WTone, val roas: String, val zone: TopZone, val pill: WPillM?, val pos: Float?,
-    val stats: List<WStat>,
+    val stats: List<WStat>, val live: String?,
 )
 
 /** Ads ki ek line: kharcha (apni currency) + account; budget bar (fill 0..1; null = budget pata nahi, sirf track). */
@@ -159,13 +162,19 @@ private fun paisaV(s: PaisaSnap?): WPaisaV {
         p < 0 -> WTone.BAD
         else -> WTone.INK
     }
+    // Kamai = gol kiye dono hisson ka jod (₹2,146 + ₹178 = ₹2,324, ₹1 ka farq nahi); purana snap (ads / pay nahi) = earned
+    val ads = s?.ads
+    val pay = s?.pay
+    val earned = if (ads != null && pay != null) (Math.round(ads) + Math.round(pay)).toDouble() else s?.earned
     return WPaisaV(
         wSignedInr(p), tone, wPct(r), z, pill, wRoasPos(r),
         listOf(
-            WStat("Earnings".t(), wInr(s?.earned)),
+            WStat("Earnings".t(), wInr(earned)),
+            WStat("From ads".t(), wInr(ads)),
+            WStat("Payments".t(), wInr(pay)),
             WStat("Ads spend".t(), wInr(s?.spend)),
-            WStat("Live".t(), wNum(s?.live), live = true),
         ),
+        s?.live?.let { wNum(it) },
     )
 }
 
@@ -352,16 +361,24 @@ internal const val W_SEP = 12f  // patli line ke dono taraf
 /** Header ki line (22dp, bade font par zyada). */
 internal fun wHdr(scale: Float): Float = max(22f, wLine(14f, scale))
 
-/** Header: MFC nishaan (Paisa), naam (kata hua), refresh + samay (Paisa). */
-internal class WHeadPlan(val mark: Boolean, val title: String, val refresh: Boolean, val time: Boolean)
+/** Header: MFC nishaan (Paisa), naam (kata hua), refresh + samay (Paisa). live = "● 100 live" samay se pehle (null = nahi). */
+internal class WHeadPlan(val mark: Boolean, val title: String, val refresh: Boolean, val time: Boolean, val live: String? = null)
 
-/** Paisa header: jagah kam ho to pehle samay hatta (data purana ho to pehle nishaan), phir naam katta. */
+/** Header ka "● 100 live": 8 gap + dot 7 + 5 + likhai (12sp). */
+internal fun wHeadLiveW(text: String, scale: Float): Float = 8f + 7f + 5f + wTextW(text, 12f, scale, bold = true)
+
+/** Paisa header: jagah kam ho to live bachane ko pehle nishaan hatta, phir live, phir samay (data purana ho to pehle nishaan), phir naam katta. */
 internal fun wHeadPlan(v: WView, inner: Float, scale: Float): WHeadPlan {
     val titleW = wTextW(v.title, 14f, scale, bold = true)
     if (v.login) return WHeadPlan(27f + titleW <= inner, wFit(v.title, inner, 14f, scale, true), refresh = false, time = false)
     val right = 8f + 16f
     val timeW = 5f + wTextW(v.time, 12f, scale)
     val mark = 27f
+    // live tabhi jab poora naam + samay bhi aa jaye
+    val live = v.paisa?.live?.let { tf("%s live", it) }
+    if (live != null && mark + titleW + wHeadLiveW(live, scale) + right + timeW <= inner) return WHeadPlan(true, v.title, true, true, live)
+    // chauda roop me live sirf header me hai: nishaan hata ke jagah mile to wahi
+    if (live != null && titleW + wHeadLiveW(live, scale) + right + timeW <= inner) return WHeadPlan(false, v.title, true, true, live)
     return when {
         mark + titleW + right + timeW <= inner -> WHeadPlan(true, v.title, true, true)
         v.stale && titleW + right + timeW <= inner -> WHeadPlan(false, v.title, true, true)
@@ -372,14 +389,25 @@ internal fun wHeadPlan(v: WView, inner: Float, scale: Float): WHeadPlan {
 }
 
 /**
- * Paisa. Chauda (>= 250dp): bada munafa + daayein ROAS, meter, neeche 3 khane (jagah kam ho to pehle meter hatta,
- * phir number chhota, phir khane). Patla (2x2): bada munafa, ROAS line, khane chhoti lines me.
- * pill: 0 = nahi, 1 = sirf icon, 2 = icon + shabd.
+ * Paisa. Chauda (>= 250dp): bada munafa + daayein ROAS, meter, neeche 4 khane (jagah kam ho to pehle meter hatta,
+ * phir number chhota, phir khane). Patla (2x2): bada munafa, ROAS line, khane chhoti lines me (wPaisaRows).
+ * pill: 0 = nahi, 1 = sirf icon, 2 = icon + shabd. stats = kitne khane / lines; labSp = khane ke label ka size,
+ * colW = ek khane ki chaudai, sep = line ke dono taraf ki jagah.
  */
 internal class WPaisaPlan(
     val narrow: Boolean, val head: WHeadPlan, val bigSp: Float, val roasLabel: Boolean, val roasLine: Boolean, val pill: Int,
-    val meter: Boolean, val stats: Int, val statSp: Float,
+    val meter: Boolean, val stats: Int, val statSp: Float, val labSp: Float, val colW: Float, val sep: Float,
 )
+
+/**
+ * Patle roop ki lines (n tak): saare khane, aur header me live ki jagah na mili ho to aakhri line Live (hara dot).
+ * Jagah kam ho to pehle Kamai + Ads kharcha (munafa inhi do se), phir Ads se, Payments, Live; dikhein usi kram me.
+ */
+internal fun wPaisaRows(pv: WPaisaV, head: WHeadPlan, n: Int = Int.MAX_VALUE): List<WStat> {
+    val live = pv.live
+    val all = if (head.live == null && live != null) pv.stats + WStat("Live".t(), live, live = true) else pv.stats
+    return listOf(0, 3, 1, 2, 4).filter { it < all.size }.take(n).sorted().map { all[it] }
+}
 
 internal fun wPillW(text: String, sp: Float, scale: Float, full: Boolean): Float =
     if (full) 6f + 14f + 4f + wTextW(text, sp, scale, true) + 9f else 6f + 14f + 6f
@@ -391,10 +419,16 @@ internal fun wPaisaPlan(v: WView, w: Float, h: Float, scale: Float): WPaisaPlan 
     val head = wHeadPlan(v, inner, scale)
     val hdr = wHdr(scale)
     val pillM = pv.pill
-    // 3 khane: har ek (inner - 2 line) / 3 chauda. 12sp par bhi koi number na aaye (bada font / lakhon ka mahina)
-    // to "₹22,9…" jaisa kata number nahi: patla roop, jisme har khana apni poori line me
-    val colW = (inner - 2 * (2 * W_SEP + 1f)) / 3f
-    val statsTight = pv.stats.any { wTextW(it.value, 12f, scale, true) > colW }
+    // n khane: har ek (inner - (n-1) line) / n chauda (4 khane par line ke dono taraf 10dp, mockup jaisa).
+    // 12sp par koi number na aaye (bada font / lakhon ka mahina) to 4 khano me pehle line paas (6dp), phir 11sp.
+    // Tab bhi na aaye to "₹22,9…" jaisa kata number nahi: patla roop, jisme har khana apni poori line me
+    val n = pv.stats.size
+    fun colOf(sep: Float) = (inner - (n - 1) * (2 * sep + 1f)) / n
+    val tries = if (n > 3) listOf(10f to 12f, 6f to 12f, 6f to 11f) else listOf(W_SEP to 12f)
+    val fits = tries.firstOrNull { (sep, sp) -> pv.stats.all { wTextW(it.value, sp, scale, true) <= colOf(sep) } }
+    val (sep, minSp) = fits ?: tries.first()
+    val colW = colOf(sep)
+    val statsTight = fits == null
     if (w < 250f || statsTight) {
         // patla: ROAS ek line me, khane label-number lines
         var big = wFitSp(pv.big, inner / 1.04f, 34f, 18f, scale)
@@ -411,9 +445,10 @@ internal fun wPaisaPlan(v: WView, w: Float, h: Float, scale: Float): WPaisaPlan 
         while (base() > ih && big > 16f) big -= 1f
         if (base() > ih) roasLine = false
         val rowH = wLine(13f, scale) + 2f
-        val n = floor((ih - base() - 4f) / rowH).toInt().coerceIn(0, 3)
-        val meter = roasLine && n == 3 && ih - base() - 4f - 3 * rowH >= 16f
-        return WPaisaPlan(true, head, big, false, roasLine, pill, meter, n, 13f)
+        val most = wPaisaRows(pv, head).size
+        val rows = floor((ih - base() - 4f) / rowH).toInt().coerceIn(0, most)
+        val meter = roasLine && rows == most && ih - base() - 4f - most * rowH >= 16f
+        return WPaisaPlan(true, head, big, false, roasLine, pill, meter, rows, 13f, 12f, inner, sep)
     }
     val roasValW = wTextW(pv.roas, 22f, scale, true)
     val roasLblW = wTextW("ROAS", 12f, scale)
@@ -431,26 +466,30 @@ internal fun wPaisaPlan(v: WView, w: Float, h: Float, scale: Float): WPaisaPlan 
     var pill = if (pillM == null) 0 else 2
     if (pill == 2 && bigFit(2) < 30f) pill = 1
     val fit = bigFit(pill)
-    // lamba number ho to sab khano ka font chhota
-    val statSp = pv.stats.minOf { wFitSp(it.value, colW, 17f, 12f, scale) }
-    val statsH = wLine(12f, scale) + wLine(statSp, scale)
+    // lamba number ho to sab khano ka font chhota (4 khane: 16sp tak, mockup jaisa)
+    val statSp = pv.stats.minOf { wFitSp(it.value, colW, if (n > 3) 16f else 17f, minSp, scale) }
+    // label 12sp, na aaye to 10.5sp tak chhota; phir bhi na aaye to 11sp par "…" se kata (number kabhi nahi katta)
+    val labSp = listOf(12f, 11.5f, 11f, 10.5f).firstOrNull { sp -> pv.stats.all { wTextW(it.label, sp, scale) <= colW } } ?: 11f
+    val statsH = wLine(labSp, scale) + wLine(statSp, scale)
     fun midH(b: Float, label: Boolean) = max(wLine(b, scale), (if (label) wLine(12f, scale) else 0f) + max(wLine(22f, scale), 24f))
     fun need(b: Float, meter: Boolean, stats: Boolean, label: Boolean) =
         hdr + 2f + midH(b, label) + (if (meter) 4f + 12f else 0f) + (if (stats) 6f + statsH else 0f)
-    if (need(fit, true, true, true) <= ih) return WPaisaPlan(false, head, fit, true, true, pill, true, 3, statSp)
-    if (need(fit, false, true, true) <= ih) return WPaisaPlan(false, head, fit, true, true, pill, false, 3, statSp)
+    fun plan(b: Float, label: Boolean, pl: Int, meter: Boolean, stats: Int) =
+        WPaisaPlan(false, head, b, label, true, pl, meter, stats, statSp, labSp, colW, sep)
+    if (need(fit, true, true, true) <= ih) return plan(fit, true, pill, true, n)
+    if (need(fit, false, true, true) <= ih) return plan(fit, true, pill, false, n)
     // ROAS ek line me ho to number ki jagah kam: tab bhi tang ho to pill hatao
     val pillIn = if (pill > 0 && bigFit(pill, false) < 24f) 0 else pill
     for (label in listOf(true, false)) {
         val pl = if (label) pill else pillIn
         var b = if (label) fit else min(fit, bigFit(pl, false))
         while (b > 24f && need(b, false, true, label) > ih) b -= 1f
-        if (need(b, false, true, label) <= ih) return WPaisaPlan(false, head, b, label, true, pl, false, 3, statSp)
+        if (need(b, false, true, label) <= ih) return plan(b, label, pl, false, n)
     }
     // bahut neecha: sirf header + bada number + ROAS (ek line)
     var b = min(fit, bigFit(pillIn, false))
     while (b > 18f && need(b, false, false, false) > ih) b -= 1f
-    return WPaisaPlan(false, head, b, false, true, pillIn, false, 0, statSp)
+    return plan(b, false, pillIn, false, 0)
 }
 
 /**

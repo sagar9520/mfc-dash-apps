@@ -286,11 +286,12 @@ private fun WSkelPreview(v: WView, modifier: Modifier, onClick: (() -> Unit)?) {
                     }
                     KSkelLine(1f, 6.dp)
                     Box(Modifier.weight(1f))
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                        repeat(3) { i ->
+                    // 4 khane: Kamai | Ads se | Payments | Ads kharcha
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        repeat(4) { i ->
                             Column(Modifier.weight(1f)) {
-                                KSkelLine(listOf(.7f, .6f, .75f)[i], 9.dp)
-                                KSkelLine(listOf(.85f, .8f, .5f)[i], 14.dp, Modifier.padding(top = 6.dp))
+                                KSkelLine(listOf(.7f, .65f, .75f, .8f)[i], 9.dp)
+                                KSkelLine(listOf(.85f, .8f, .5f, .85f)[i], 14.dp, Modifier.padding(top = 6.dp))
                             }
                         }
                     }

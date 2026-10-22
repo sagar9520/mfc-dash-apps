@@ -911,6 +911,7 @@ private fun DailyReview(d: JSONObject, nav: NavHostController, roasT: Double) {
                     "CPI" to gCash(a.dn("cpi"), cur, 2), "ROAS" to gRoas(a.dn("roas")),
                 ),
                 listOf(null, null, null, kRoasColor(a.dn("roas"), roasT)),
+                compact = false,
             )
             GTxt(tf("7 day avg %s", gCash(a.dn("spend_avg7"), cur, 0)), 13.sp, c.ink3, Modifier.padding(top = 6.dp), lh = 18.sp, maxLines = 1)
             val r = recs.firstOrNull { it.s("cid").filter { ch -> ch.isDigit() } == digits }

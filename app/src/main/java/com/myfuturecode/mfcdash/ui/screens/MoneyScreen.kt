@@ -137,7 +137,7 @@ private fun PaisaMain(x: PaisaCtx, openApps: () -> Unit, go: (String) -> Unit) {
         DashPeriodTabs(x.vm, st, Modifier.padding(start = 16.dp, end = 16.dp, top = 2.dp, bottom = 6.dp))
         if (!wide) {
             if (v != null) MoneyHero(v.d, st, moneyProfitLabel(st.range))
-            else if (x.loading) KSkelHero()   // pehli baar: hero ki jagah skeleton (brand band par bhi)
+            else if (x.loading) KSkelHero(split = 4)   // pehli baar: hero ki jagah skeleton (brand band par bhi)
         }
     }) {
         if (v == null) DashNoData(st, x.loading, { PaisaSkel(wide) }, x.retry)
@@ -175,7 +175,7 @@ private fun PaisaSkel(wide: Boolean) {
             KSkelSection(width = 60.dp)
             KSkelRows(6, value = false)
         }
-        if (wide) KTwoPane(left = { KSkelHero(); week() }, right = rest) else { week(); rest() }
+        if (wide) KTwoPane(left = { KSkelHero(split = 4); week() }, right = rest) else { week(); rest() }
     }
 }
 

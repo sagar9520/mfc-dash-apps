@@ -355,9 +355,9 @@ private fun NavHostController.goTab(route: String) = navigate(route) {
 
 // ---------------------------------------------------------------- money (hero + top apps)
 
-/** Home ka paisa: Kamai = ad revenue + payments, kharcha = Google Ads. Profit / loss Apps tab jaisa hi (ginti mile). */
+/** Home ka paisa: Kamai = ads (ad revenue) + pay (payments), kharcha = Google Ads. Profit / loss Apps tab jaisa hi (ginti mile). */
 private class HomeMoney(
-    val profit: Double, val earned: Double, val spend: Double, val roas: Double?, val r: Double,
+    val profit: Double, val ads: Double, val pay: Double, val spend: Double, val roas: Double?, val r: Double,
     val wins: List<PerApp>, val losses: List<PerApp>, val appCount: Int, private val names: Map<String, String>,
 ) {
     /** Apps tab jaisa naam: apps list ka naam, warna per_app ka, warna pkg ka aakhri hissa. */
@@ -374,7 +374,7 @@ private fun homeMoney(dd: DashData): HomeMoney {
     val wins = active.filter { it.profit(r) >= 0 }.sortedByDescending { it.profit(r) }
     val losses = active.filter { it.profit(r) < 0 }.sortedBy { it.profit(r) }
     val names = dd.apps.filter { it.name.isNotBlank() }.distinctBy { it.pkg }.associate { it.pkg to it.name }
-    return HomeMoney(k.profitInr, earned, k.gadsCostInr, roas, r, wins, losses, dd.perApp.size, names)
+    return HomeMoney(k.profitInr, k.revInr, k.purchaseInr, k.gadsCostInr, roas, r, wins, losses, dd.perApp.size, names)
 }
 
 /** "+₹18,450" / "−₹2,140" (asli minus). */
@@ -414,13 +414,13 @@ private fun HomeHero(st: UiState, m: HomeMoney?, vm: DashVm, open: (String) -> U
         val c = Mfc.c
         KHeroHead(profitLabel(st.range, dd), trailing = { HeroFresh(st, dd) })
         KBigNum(signedInr(m.profit), if (m.profit >= 0) c.green else c.red, size = 48.sp)
-        KSplit(listOf("Earnings".t() to inr(m.earned), "Ads spend".t() to inr(m.spend)))
+        KSplit(moneySplit(m.ads, m.pay, m.spend))
         KRoasMeter(m.roas, st.roasTarget)
         KHeroDuo(winSide(m), lossSide(m)) { tab("apps") }
     }
 }
 
-/** Paisa aane tak hero ka dhaancha: label, bada number, Kamai | Kharcha, ROAS meter, profit | loss patti (asli jitna ooncha). */
+/** Paisa aane tak hero ka dhaancha: label, bada number, Kamai | Ads se | Payments | Kharcha, ROAS meter, profit | loss patti (asli jitna ooncha). */
 @Composable
 private fun HomeHeroSkel() {
     KHero(KTint.Green) {
@@ -429,14 +429,14 @@ private fun HomeHeroSkel() {
         KSkeleton {
             Column(Modifier.fillMaxWidth()) {
                 Box(Modifier.fillMaxWidth().height(56.dp), contentAlignment = Alignment.CenterStart) { KSkelLine(.52f, 38.dp) }
-                // Kamai | Kharcha
+                // Kamai | Ads se | Payments | Kharcha (4 khaane, KSplit jaisa 10dp gap)
                 Column(Modifier.fillMaxWidth().padding(top = 10.dp)) {
                     HLine(c.line)
                     Row(Modifier.fillMaxWidth().padding(top = 12.dp)) {
-                        repeat(2) { i ->
-                            Column(Modifier.weight(1f).leftLine(i > 0, c.line).padding(start = if (i > 0) 18.dp else 0.dp, end = 4.dp)) {
-                                KSkelLine(if (i == 0) 64.dp else 80.dp, 11.dp)
-                                KSkelLine(if (i == 0) 96.dp else 84.dp, 18.dp, Modifier.padding(top = 9.dp))
+                        repeat(4) { i ->
+                            Column(Modifier.weight(1f).leftLine(i > 0, c.line).padding(start = if (i > 0) 10.dp else 0.dp, end = 4.dp)) {
+                                KSkelLine(if (i % 2 == 0) .66f else .84f, 11.dp)
+                                KSkelLine(if (i % 2 == 0) .92f else .74f, 16.dp, Modifier.padding(top = 7.dp))
                             }
                         }
                     }

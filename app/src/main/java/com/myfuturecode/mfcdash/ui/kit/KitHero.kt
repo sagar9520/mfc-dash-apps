@@ -157,11 +157,14 @@ fun KBigNum(text: String, color: Color = Color.Unspecified, suffix: String? = nu
     KFit(s, kStyle(size, FontWeight.Bold, size * 1.13f, (-0.02).em), col)
 }
 
-/** Hero ke 2-3 number ek line me (Kamai | Ads kharcha | ROAS), beech me line. */
+/**
+ * Hero ke 2-4 number ek line me (Kamai | Ads se | Payments | Ads kharcha), beech me line.
+ * compact = chhota font, kam gap (4 khane wala paisa hero); false = 3 khano jaisa (Gads account card ke 4 khane).
+ */
 @Composable
-fun KSplit(items: List<Pair<String, String>>, colors: List<Color?> = emptyList()) {
+fun KSplit(items: List<Pair<String, String>>, colors: List<Color?> = emptyList(), compact: Boolean = items.size >= 4) {
     val c = Mfc.c
-    val three = items.size >= 3
+    val three = !compact && items.size >= 3
     val top = LocalKLine.current.takeOrElse { c.line }
     Column(Modifier.fillMaxWidth().padding(top = 10.dp)) {
         KHLine(top)
@@ -169,11 +172,14 @@ fun KSplit(items: List<Pair<String, String>>, colors: List<Color?> = emptyList()
             items.forEachIndexed { i, (k, v) ->
                 Column(
                     Modifier.weight(1f).kLeftLine(c.line, i > 0)
-                        .padding(start = if (i > 0) (if (three) 14.dp else 18.dp) else 0.dp, end = 4.dp),
+                        .padding(start = if (i > 0) (if (compact) 10.dp else if (three) 14.dp else 18.dp) else 0.dp, end = 4.dp),
                 ) {
-                    KT(k, 14.sp, c.ink2, lh = 18.sp)
+                    // compact (4 khaane): label bhi KFit (chhota phone par "Ads khar…" nahi)
+                    if (compact) KFit(k, kStyle(13.sp, lh = 18.sp), c.ink2) else KT(k, 14.sp, c.ink2, lh = 18.sp)
                     val col = kFix(colors.getOrNull(i) ?: Color.Unspecified, c).takeOrElse { c.ink }
-                    KFit(v, kStyle(if (three) 20.sp else 22.sp, FontWeight.Bold, 28.sp, (-0.01).em), col, Modifier.padding(top = 1.dp))
+                    val vs = if (compact) kStyle(18.sp, FontWeight.Bold, 24.sp, (-0.01).em)
+                    else kStyle(if (three) 20.sp else 22.sp, FontWeight.Bold, 28.sp, (-0.01).em)
+                    KFit(v, vs, col, Modifier.padding(top = 1.dp))
                 }
             }
         }

@@ -195,9 +195,9 @@ private val SkelH = listOf(.55f, .72f, .40f, .82f, .63f, .90f, .70f)
 
 // ---------------- ready-made (kit components jaise) ----------------
 
-/** KHero jaisa: label + pill, bada number, 2 numbers (split), meter. Wahi card / brand band / kone. */
+/** KHero jaisa: label + pill, bada number, split ke numbers (2, ya 4 = paisa hero), meter. Wahi card / brand band / kone. */
 @Composable
-fun KSkelHero(tint: KTint = KTint.Green, modifier: Modifier = Modifier) = KSkelRoot { sem ->
+fun KSkelHero(tint: KTint = KTint.Green, modifier: Modifier = Modifier, split: Int = 2) = KSkelRoot { sem ->
     KHero(tint, modifier.then(sem)) {
         val c = Mfc.c
         val top = LocalKLine.current.takeOrElse { c.line }
@@ -208,15 +208,17 @@ fun KSkelHero(tint: KTint = KTint.Green, modifier: Modifier = Modifier) = KSkelR
         }
         // bada number (48sp)
         Box(Modifier.fillMaxWidth().height(54.dp), contentAlignment = Alignment.CenterStart) { KSkelLine(.56f, 36.dp) }
-        // split: do numbers, beech me line
+        // split: numbers, beech me line (4 khane = KSplit jaisa 10dp gap, chhoti lines)
         Column(Modifier.fillMaxWidth().padding(top = 10.dp)) {
             KHLine(top)
             Row(Modifier.fillMaxWidth().padding(top = 12.dp)) {
-                repeat(2) { i ->
-                    Column(Modifier.weight(1f).kLeftLine(c.line, i > 0).padding(start = if (i > 0) 18.dp else 0.dp, end = 4.dp)) {
-                        KSkelLine(if (i == 0) 64.dp else 80.dp, 11.dp)
-                        KGap(9.dp)
-                        KSkelLine(if (i == 0) 96.dp else 84.dp, 18.dp)
+                val four = split >= 4
+                val gap = if (four) 10.dp else 18.dp
+                repeat(split) { i ->
+                    Column(Modifier.weight(1f).kLeftLine(c.line, i > 0).padding(start = if (i > 0) gap else 0.dp, end = 4.dp)) {
+                        if (four) KSkelLine(if (i % 2 == 0) .66f else .84f, 11.dp) else KSkelLine(if (i == 0) 64.dp else 80.dp, 11.dp)
+                        KGap(if (four) 7.dp else 9.dp)
+                        if (four) KSkelLine(if (i % 2 == 0) .92f else .74f, 16.dp) else KSkelLine(if (i == 0) 96.dp else 84.dp, 18.dp)
                     }
                 }
             }

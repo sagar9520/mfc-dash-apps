@@ -37,20 +37,23 @@ import java.util.Locale
 // Label / rang render ke waqt bante hain, isliye bhasha ya theme badle to purana snap bhi chalta hai.
 // Top 3 ka hisaab data/TopCards.kt me (Home bhi wahi use kare).
 
-/** Paisa widget: chune samay + apps ka munafa, kamai, kharcha, ROAS, abhi live users. allApps = picker ki list. */
+/**
+ * Paisa widget: chune samay + apps ka munafa, kamai (= ads se + payments), kharcha, ROAS, abhi live users.
+ * ads / pay null = purana snap (unke bina bana), "—" dikhe. allApps = picker ki list.
+ */
 internal class PaisaSnap(
-    val at: Long, val profit: Double, val earned: Double, val spend: Double, val roas: Double?, val live: Double?,
-    val allApps: List<Pair<String, String>>,
+    val at: Long, val profit: Double, val earned: Double, val ads: Double?, val pay: Double?, val spend: Double, val roas: Double?,
+    val live: Double?, val allApps: List<Pair<String, String>>,
 ) {
-    fun toJson(): JSONObject = JSONObject().put("at", at).putD("profit", profit).putD("earned", earned).putD("spend", spend)
-        .putD("roas", roas).putD("live", live).put("all", pairs(allApps))
+    fun toJson(): JSONObject = JSONObject().put("at", at).putD("profit", profit).putD("earned", earned).putD("ads", ads).putD("pay", pay)
+        .putD("spend", spend).putD("roas", roas).putD("live", live).put("all", pairs(allApps))
 
     companion object {
         fun of(j: JSONObject?): PaisaSnap? {
             if (j == null || !j.has("at")) return null
             return PaisaSnap(
-                j.optLong("at"), j.d("profit"), j.d("earned"), j.d("spend"), j.dn("roas")?.takeIf { it.isFinite() },
-                j.dn("live")?.takeIf { it.isFinite() }, unpairs(j.optJSONArray("all")),
+                j.optLong("at"), j.d("profit"), j.d("earned"), j.fin("ads"), j.fin("pay"), j.d("spend"), j.fin("roas"),
+                j.fin("live"), unpairs(j.optJSONArray("all")),
             )
         }
     }
@@ -185,6 +188,8 @@ internal object WidgetData {
         val d = f.data(range, from, to)
         val r = d.r
         val chosen = o.pick.toSet()
+        val ads: Double
+        val pay: Double
         val earned: Double
         val spend: Double
         val profit: Double
@@ -193,14 +198,18 @@ internal object WidgetData {
         if (chosen.isEmpty()) {
             // Home jaisa: Kamai = ad revenue + payments, kharcha = Google Ads
             val k = d.kpi
-            earned = k.revInr + k.purchaseInr
+            ads = k.revInr
+            pay = k.purchaseInr
+            earned = ads + pay
             spend = k.gadsCostInr
             profit = k.profitInr
             roas = k.roasTotal ?: (if (spend > 0) earned / spend else null)
             live = d.liveTotal
         } else {
             val per = d.perApp.filter { it.pkg in chosen }
-            earned = per.sumOf { it.revInr(r) + it.purchaseInr }
+            ads = per.sumOf { it.revInr(r) }
+            pay = per.sumOf { it.purchaseInr }
+            earned = ads + pay
             spend = per.sumOf { it.gadsCostInr }
             profit = earned - spend
             roas = if (spend > 0) earned / spend else null
@@ -211,7 +220,7 @@ internal object WidgetData {
             .map { (p, n) -> p to n.ifBlank { d.appName(p) } }
             .distinctBy { it.first }
             .sortedBy { it.second.lowercase() }
-        return PaisaSnap(System.currentTimeMillis(), profit, earned, spend, roas?.takeIf { it.isFinite() }, live, all)
+        return PaisaSnap(System.currentTimeMillis(), profit, earned, ads, pay, spend, roas?.takeIf { it.isFinite() }, live, all)
     }
 
     /** Widget ka samay -> data.php ka range (Is mahina = custom, 1 tareekh se aaj tak). */

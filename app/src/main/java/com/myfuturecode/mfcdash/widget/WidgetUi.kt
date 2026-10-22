@@ -198,6 +198,19 @@ private fun WVLine(p: WPal, h: Float?) {
     Spacer(if (h == null) m.fillMaxHeight() else m.height(h.dp))
 }
 
+/** Line + dono taraf sep dp jagah, ek hi Box me (Row ka ek bachcha; Glance ek Row me 10 tak hi rakhta hai). */
+@Composable
+private fun WVSep(p: WPal, h: Float, sep: Float) {
+    Box(modifier = GlanceModifier.width((2 * sep + 1f).dp).height(h.dp), contentAlignment = Alignment.Center) { WVLine(p, h) }
+}
+
+/** Hara dot (7dp) + 5dp jagah: Live ke aage. */
+@Composable
+private fun WLiveDot(p: WPal) {
+    Spacer(GlanceModifier.size(7.dp).wRound(p.live, 3.5f))
+    Spacer(GlanceModifier.width(5.dp))
+}
+
 // ---------------------------------------------------------------- login
 
 @Composable
@@ -234,13 +247,20 @@ private fun WPaisa(v: WView, p: WPal, w: Float, h: Float, scale: Float, root: Gl
     val inner = w - 2 * W_PH
     val head = plan.head
     Column(modifier = root.padding(horizontal = W_PH.dp, vertical = W_PV.dp)) {
-        // header: nishaan + "Aaj ka munafa", daayein refresh + samay (tap = sab widgets naye sire se)
+        // header: nishaan + "Aaj ka munafa", daayein "● 100 live" (jagah ho to) + refresh + samay (tap = sab widgets naye sire se)
         Row(modifier = GlanceModifier.fillMaxWidth().height(wHdr(scale).dp), verticalAlignment = Alignment.CenterVertically) {
             if (head.mark) {
                 WMark()
                 Spacer(GlanceModifier.width(7.dp))
             }
             Text(head.title, modifier = GlanceModifier.defaultWeight(), style = wts(p.ink, 14f, FontWeight.Medium), maxLines = 1)
+            val live = head.live
+            if (live != null) {
+                Row(modifier = GlanceModifier.padding(start = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    WLiveDot(p)
+                    Text(live, style = wts(p.ink2, 12f, FontWeight.Medium), maxLines = 1)
+                }
+            }
             Row(
                 modifier = GlanceModifier.fillMaxHeight().padding(start = 8.dp).clickable(actionRunCallback<WidgetRefresh>()),
                 verticalAlignment = Alignment.CenterVertically,
@@ -280,15 +300,12 @@ private fun WPaisa(v: WView, p: WPal, w: Float, h: Float, scale: Float, root: Gl
             }
             Spacer(GlanceModifier.defaultWeight())
             val rowH = wLine(13f, scale) + 2f
-            // stats ek Column me (Glance: ek Column me 10 bachche tak)
+            // stats ek Column me (Glance: ek Column me 10 bachche tak; yahan 5 tak: 4 khane + Live)
             if (plan.stats > 0) {
                 Column(modifier = GlanceModifier.fillMaxWidth()) {
-                    pv.stats.take(plan.stats).forEach { s ->
+                    wPaisaRows(pv, head, plan.stats).forEach { s ->
                         Row(modifier = GlanceModifier.fillMaxWidth().height(rowH.dp), verticalAlignment = Alignment.CenterVertically) {
-                            if (s.live) {
-                                Spacer(GlanceModifier.size(7.dp).wRound(p.live, 3.5f))
-                                Spacer(GlanceModifier.width(5.dp))
-                            }
+                            if (s.live) WLiveDot(p)
                             Text(s.label, modifier = GlanceModifier.defaultWeight(), style = wts(p.ink3, 12f), maxLines = 1)
                             Text(s.value, style = wts(p.ink, plan.statSp, FontWeight.Bold), maxLines = 1)
                         }
@@ -324,24 +341,13 @@ private fun WPaisa(v: WView, p: WPal, w: Float, h: Float, scale: Float, root: Gl
         }
         Spacer(GlanceModifier.defaultWeight())
         if (plan.stats > 0) {
-            val statsH = wLine(12f, scale) + wLine(plan.statSp, scale)
+            val statsH = wLine(plan.labSp, scale) + wLine(plan.statSp, scale)
+            // 4 khane + 3 line = 7 bachche (line apni jagah samet ek Box me, warna 13 ho jaate)
             Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-                pv.stats.forEachIndexed { i, s ->
-                    if (i > 0) {
-                        Spacer(GlanceModifier.width(W_SEP.dp))
-                        WVLine(p, statsH)
-                        Spacer(GlanceModifier.width(W_SEP.dp))
-                    }
+                pv.stats.take(plan.stats).forEachIndexed { i, s ->
+                    if (i > 0) WVSep(p, statsH, plan.sep)
                     Column(modifier = GlanceModifier.defaultWeight()) {
-                        if (s.live) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Spacer(GlanceModifier.size(7.dp).wRound(p.live, 3.5f))
-                                Spacer(GlanceModifier.width(5.dp))
-                                Text(s.label, style = wts(p.ink3, 12f), maxLines = 1)
-                            }
-                        } else {
-                            Text(s.label, style = wts(p.ink3, 12f), maxLines = 1)
-                        }
+                        Text(wFit(s.label, plan.colW, plan.labSp, scale), style = wts(p.ink3, plan.labSp), maxLines = 1)
                         Text(s.value, style = wts(p.ink, plan.statSp, FontWeight.Bold), maxLines = 1)
                     }
                 }

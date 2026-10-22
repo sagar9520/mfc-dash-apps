@@ -557,7 +557,17 @@ private fun MoneyNote(d: DashData) {
     else DashText(periodText(d), 13.sp, Mfc.c.ink2)
 }
 
-/** Munafa hero: bada profit, Kamai | Ads kharcha, ROAS meter (target = Settings ka ROAS target). */
+/**
+ * Hero ki paisa line (Home + Paisa + App detail): Kamai (ads + payments) | Ads se | Payments | Ads kharcha.
+ * Kamai gol kiye hisson ka jod (₹2,146 + ₹178 = ₹2,324), taaki saath dikhte number ₹1 se na bhatkein.
+ */
+fun moneySplit(ads: Double, pay: Double, spend: Double): List<Pair<String, String>> {
+    val a = Math.round(ads).toDouble()
+    val p = Math.round(pay).toDouble()
+    return listOf("Earnings".t() to inr(a + p), "From ads".t() to inr(a), "Payments".t() to inr(p), "Ads spend".t() to inr(spend))
+}
+
+/** Munafa hero: bada profit, Kamai | Ads se | Payments | Ads kharcha, ROAS meter (target = Settings ka ROAS target). */
 @Composable
 fun MoneyHero(d: DashData, st: UiState, label: String, modifier: Modifier = Modifier) {
     val k = d.kpi
@@ -568,7 +578,7 @@ fun MoneyHero(d: DashData, st: UiState, label: String, modifier: Modifier = Modi
         KHeroHead(label, trailing = { MoneyNote(d) })
         val c = Mfc.c
         KBigNum(moneySigned(p), when { p >= 0.5 -> c.green; p <= -0.5 -> c.red; else -> Color.Unspecified }, size = 48.sp)
-        KSplit(listOf("Earnings".t() to inr(earned), "Ads spend".t() to inr(k.gadsCostInr)))
+        KSplit(moneySplit(k.revInr, k.purchaseInr, k.gadsCostInr))
         KRoasMeter(roas, st.roasTarget)
     }
 }

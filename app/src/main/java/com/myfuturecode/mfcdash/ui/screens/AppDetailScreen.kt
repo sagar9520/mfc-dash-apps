@@ -128,7 +128,7 @@ private fun AppMain(vm: DashVm, st: UiState, nav: NavHostController, pkg: String
         )
         if (!wide) {
             if (d != null) MoneyHero(d, st, moneyProfitLabel(st.range))
-            else if (skel) KSkelHero()
+            else if (skel) KSkelHero(split = 4)
         }
     }) {
         if (d == null) {
@@ -181,7 +181,7 @@ private fun AppSkel(wide: Boolean) {
             KSkelSection(width = 120.dp)
             KSkelCard(4)
         }
-        if (wide) KTwoPane(left = { KSkelHero(); top() }, right = rest) else { top(); rest() }
+        if (wide) KTwoPane(left = { KSkelHero(split = 4); top() }, right = rest) else { top(); rest() }
     }
 }
 

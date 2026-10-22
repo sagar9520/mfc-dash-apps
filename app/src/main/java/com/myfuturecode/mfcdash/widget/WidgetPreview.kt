@@ -171,6 +171,13 @@ private fun WpVLine(p: WPal, h: Float?) {
     Spacer(if (h == null) m.fillMaxHeight() else m.height(h.dp))
 }
 
+/** Hara dot (7dp) + 5dp jagah: Live ke aage. */
+@Composable
+private fun WpLiveDot(p: WPal) {
+    Spacer(Modifier.size(7.dp).wpRound(p.live, 3.5f))
+    Spacer(Modifier.width(5.dp))
+}
+
 @Composable
 private fun WpMark() {
     Image(painterResource(R.drawable.mfc_mark), null, Modifier.size(20.dp).clip(RoundedCornerShape(6.dp)))
@@ -210,6 +217,13 @@ private fun WpPaisa(v: WView, p: WPal, w: Float, h: Float, scale: Float) {
                 Spacer(Modifier.width(7.dp))
             }
             WpT(head.title, 14f, p.ink, Modifier.weight(1f), weight = FontWeight.Medium)
+            val live = head.live
+            if (live != null) {
+                Row(Modifier.padding(start = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    WpLiveDot(p)
+                    WpT(live, 12f, p.ink2, weight = FontWeight.Medium)
+                }
+            }
             Row(Modifier.padding(start = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Icon(KIcons.Refresh, null, tint = p.ink3, modifier = Modifier.size(16.dp))
                 if (head.time) {
@@ -240,12 +254,9 @@ private fun WpPaisa(v: WView, p: WPal, w: Float, h: Float, scale: Float) {
             }
             Spacer(Modifier.weight(1f))
             val rowH = wLine(13f, scale) + 2f
-            pv.stats.take(plan.stats).forEach { s ->
+            wPaisaRows(pv, head, plan.stats).forEach { s ->
                 Row(Modifier.fillMaxWidth().height(rowH.dp), verticalAlignment = Alignment.CenterVertically) {
-                    if (s.live) {
-                        Spacer(Modifier.size(7.dp).wpRound(p.live, 3.5f))
-                        Spacer(Modifier.width(5.dp))
-                    }
+                    if (s.live) WpLiveDot(p)
                     WpT(s.label, 12f, p.ink3, Modifier.weight(1f))
                     WpT(s.value, plan.statSp, p.ink, weight = FontWeight.Bold)
                 }
@@ -275,22 +286,16 @@ private fun WpPaisa(v: WView, p: WPal, w: Float, h: Float, scale: Float) {
         }
         Spacer(Modifier.weight(1f))
         if (plan.stats > 0) {
-            val statsH = wLine(12f, scale) + wLine(plan.statSp, scale)
+            val statsH = wLine(plan.labSp, scale) + wLine(plan.statSp, scale)
             Row(Modifier.fillMaxWidth()) {
-                pv.stats.forEachIndexed { i, s ->
+                pv.stats.take(plan.stats).forEachIndexed { i, s ->
                     if (i > 0) {
-                        Spacer(Modifier.width(W_SEP.dp))
+                        Spacer(Modifier.width(plan.sep.dp))
                         WpVLine(p, statsH)
-                        Spacer(Modifier.width(W_SEP.dp))
+                        Spacer(Modifier.width(plan.sep.dp))
                     }
                     Column(Modifier.weight(1f)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            if (s.live) {
-                                Spacer(Modifier.size(7.dp).wpRound(p.live, 3.5f))
-                                Spacer(Modifier.width(5.dp))
-                            }
-                            WpT(s.label, 12f, p.ink3)
-                        }
+                        WpT(wFit(s.label, plan.colW, plan.labSp, scale), plan.labSp, p.ink3)
                         WpT(s.value, plan.statSp, p.ink, weight = FontWeight.Bold)
                     }
                 }
