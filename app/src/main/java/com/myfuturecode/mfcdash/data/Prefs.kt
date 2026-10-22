@@ -51,6 +51,10 @@ class Prefs(ctx: Context) {
     var lang: String
         get() = sp.getString("lang", "en") ?: "en"
         set(v) { sp.edit().putString("lang", v).apply() }
+    /** App ka roop: "light" / "dark" / "brand" (ThemeStyle.key). */
+    var theme: String
+        get() = sp.getString("theme", "light") ?: "light"
+        set(v) { sp.edit().putString("theme", v).apply() }
     /** 24x7 foreground monitor (every minute). Default on: the user asked for instant alerts. */
     var liveMonitor: Boolean
         get() = sp.getBoolean("live_monitor", true)

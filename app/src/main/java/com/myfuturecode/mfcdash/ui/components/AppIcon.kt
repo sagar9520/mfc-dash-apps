@@ -4,29 +4,32 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.LruCache
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Text
-import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import com.myfuturecode.mfcdash.ui.kit.KAvatar
+import com.myfuturecode.mfcdash.ui.theme.Mfc
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
 
-/** App ka logo (Play Store icon URL). Load hone tak / na mile to naam ka pehla akshar rangeen dibbe me. */
+/** App ka logo (Play Store icon URL). Load hone tak / na mile to kit ka 2-akshar tile (KAvatar). */
 private object IconCache {
     val mem = LruCache<String, Bitmap>(80)
     val failed = HashSet<String>()
@@ -44,21 +47,21 @@ private object IconCache {
     }
 }
 
-private val AVATAR = listOf(Color(0xFF4A1FC4), Color(0xFF9C02BA), Color(0xFF0B1F9E), Color(0xFF12B76A), Color(0xFFF59E0B), Color(0xFF2563EB), Color(0xFFE11D48))
-
 @Composable
 fun AppIcon(url: String, name: String, size: Dp = 40.dp, modifier: Modifier = Modifier) {
-    val px = with(androidx.compose.ui.platform.LocalDensity.current) { size.roundToPx() }
+    val px = with(LocalDensity.current) { size.roundToPx() }
     var bmp by remember(url) { mutableStateOf(if (url.isBlank()) null else IconCache.mem.get(url)) }
     LaunchedEffect(url) { if (url.isNotBlank() && bmp == null) bmp = IconCache.get(url, px) }
-    val shape = RoundedCornerShape(size * 0.24f)
     val b = bmp
     if (b != null) {
-        Image(b.asImageBitmap(), name, modifier.size(size).clip(shape), contentScale = ContentScale.Crop)
+        val shape = RoundedCornerShape(size * .3f)
+        val c = Mfc.c
+        var m = modifier.size(size).clip(shape)
+        // dark / brand band me halki ring (KAvatar jaisi)
+        if (c.onBrand) m = modifier.size(size).border(1.5.dp, Color.White.copy(alpha = .7f), shape).clip(shape)
+        else if (c.isDark) m = m.border(1.dp, Color.White.copy(alpha = .08f), shape)
+        Image(b.asImageBitmap(), name, m, contentScale = ContentScale.Crop)
     } else {
-        val c = AVATAR[(name.hashCode() and 0x7fffffff) % AVATAR.size]
-        Box(modifier.size(size).clip(shape).background(c), contentAlignment = Alignment.Center) {
-            Text(name.trim().take(1).uppercase().ifBlank { "?" }, color = Color.White, fontWeight = FontWeight.Bold, fontSize = (size.value * 0.42f).sp)
-        }
+        KAvatar(name, modifier, size = size)
     }
 }

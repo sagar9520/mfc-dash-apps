@@ -15,7 +15,9 @@ object Lang {
 
 val LANGS = listOf("en" to "English", "hi" to "Hinglish")
 
-fun String.t(): String = if (Lang.hi) (HI[this] ?: HI_HEALTH[this] ?: HI_GADS[this] ?: HI_STUDIO[this] ?: HI_COST[this] ?: this) else this
+fun String.t(): String = if (Lang.hi) (HI[this] ?: HI_HEALTH[this] ?: HI_GADS[this] ?: HI_STUDIO[this] ?: HI_COST[this]
+    ?: HI_UI_KIT[this] ?: HI_UI_HOME[this] ?: HI_UI_MONEY[this] ?: HI_UI_SETTINGS[this] ?: HI_UI_HEALTH[this]
+    ?: HI_UI_GADS[this] ?: HI_UI_STUDIO[this] ?: HI_UI_WIDGET[this] ?: this) else this
 fun tf(s: String, vararg a: Any?): String = try { s.t().format(*a) } catch (e: Exception) { s.format(*a) }
 
 /** English → Hinglish. Missing key = English shown. */

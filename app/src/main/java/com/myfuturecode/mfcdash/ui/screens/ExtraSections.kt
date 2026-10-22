@@ -2,140 +2,214 @@ package com.myfuturecode.mfcdash.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.ui.draw.clip
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.myfuturecode.mfcdash.data.*
+import androidx.compose.ui.unit.sp
+import com.myfuturecode.mfcdash.data.CampaignRoas
+import com.myfuturecode.mfcdash.data.DashData
+import com.myfuturecode.mfcdash.data.ExtraData
+import com.myfuturecode.mfcdash.data.Note
+import com.myfuturecode.mfcdash.data.ROAS_TARGET_CURVE
 import com.myfuturecode.mfcdash.ui.DashVm
-import com.myfuturecode.mfcdash.ui.components.*
-import com.myfuturecode.mfcdash.ui.theme.extra
-import com.myfuturecode.mfcdash.util.*
+import com.myfuturecode.mfcdash.ui.components.DashText
+import com.myfuturecode.mfcdash.ui.components.Empty
+import com.myfuturecode.mfcdash.ui.components.Hairline
+import com.myfuturecode.mfcdash.ui.components.HeatCell
+import com.myfuturecode.mfcdash.ui.components.StatCells
+import com.myfuturecode.mfcdash.ui.components.Table
+import com.myfuturecode.mfcdash.ui.components.pctText
+import com.myfuturecode.mfcdash.ui.kit.KBarIcon
+import com.myfuturecode.mfcdash.ui.kit.KButton
+import com.myfuturecode.mfcdash.ui.kit.KCard
+import com.myfuturecode.mfcdash.ui.kit.KIconTile
+import com.myfuturecode.mfcdash.ui.kit.KIcons
+import com.myfuturecode.mfcdash.ui.kit.KKind
+import com.myfuturecode.mfcdash.ui.kit.KRow
+import com.myfuturecode.mfcdash.ui.kit.kRoasColor
+import com.myfuturecode.mfcdash.ui.theme.Mfc
+import com.myfuturecode.mfcdash.util.fmtDay
+import com.myfuturecode.mfcdash.util.inr
+import com.myfuturecode.mfcdash.util.num
+import com.myfuturecode.mfcdash.util.pct
+import com.myfuturecode.mfcdash.util.roasPct
+import com.myfuturecode.mfcdash.util.t
+import com.myfuturecode.mfcdash.util.tFull
 
-/** api/app.php is not on the server: one line on what to do. */
+/** api/app.php abhi server par nahi: chhota card (kya chahiye). */
 @Composable
 fun ExtraMissingCard(what: String) {
-    Panel {
-        Text(what, style = MaterialTheme.typography.titleSmall)
-        Text("This data comes from the new server file api/app.php. Upload server/api/app.php from the zip into mfc_dash/api/, that's all.".t(),
-            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    KCard(list = true) {
+        KRow(what, sub = "Needs api/app.php".t(), subKind = KKind.WARN, lead = { KIconTile(KIcons.Info, KKind.WARN) }, titleLines = 2)
     }
 }
 
-/** ROAS cohort table: campaign × D0/D1/D3/D7/Total, coloured against the target curve. */
+/** ROAS cohort: campaign × D0/D1/D3/D7/Total, har cell target curve ke saamne rangeen. Card ke andar. */
 @Composable
 fun RoasCohortTable(rows: List<CampaignRoas>, d: DashData?, onRow: ((CampaignRoas) -> Unit)? = null) {
-    if (rows.isEmpty()) { Empty("No utm_campaign installs or campaign spend in this period".t()); return }
+    val c = Mfc.c
+    if (rows.isEmpty()) { Empty("No cohort data".t()); return }
     val heads = listOf("Campaign".t()) + ROAS_TARGET_CURVE.keys + listOf("Total".t())
-    Row(Modifier.padding(vertical = 4.dp)) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
         heads.forEachIndexed { i, h ->
-            Text(h.uppercase(), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = if (i == 0) Modifier.weight(1.6f) else Modifier.weight(1f), textAlign = if (i == 0) TextAlign.Start else TextAlign.Center)
+            DashText(
+                h, 13.sp, c.ink3, if (i == 0) Modifier.weight(1.6f) else Modifier.weight(1f),
+                weight = FontWeight.SemiBold, align = if (i == 0) TextAlign.Start else TextAlign.Center,
+            )
         }
     }
-    Row { Spacer(Modifier.weight(1.6f)); ROAS_TARGET_CURVE.values.forEach { Text("target".t() + " " + pctText(it), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f), textAlign = TextAlign.Center, maxLines = 1) }; Spacer(Modifier.weight(1f)) }
-    rows.forEach { c ->
-        Row(Modifier.padding(vertical = 2.dp).let { m -> if (onRow != null) m.clickable { onRow(c) } else m }, verticalAlignment = Alignment.CenterVertically) {
+    // target curve (D0 30%, D1 50% ...)
+    Row(Modifier.fillMaxWidth()) {
+        Spacer(Modifier.weight(1.6f))
+        ROAS_TARGET_CURVE.values.forEach { DashText("≥" + pctText(it), 13.sp, c.ink3, Modifier.weight(1f), align = TextAlign.Center) }
+        DashText("≥100%", 13.sp, c.ink3, Modifier.weight(1f), align = TextAlign.Center)
+    }
+    rows.forEach { cr ->
+        val m = if (onRow != null) Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable { onRow(cr) } else Modifier.fillMaxWidth()
+        Row(m.padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1.6f)) {
-                Text(c.campaign, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text((d?.appName(c.pkg) ?: c.pkg) + " · " + num(c.installs) + " " + "inst".t() + " · " + inr(c.spend), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                DashText(cr.campaign, 14.sp, c.ink, weight = FontWeight.SemiBold)
+                DashText((d?.appName(cr.pkg) ?: cr.pkg) + " · " + num(cr.installs) + " " + "inst".t() + " · " + inr(cr.spend), 13.sp, c.ink3)
             }
-            val vals = listOf(c.roasD0, c.roasD1, c.roasD3, c.roasD7)
+            val vals = listOf(cr.roasD0, cr.roasD1, cr.roasD3, cr.roasD7)
             ROAS_TARGET_CURVE.values.forEachIndexed { i, t -> HeatCell(vals[i], t, roasPct(vals[i]), Modifier.weight(1f)) }
-            HeatCell(c.roasTotal, 1.0, roasPct(c.roasTotal), Modifier.weight(1f))
+            HeatCell(cr.roasTotal, 1.0, roasPct(cr.roasTotal), Modifier.weight(1f))
         }
     }
-    Text("Dn = earnings up to n days after install ÷ spend. Green = on target, red = under half. Campaign name and the Play link's utm_campaign must match.".t(),
-        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 6.dp))
 }
 
-/** Retention table: all / paid / organic × D1 D3 D7 D14 */
+/** Retention: all / paid / organic × D1 D3 D7 D14 (utility-app benchmark ke saamne rang). */
 @Composable
 fun RetentionTable(ex: ExtraData) {
+    val c = Mfc.c
     val heads = listOf("Cohort".t(), "Installs".t(), "D1", "D3", "D7", "D14")
-    Row(Modifier.padding(vertical = 4.dp)) { heads.forEachIndexed { i, h -> Text(h.uppercase(), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(if (i == 0) 1.3f else 1f), textAlign = if (i == 0) TextAlign.Start else TextAlign.Center) } }
-    val targets = listOf(0.35, 0.20, 0.12, 0.08)   // common Android utility-app benchmarks: D1 ~35%, D7 ~12%
+    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        heads.forEachIndexed { i, h ->
+            DashText(h, 13.sp, c.ink3, Modifier.weight(if (i == 0) 1.3f else 1f), weight = FontWeight.SemiBold, align = if (i == 0) TextAlign.Start else TextAlign.Center)
+        }
+    }
+    val targets = listOf(0.35, 0.20, 0.12, 0.08)   // Android utility apps: D1 ~35%, D7 ~12%
     listOf("all" to "All".t(), "paid" to "Google Ads", "organic" to "Organic".t()).forEach { (k, label) ->
         val r = ex.ret(k) ?: return@forEach
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1.3f))
-            Text(num(r.installs), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f), textAlign = TextAlign.Center)
+        Row(Modifier.fillMaxWidth().heightIn(min = 40.dp), verticalAlignment = Alignment.CenterVertically) {
+            DashText(label, 14.sp, c.ink, Modifier.weight(1.3f), weight = FontWeight.Medium)
+            DashText(num(r.installs), 14.sp, c.ink, Modifier.weight(1f), align = TextAlign.Center)
             listOf(r.d1, r.d3, r.d7, r.d14).forEachIndexed { i, v -> HeatCell(v, targets[i], pct(v, 0), Modifier.weight(1f)) }
         }
     }
-    Text("Dn = % who came back on day n after install (only cohorts whose day n has passed). Colour vs common utility-app benchmarks D1 35% / D7 12%.".t(),
-        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 6.dp))
 }
 
 @Composable
 fun RetentionDaysTable(ex: ExtraData) {
     Table(listOf("Install day".t(), "Installs".t(), "Paid".t(), "D1", "D3", "D7", "D14"),
         ex.retentionDays.sortedByDescending { it.day }.map { listOf(fmtDay(it.day), num(it.installs), num(it.paid), pct(it.d1, 0), pct(it.d3, 0), pct(it.d7, 0), pct(it.d14, 0)) },
-        empty = "No installs in this period".t())
+        empty = "No installs".t())
 }
 
-/** Campaign change log: list + new note. */
+/** Campaign change log: notes ki list (hatao) + naya note. */
 @Composable
 fun NotesSection(vm: DashVm, notes: List<Note>, campaign: String, pkg: String) {
     var text by remember { mutableStateOf("") }
     var err by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
-    Panel {
-        if (notes.isEmpty()) Empty("No notes yet. When you change budget/bid/creative, write it here: later it lines up with ROAS.".t())
+    val c = Mfc.c
+    KCard {
+        if (notes.isEmpty()) Empty("No notes yet".t())
         notes.forEach { n ->
-            Row(Modifier.padding(vertical = 4.dp), verticalAlignment = Alignment.Top) {
+            Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text(n.note, style = MaterialTheme.typography.bodyMedium)
-                    Text(tFull(n.createdAt) + (if (n.campaign.isNotBlank() && n.campaign != campaign) " · " + n.campaign else ""), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    DashText(n.note, 15.sp, c.ink, maxLines = 4)
+                    DashText(tFull(n.createdAt) + (if (n.campaign.isNotBlank() && n.campaign != campaign) " · " + n.campaign else ""), 13.sp, c.ink3)
                 }
-                TextButton(onClick = { vm.deleteNote(n.id) }, contentPadding = PaddingValues(horizontal = 6.dp)) { Text("Remove".t(), style = MaterialTheme.typography.labelSmall) }
+                KBarIcon(KIcons.Delete, "Remove".t(), { vm.deleteNote(n.id) })
             }
             Hairline()
         }
-        Spacer(Modifier.height(8.dp))
-        OutlinedTextField(text, { text = it }, modifier = Modifier.fillMaxWidth(), placeholder = { Text("e.g. raised budget 20%, paused video creative #3".t()) }, minLines = 1, maxLines = 3)
-        if (err != null) Text(err!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-        Spacer(Modifier.height(6.dp))
-        Button(onClick = { if (text.isNotBlank()) { busy = true; vm.addNote(campaign, pkg, text.trim()) { e -> busy = false; err = e; if (e == null) text = "" } } }, enabled = !busy && text.isNotBlank(), modifier = Modifier.align(Alignment.End)) { Text("Save note".t()) }
+        OutlinedTextField(
+            text, { text = it }, modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+            placeholder = { Text("New note".t()) }, minLines = 1, maxLines = 3, shape = RoundedCornerShape(16.dp),
+        )
+        val e = err
+        if (e != null) DashText(e, 13.sp, c.red, Modifier.padding(top = 4.dp), maxLines = 3)
+        KButton(
+            "Save note".t(),
+            {
+                if (text.isNotBlank()) {
+                    busy = true
+                    vm.addNote(campaign, pkg, text.trim()) { msg -> busy = false; err = msg; if (msg == null) text = "" }
+                }
+            },
+            Modifier.align(Alignment.End).padding(top = 10.dp), icon = KIcons.Check, enabled = text.isNotBlank(), busy = busy,
+        )
     }
 }
 
-/** ROAS curve: campaign D0/D1/D3/D7 vs target (two bars side by side). */
+/** ROAS curve: campaign ka D0/D1/D3/D7 target ke saamne (moti patti = asli, patli = target). */
 @Composable
 fun RoasCurve(c: CampaignRoas, target: Double) {
-    val ex = MaterialTheme.extra
+    val k = Mfc.c
     val vals = listOf(c.roasD0, c.roasD1, c.roasD3, c.roasD7)
     val keys = ROAS_TARGET_CURVE.keys.toList(); val tg = ROAS_TARGET_CURVE.values.toList()
     val maxV = maxOf(vals.maxOf { it ?: 0.0 }, tg.max(), target) * 1.15
     Column {
-        keys.forEachIndexed { i, k ->
+        keys.forEachIndexed { i, key ->
             val v = vals[i]
-            Row(Modifier.padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(k, style = MaterialTheme.typography.labelLarge, modifier = Modifier.width(30.dp))
+            val col = when {
+                v == null -> k.zGrey
+                v >= tg[i] -> k.zGreen
+                v >= tg[i] * .7 -> k.zAmber
+                else -> k.zRed
+            }
+            Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                DashText(key, 14.sp, k.ink, Modifier.width(34.dp), weight = FontWeight.SemiBold)
                 Column(Modifier.weight(1f)) {
-                    Box(Modifier.fillMaxWidth().height(10.dp).clip(RoundedCornerShape(5.dp)).background(MaterialTheme.colorScheme.outline)) {
-                        Box(Modifier.fillMaxWidth(((v ?: 0.0) / maxV).coerceIn(0.0, 1.0).toFloat()).height(10.dp).background(if (v == null) ex.muted else if (v >= tg[i]) ex.good else if (v >= tg[i] * .7) ex.warn else ex.bad))
+                    Box(Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)).background(k.zTrack)) {
+                        val f = ((v ?: 0.0) / maxV).coerceIn(0.0, 1.0).toFloat()
+                        if (f > 0f) Box(Modifier.fillMaxWidth(f).fillMaxHeight().clip(RoundedCornerShape(4.dp)).background(col))
                     }
-                    Spacer(Modifier.height(2.dp))
-                    Box(Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)).background(MaterialTheme.colorScheme.outline)) {
-                        Box(Modifier.fillMaxWidth((tg[i] / maxV).toFloat()).height(4.dp).background(MaterialTheme.colorScheme.onSurfaceVariant))
+                    Box(Modifier.fillMaxWidth().padding(top = 3.dp).height(3.dp).clip(RoundedCornerShape(2.dp)).background(k.zTrack)) {
+                        Box(Modifier.fillMaxWidth((tg[i] / maxV).coerceIn(0.0, 1.0).toFloat()).fillMaxHeight().background(k.ink3))
                     }
                 }
-                Spacer(Modifier.width(8.dp))
-                Column(horizontalAlignment = Alignment.End, modifier = Modifier.width(76.dp)) {
-                    Text(roasPct(v), style = MaterialTheme.typography.labelLarge)
-                    Text("target".t() + " " + pctText(tg[i]), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Column(Modifier.width(88.dp).padding(start = 8.dp), horizontalAlignment = Alignment.End) {
+                    DashText(roasPct(v), 15.sp, k.ink, weight = FontWeight.Bold)
+                    DashText("target".t() + " " + pctText(tg[i]), 13.sp, k.ink3)
                 }
             }
         }
-        Text("Total ROAS".t() + " " + roasPct(c.roasTotal) + " · " + "profit".t() + " " + inr(c.profit) + " · " + "earned/install".t() + " " + inr(c.revPerInstall, 2) + " · D1 " + "back".t() + " " + pct(c.retD1, 0) + " · D7 " + "back".t() + " " + pct(c.retD7, 0),
-            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 6.dp))
+        Spacer(Modifier.height(10.dp))
+        StatCells(
+            listOf(
+                Triple("Total ROAS".t(), roasPct(c.roasTotal), null),
+                Triple("Profit".t(), inr(c.profit), null),
+                Triple("Earned / install".t(), inr(c.revPerInstall, 2), null),
+                Triple("D1", pct(c.retD1, 0), "back".t()),
+                Triple("D7", pct(c.retD7, 0), "back".t()),
+            ),
+            cols = 3,
+            colors = mapOf(0 to kRoasColor(c.roasTotal, target), 1 to if (c.profit >= 0) k.green else k.red),
+        )
     }
 }

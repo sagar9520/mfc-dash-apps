@@ -1,24 +1,76 @@
 package com.myfuturecode.mfcdash.ui.screens.health
 
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.ui.Alignment
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
+import com.myfuturecode.mfcdash.data.HAppDetail
+import com.myfuturecode.mfcdash.data.HEvent
+import com.myfuturecode.mfcdash.data.HRun
+import com.myfuturecode.mfcdash.ui.HState
 import com.myfuturecode.mfcdash.ui.HealthVm
-import com.myfuturecode.mfcdash.ui.components.*
-import com.myfuturecode.mfcdash.ui.theme.extra
-import com.myfuturecode.mfcdash.util.*
+import com.myfuturecode.mfcdash.ui.components.AppIcon
+import com.myfuturecode.mfcdash.ui.components.BarLineChart
+import com.myfuturecode.mfcdash.ui.components.ChipRow
+import com.myfuturecode.mfcdash.ui.components.HBars
+import com.myfuturecode.mfcdash.ui.components.Legend
+import com.myfuturecode.mfcdash.ui.components.MChip
+import com.myfuturecode.mfcdash.ui.components.shareOf
+import com.myfuturecode.mfcdash.ui.kit.KBarIcon
+import com.myfuturecode.mfcdash.ui.kit.KBigNum
+import com.myfuturecode.mfcdash.ui.kit.KBtn
+import com.myfuturecode.mfcdash.ui.kit.KButton
+import com.myfuturecode.mfcdash.ui.kit.KCard
+import com.myfuturecode.mfcdash.ui.kit.KDetailBar
+import com.myfuturecode.mfcdash.ui.kit.KEmpty
+import com.myfuturecode.mfcdash.ui.kit.KHero
+import com.myfuturecode.mfcdash.ui.kit.KHeroHead
+import com.myfuturecode.mfcdash.ui.kit.KIconTile
+import com.myfuturecode.mfcdash.ui.kit.KIcons
+import com.myfuturecode.mfcdash.ui.kit.KKind
+import com.myfuturecode.mfcdash.ui.kit.KKv
+import com.myfuturecode.mfcdash.ui.kit.KListDivider
+import com.myfuturecode.mfcdash.ui.kit.KProgress
+import com.myfuturecode.mfcdash.ui.kit.KRow
+import com.myfuturecode.mfcdash.ui.kit.KScreen
+import com.myfuturecode.mfcdash.ui.kit.KSection
+import com.myfuturecode.mfcdash.ui.kit.KSegTabs
+import com.myfuturecode.mfcdash.ui.kit.KSplit
+import com.myfuturecode.mfcdash.ui.kit.KTint
+import com.myfuturecode.mfcdash.ui.kit.KTwoPane
+import com.myfuturecode.mfcdash.ui.kit.isWide
+import com.myfuturecode.mfcdash.ui.theme.Mfc
+import com.myfuturecode.mfcdash.util.fmtDay
+import com.myfuturecode.mfcdash.util.inr
+import com.myfuturecode.mfcdash.util.num
+import com.myfuturecode.mfcdash.util.pct
+import com.myfuturecode.mfcdash.util.t
+import com.myfuturecode.mfcdash.util.tFull
+import com.myfuturecode.mfcdash.util.tf
 
-/** Ek app ka poora haal: logo, console, installs/uninstalls/crashes (din-wise), issues (open/fixed/rejected), builds, scans, switches. */
+private val DAYS = listOf(7, 14, 30, 90)
+
+// Play ki "bad behaviour" seema (server lib/health.php jaisi)
+private const val CRASH_BAD = 0.0109
+private const val ANR_BAD = 0.0047
+
+/** Ek app ka poora haal: status, crash/ANR, installs/uninstalls/crashes (din-wise), issues, builds, scans, switches. */
 @Composable
 fun HealthAppScreen(vm: HealthVm, nav: NavHostController, pkg: String) {
     val h by vm.s.collectAsStateWithLifecycle()
@@ -28,132 +80,168 @@ fun HealthAppScreen(vm: HealthVm, nav: NavHostController, pkg: String) {
     val d = h.app["$pkg|$days"] ?: h.app.entries.firstOrNull { it.key.startsWith("$pkg|") }?.value
     var task by remember { mutableStateOf(false) }
     var issueF by rememberSaveable { mutableStateOf("open") }
-    Column(Modifier.fillMaxSize()) {
-        HTopBar(d?.app?.name ?: pkg, d?.app?.consoleName, nav, busy = false, onRefresh = { reload++ })
-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(top = 4.dp, bottom = 24.dp)) {
-            if (d == null) { if (h.error != null) HProblem(h) { vm.loadApp(pkg, days) } else Loading(); return@Column }
-            val a = d.app
-            val ex = MaterialTheme.extra
-            Panel {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    AppIcon(a.icon, a.name, 56.dp); Spacer(Modifier.width(12.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(a.name, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                        Text(a.pkg, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, fontFamily = FontFamily.Monospace)
-                        Text(a.consoleName.ifBlank { "Not linked to a console".t() }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
-                    }
-                    StatusPill(a.status)
-                }
-                Spacer(Modifier.height(8.dp))
-                Row {
-                    KVs("Crash rate".t(), a.crashRate?.let { pct(it, 2) } ?: "–", Modifier.weight(1f))
-                    KVs("ANR rate".t(), a.anrRate?.let { pct(it, 2) } ?: "–", Modifier.weight(1f))
-                    KVs("Last scan".t(), a.lastScanAt?.let { ago(it) } ?: "–", Modifier.weight(1f))
-                }
-                if (a.vitalsDay != null) Text(tf("Play vitals up to %s (Play data is 1–2 days late)", fmtDay(a.vitalsDay)), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.height(8.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    BusyButton("Scan this app".t(), "scan$pkg" in h.busy, Modifier.weight(1f), outlined = true) { vm.scan(pkg) }
-                    Button(onClick = { task = true }, modifier = Modifier.weight(1f)) { Text("New task".t()) }
-                }
-            }
-
-            Spacer(Modifier.height(12.dp))
-            ChipRow { listOf(7, 14, 30, 90).forEach { n -> MChip(tf("%s days", n), days == n, { days = n }) } }
-            Spacer(Modifier.height(8.dp))
-            TileGrid(listOf(
-                Triple("Installs".t(), num(d.installs.toDouble()), null),
-                Triple("Uninstalls".t(), num(d.uninstalls.toDouble()), d.uninstallRate?.let { pct(it, 0) + " " + "of installs".t() }),
-                Triple("Crashes".t(), num(d.crashes.toDouble()), d.crashPer1k?.let { num(it, 2) + " / 1K sessions" }),
-                Triple("DAU avg".t(), num(d.dauAvg.toDouble()), null),
-                Triple("Revenue".t(), inr(d.revUsd * d.inrPerUsd), null),
-                Triple("Open issues".t(), d.counts.optInt("open").toString(), null),
-            ), colors = buildMap<Int, androidx.compose.ui.graphics.Color> { if (d.crashes > 0) put(2, ex.bad) })
-            Panel {
-                Text(tf("Last %s days", d.days), style = MaterialTheme.typography.titleSmall)
-                Spacer(Modifier.height(6.dp))
-                BarLineChart(d.series.map { fmtDay(it.day).substringBefore(' ') }, d.series.map { it.installs.toDouble() },
-                    line = d.series.map { it.uninstalls.toDouble() }, line2 = d.series.map { it.crashes.toDouble() }, line2Color = ex.bad, lineColor = ex.warn)
-                Legend("Installs".t() to MaterialTheme.colorScheme.primary, "Uninstalls".t() to ex.warn, "Crashes".t() to ex.bad)
-            }
-            if (d.versions.isNotEmpty()) {
-                Spacer(Modifier.height(12.dp))
-                SectionTitle("Versions in use".t(), "last 3 days".t())
-                Panel {
-                    val t = d.versions.sumOf { it.second }.toDouble()
-                    HBars(d.versions.map { Triple(it.first.ifBlank { "?" }, num(it.second.toDouble()) + " " + "users".t(), shareOf(it.second.toDouble(), t)) })
-                }
-            }
-
-            // ---- issues
-            Spacer(Modifier.height(12.dp))
-            SectionTitle("Issues".t())
-            val c = d.counts
-            ChipRow {
-                listOf("open" to "Open", "fixed" to "Fixed", "rejected" to "Rejected", "resolved" to "Resolved", "all" to "All").forEach { (k, l) ->
-                    MChip(l.t(), issueF == k, { issueF = k }, trailing = if (k == "all") d.issues.size.toString() else c.optInt(k).toString())
-                }
-            }
-            Spacer(Modifier.height(6.dp))
-            Text(listOf("Crash".t() to c.optInt("crash"), "ANR" to c.optInt("anr"), "Ad issue".t() to c.optInt("ad"), "Task".t() to c.optInt("task"))
-                .joinToString(" · ") { "${it.first} ${it.second}" }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(Modifier.height(6.dp))
-            val shown = d.issues.filter {
-                when (issueF) {
-                    "open" -> it.status !in listOf("FIXED", "READY_FOR_REVIEW", "REJECTED", "RESOLVED")
-                    "fixed" -> it.status == "FIXED" || it.status == "READY_FOR_REVIEW"
-                    "rejected" -> it.status == "REJECTED"; "resolved" -> it.status == "RESOLVED"; else -> true
-                }
-            }
-            Panel {
-                if (shown.isEmpty()) Empty("Nothing in this filter.".t())
-                shown.forEachIndexed { i, it -> IssueRow(it, nav, showApp = false); if (i < shown.lastIndex) Hairline() }
-            }
-            Text("Rejected = issues you rejected here. Play policy rejections are not available from Google's API; see Play Console inbox.".t(),
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
-
-            if (d.builds.isNotEmpty()) {
-                Spacer(Modifier.height(12.dp))
-                SectionTitle("Builds".t())
-                d.builds.take(5).forEach { BuildCard(it, h, vm, nav); Spacer(Modifier.height(8.dp)) }
-            }
-
-            Spacer(Modifier.height(12.dp))
-            SectionTitle("Recent scans".t())
-            Panel {
-                if (d.runs.isEmpty()) Empty("No scans yet".t())
-                d.runs.take(10).forEachIndexed { i, it -> RunRow(it, nav); if (i < minOf(9, d.runs.lastIndex)) Hairline() }
-            }
-
-            Spacer(Modifier.height(12.dp))
-            SectionTitle("Automation".t())
-            Panel {
-                SwitchLine("24/7 monitoring".t(), a.monitoring) { vm.appSetting(a.pkg, "monitoring", it) }
-                SwitchLine("Automatic safe fix attempts".t(), a.autofix, sub = if (a.autofix && !a.autofixEffective) "waiting: repo/signing not verified".t() else null) { vm.appSetting(a.pkg, "autofix", it) }
-                SwitchLine("Email notifications".t(), a.email) { vm.appSetting(a.pkg, "email", it) }
-                SwitchLine("Production auto-publish".t(), false, enabled = false, sub = "Always off: you approve every release".t()) { }
-                Spacer(Modifier.height(4.dp))
-                KV("Repo".t(), a.repo.ifBlank { "not linked".t() })
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text((if (a.repoVerified) "repo ✓" else "repo ✗") + "  " + (if (a.signingVerified) "signing ✓" else "signing ✗") + (a.verifyNote.takeIf { it.isNotBlank() }?.let { " · $it" } ?: ""),
-                        style = MaterialTheme.typography.bodySmall, color = if (a.repoVerified && a.signingVerified) ex.good else ex.warn, modifier = Modifier.weight(1f))
-                    if (a.repo.isNotBlank()) BusyButton("Verify".t(), "verify${a.pkg}" in h.busy, outlined = true) { vm.verify(a.pkg) }
-                }
-            }
+    val back: () -> Unit = { if (!nav.popBackStack()) nav.navigate("home") }
+    val bar: @Composable ColumnScope.() -> Unit = {
+        val a = d?.app
+        KDetailBar(
+            a?.name?.ifBlank { null } ?: pkg, back, sub = pkg,
+            lead = if (a != null) { { AppIcon(a.icon, a.name.ifBlank { pkg }, 36.dp) } } else null,
+            actions = {
+                KBarIcon(KIcons.Plus, "New task".t(), { task = true })
+                KBarIcon(KIcons.Refresh, "Refresh".t(), { reload++ })
+            },
+        )
+    }
+    if (d == null) {
+        KScreen(top = bar) { if (h.error != null) HProblem(h) { vm.loadApp(pkg, days) } else Loading() }
+    } else if (isWide()) {
+        // Fold: baayein hero + number + chart, daayein issues / builds / scans / switches
+        KScreen(top = bar) {
+            KTwoPane(
+                left = {
+                    AppHero(d)
+                    AppNumbers(d, h, vm, pkg, days, { days = it }) { task = true }
+                },
+                right = { AppLists(d, h, vm, nav, issueF) { issueF = it } },
+            )
+        }
+    } else {
+        KScreen(top = { bar(); AppHero(d) }) {
+            AppNumbers(d, h, vm, pkg, days, { days = it }) { task = true }
+            AppLists(d, h, vm, nav, issueF) { issueF = it }
         }
     }
     if (task) TaskSheet(h, vm, nav, pkg) { task = false }
 }
 
+/** Rose hero: console + status pill, khule issues (bada), crash / ANR / aakhri scan. */
 @Composable
-private fun KVs(label: String, value: String, modifier: Modifier) {
-    Column(modifier) {
-        Text(label.uppercase(), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(value, style = MaterialTheme.typography.titleSmall)
+private fun AppHero(d: HAppDetail) {
+    KHero(KTint.Rose) {
+        val c = Mfc.c
+        val a = d.app
+        val open = d.counts.optInt("open")
+        KHeroHead(a.consoleName.ifBlank { "Not linked".t() }, icon = KIcons.Pulse, trailing = { StatusPill(a.status) })
+        KBigNum(hN(open), if (open > 0) c.red else c.ink, suffix = " " + "open".t(), size = 48.sp)
+        val cr = a.crashRate
+        val an = a.anrRate
+        KSplit(
+            listOf(
+                "Crash rate".t() to (cr?.let { pct(it, 2) } ?: "–"),
+                "ANR rate".t() to (an?.let { pct(it, 2) } ?: "–"),
+                "Last scan".t() to (a.lastScanAt?.let { ago(it) } ?: "–"),
+            ),
+            listOf(if (cr != null && cr >= CRASH_BAD) c.red else null, if (an != null && an >= ANR_BAD) c.red else null, null),
+        )
+        a.vitalsDay?.let { v ->
+            Text(
+                "Vitals".t() + " · " + fmtDay(v), Modifier.padding(top = 8.dp), color = c.ink3, style = hStyle(13.sp, lh = 18.sp),
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 
-/** Ek scan run: status, progress aur uske saare log lines. */
+/** Scan / naya kaam, din chuno, number grid, chart, versions. */
+@Composable
+private fun AppNumbers(d: HAppDetail, h: HState, vm: HealthVm, pkg: String, days: Int, onDays: (Int) -> Unit, onTask: () -> Unit) {
+    val c = Mfc.c
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        KButton("Scan this app".t(), { vm.scan(pkg) }, Modifier.weight(1f), kind = KBtn.SOFT, icon = KIcons.Refresh, busy = "scan$pkg" in h.busy)
+        KButton("New task".t(), onTask, Modifier.weight(1f), icon = KIcons.Plus)
+    }
+    KSegTabs(DAYS.map { tf("%s days", it) }, DAYS.indexOf(days).coerceAtLeast(0), { onDays(DAYS[it]) })
+    KCard {
+        HGrid(
+            listOf(
+                HCell("Installs".t(), hN(d.installs)),
+                HCell("Uninstalls".t(), hN(d.uninstalls), sub = d.uninstallRate?.let { pct(it, 0) + " " + "of installs".t() }),
+                HCell("Crashes".t(), hN(d.crashes), sub = d.crashPer1k?.let { num(it, 2) + " / 1K" }, color = if (d.crashes > 0) c.red else null),
+                HCell("DAU avg".t(), hN(d.dauAvg)),
+                HCell("Revenue".t(), inr(d.revUsd * d.inrPerUsd)),
+                HCell("Open issues".t(), hN(d.counts.optInt("open"))),
+            ),
+        )
+    }
+    KSection(tf("Last %s days", d.days))
+    KCard {
+        BarLineChart(
+            d.series.map { fmtDay(it.day).substringBefore(' ') }, d.series.map { it.installs.toDouble() },
+            line = d.series.map { it.uninstalls.toDouble() }, line2 = d.series.map { it.crashes.toDouble() },
+            lineColor = c.zAmber, line2Color = c.zRed,
+        )
+        Legend("Installs".t() to c.brand, "Uninstalls".t() to c.zAmber, "Crashes".t() to c.zRed)
+    }
+    if (d.versions.isNotEmpty()) {
+        KSection("Versions in use".t(), trailing = { HSecNote("last 3 days".t()) })
+        KCard {
+            val t = d.versions.sumOf { it.second }.toDouble()
+            HBars(d.versions.map { Triple(it.first.ifBlank { "?" }, num(it.second.toDouble()) + " " + "users".t(), shareOf(it.second.toDouble(), t)) })
+        }
+    }
+}
+
+/** Issues (status chips + list), builds, haal ke scans, automation switches. */
+@Composable
+private fun AppLists(d: HAppDetail, h: HState, vm: HealthVm, nav: NavHostController, issueF: String, onIssueF: (String) -> Unit) {
+    val a = d.app
+    val n = d.counts
+    KSection("Issues".t(), trailing = {
+        HSecNote(
+            listOf("Crash".t() to n.optInt("crash"), "ANR" to n.optInt("anr"), "Ad issue".t() to n.optInt("ad"), "Task".t() to n.optInt("task"))
+                .filter { it.second > 0 }.joinToString(" · ") { "${it.first} ${it.second}" },
+        )
+    })
+    ChipRow {
+        listOf("open" to "Open", "fixed" to "Fixed", "rejected" to "Rejected", "resolved" to "Resolved", "all" to "All").forEach { (k, l) ->
+            MChip(l.t(), issueF == k, { onIssueF(k) }, trailing = if (k == "all") d.issues.size.toString() else n.optInt(k).toString())
+        }
+    }
+    val shown = d.issues.filter {
+        when (issueF) {
+            "open" -> it.status !in listOf("FIXED", "READY_FOR_REVIEW", "REJECTED", "RESOLVED")
+            "fixed" -> it.status == "FIXED" || it.status == "READY_FOR_REVIEW"
+            "rejected" -> it.status == "REJECTED"
+            "resolved" -> it.status == "RESOLVED"
+            else -> true
+        }
+    }
+    if (shown.isEmpty()) KCard { KEmpty("No match".t(), KIcons.Ok) }
+    else KCard(list = true) {
+        shown.forEachIndexed { i, x ->
+            if (i > 0) KListDivider(true)
+            IssueRow(x, nav, showApp = false)
+        }
+    }
+
+    if (d.builds.isNotEmpty()) {
+        KSection("Builds".t())
+        d.builds.take(5).forEach { BuildCard(it, h, vm, nav) }
+    }
+
+    KSection("Recent scans".t())
+    if (d.runs.isEmpty()) KCard { KEmpty("No scans yet".t(), KIcons.History) }
+    else KCard(list = true) {
+        d.runs.take(10).forEachIndexed { i, r ->
+            if (i > 0) KListDivider(true)
+            RunRow(r, nav)
+        }
+    }
+
+    KSection("Automation".t())
+    KCard(list = true) {
+        KRow(
+            "Repo".t(), sub = a.repo.ifBlank { "not linked".t() }, subKind = if (a.repo.isBlank()) KKind.WARN else null,
+            lead = { KIconTile(KIcons.Fix, if (a.repo.isBlank()) KKind.WARN else KKind.NEUTRAL) },
+        )
+        KListDivider()
+        HAppSwitches(a, h, vm)
+    }
+}
+
+// ---------------------------------------------------------------- scan run
+
+/** Ek scan run: status, progress, checks aur uske saare log lines. */
 @Composable
 fun HealthRunScreen(vm: HealthVm, nav: NavHostController, id: Long) {
     val h by vm.s.collectAsStateWithLifecycle()
@@ -161,21 +249,86 @@ fun HealthRunScreen(vm: HealthVm, nav: NavHostController, id: Long) {
     val active = d?.first?.active == true
     var reload by remember { mutableIntStateOf(0) }
     Poll(if (active || d == null) 4_000 else 60_000, id, active, reload) { vm.loadRun(id) }
-    Column(Modifier.fillMaxSize()) {
-        HTopBar(d?.first?.uid ?: "Run".t(), d?.first?.let { jobText(it.type) }, nav, busy = active, onRefresh = { reload++ })
-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(top = 4.dp, bottom = 24.dp)) {
-            if (d == null) { if (h.error != null) HProblem(h) { vm.loadRun(id) } else Loading(); return@Column }
-            val (r, ev) = d
-            Panel {
-                RunRow(r, nav)
-                KV("Trigger".t(), r.trigger + (r.by.takeIf { it.isNotBlank() }?.let { " · $it" } ?: ""))
-                KV("Queued".t(), tFull(r.queuedAt)); KV("Started".t(), tFull(r.startedAt)); KV("Finished".t(), r.finishedAt?.let { tFull(it) } ?: "–")
-                KV("Checks".t(), "${r.checksDone} / ${r.checksTotal}"); KV("Problems found".t(), r.problems.toString()); KV("Errors".t(), r.errors.toString())
-                r.issueId?.let { TextButton(onClick = { nav.navigate("health/issue/$it") }) { Text("ISS-$it →") } }
-            }
-            Spacer(Modifier.height(12.dp))
-            SectionTitle("Log".t(), tf("%s lines", ev.size))
-            Panel { if (ev.isEmpty()) Empty("No log lines".t()); ev.forEach { EventRow(it, nav) } }
+    val back: () -> Unit = { if (!nav.popBackStack()) nav.navigate("home") }
+    val bar: @Composable ColumnScope.() -> Unit = {
+        KDetailBar(
+            d?.first?.uid?.ifBlank { null } ?: "Run".t(), back, sub = d?.first?.let { jobText(it.type) },
+            actions = { KBarIcon(KIcons.Refresh, "Refresh".t(), { reload++ }, spinning = active) },
+        )
+    }
+    if (d == null) {
+        KScreen(top = bar) { if (h.error != null) HProblem(h) { vm.loadRun(id) } else Loading() }
+        return
+    }
+    val (r, ev) = d
+    if (isWide()) {
+        KScreen(top = bar) {
+            KTwoPane(
+                left = {
+                    RunHero(r)
+                    RunInfo(r, nav)
+                },
+                right = { RunLog(ev, nav) },
+            )
         }
+    } else {
+        KScreen(top = { bar(); RunHero(r) }) {
+            RunInfo(r, nav)
+            RunLog(ev, nav)
+        }
+    }
+}
+
+/** Rose hero: job + status pill, kitni problem mili (bada), progress, checks / errors / time. */
+@Composable
+private fun RunHero(r: HRun) {
+    KHero(KTint.Rose) {
+        val c = Mfc.c
+        KHeroHead(jobText(r.type), icon = hJobIcon(r.type), trailing = { StatusPill(r.status) })
+        KBigNum(hN(r.problems), if (r.problems > 0) c.red else c.ink, suffix = " " + "problems".t(), size = 48.sp)
+        if (r.active) {
+            if (r.checksTotal > 0) KProgress(r.checksDone.toFloat() / r.checksTotal, c.brand)
+            else LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 12.dp), color = c.brand, trackColor = c.zTrack)
+            if (r.stage.isNotBlank()) Text(
+                r.stage, Modifier.padding(top = 6.dp), color = c.ink2, style = hStyle(13.sp, lh = 18.sp), maxLines = 2, overflow = TextOverflow.Ellipsis,
+            )
+        }
+        KSplit(
+            listOf(
+                "Checks".t() to "${r.checksDone}/${r.checksTotal}",
+                "Errors".t() to hN(r.errors),
+                "Time".t() to (r.durationMs?.let { num(it / 1000.0, 1) + " s" } ?: "–"),
+            ),
+            listOf(null, if (r.errors > 0) c.red else null, null),
+        )
+    }
+}
+
+@Composable
+private fun RunInfo(r: HRun, nav: NavHostController) {
+    val c = Mfc.c
+    KCard {
+        KKv("App".t(), r.app.ifBlank { if (r.pkg.isBlank()) "all apps".t() else r.pkg })
+        KKv("Trigger".t(), r.trigger.ifBlank { "–" } + (r.by.takeIf { it.isNotBlank() }?.let { " · $it" } ?: ""))
+        KKv("Queued".t(), tFull(r.queuedAt))
+        KKv("Started".t(), tFull(r.startedAt))
+        KKv("Finished".t(), r.finishedAt?.let { tFull(it) } ?: "–")
+        KKv("Checks".t(), "${r.checksDone} / ${r.checksTotal}")
+        KKv("Problems found".t(), r.problems.toString(), valueColor = if (r.problems > 0) c.amber else c.ink)
+        KKv("Errors".t(), r.errors.toString(), valueColor = if (r.errors > 0) c.red else c.ink)
+        if (r.errorText.isNotBlank()) HNote(r.errorText, KKind.BAD, maxLines = 6)
+    }
+    val iid = r.issueId
+    if (iid != null) KCard(list = true) {
+        KRow("ISS-$iid", lead = { KIconTile(KIcons.Bug, KKind.BAD) }, chevron = true, onClick = { nav.navigate("health/issue/$iid") })
+    }
+}
+
+@Composable
+private fun RunLog(ev: List<HEvent>, nav: NavHostController) {
+    KSection("Log".t(), trailing = { HSecNote(tf("%s lines", ev.size)) })
+    KCard {
+        if (ev.isEmpty()) KEmpty("No log lines".t(), KIcons.History)
+        ev.forEach { EventRow(it, nav) }
     }
 }

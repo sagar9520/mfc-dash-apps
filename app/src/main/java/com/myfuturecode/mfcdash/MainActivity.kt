@@ -3,27 +3,51 @@ package com.myfuturecode.mfcdash
 import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.Modifier
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.myfuturecode.mfcdash.ui.DashVm
 import com.myfuturecode.mfcdash.ui.Root
+import com.myfuturecode.mfcdash.ui.kit.KStatusBarBand
 import com.myfuturecode.mfcdash.ui.theme.MfcTheme
+import com.myfuturecode.mfcdash.ui.theme.ThemeStyle
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
         val app = application as App
+        applyBars(app.themeStyle.value)
         handleIntent(intent)
         setContent {
-            MfcTheme {
+            val style by app.themeStyle.collectAsState()
+            LaunchedEffect(style) { applyBars(style) }
+            MfcTheme(style) {
                 val vm: DashVm = viewModel(factory = DashVm.factory(app))
-                Root(vm)
+                Box(Modifier.fillMaxSize()) {
+                    Box(Modifier.fillMaxSize(), propagateMinConstraints = true) { Root(vm) }
+                    // Brand: status bar ke peeche gradient (KTop se juda hua)
+                    KStatusBarBand()
+                }
             }
         }
+    }
+
+    /** Status/nav bar ke icons: Light = dark icons, Dark = light icons, Brand = upar light (gradient), neeche dark. */
+    private fun applyBars(style: ThemeStyle) {
+        val clear = android.graphics.Color.TRANSPARENT
+        val navScrim = android.graphics.Color.argb(0x80, 0x1B, 0x1B, 0x1B)   // API < 26: light nav icons nahi hote
+        val status = if (style == ThemeStyle.LIGHT) SystemBarStyle.light(clear, clear) else SystemBarStyle.dark(clear)
+        val nav = if (style == ThemeStyle.DARK) SystemBarStyle.dark(clear) else SystemBarStyle.light(clear, navScrim)
+        this@MainActivity.enableEdgeToEdge(statusBarStyle = status, navigationBarStyle = nav)
     }
 
     override fun onStart() { super.onStart(); (application as App).foreground.value = true }

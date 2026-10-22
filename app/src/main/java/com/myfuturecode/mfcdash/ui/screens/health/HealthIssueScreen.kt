@@ -1,199 +1,340 @@
 package com.myfuturecode.mfcdash.ui.screens.health
 
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
-import com.myfuturecode.mfcdash.data.*
+import com.myfuturecode.mfcdash.data.HFix
+import com.myfuturecode.mfcdash.data.HIssueDetail
+import com.myfuturecode.mfcdash.ui.HState
 import com.myfuturecode.mfcdash.ui.HealthVm
-import com.myfuturecode.mfcdash.ui.components.*
-import com.myfuturecode.mfcdash.ui.theme.Info
-import com.myfuturecode.mfcdash.ui.theme.extra
-import com.myfuturecode.mfcdash.util.*
+import com.myfuturecode.mfcdash.ui.components.AppIcon
+import com.myfuturecode.mfcdash.ui.components.HBars
+import com.myfuturecode.mfcdash.ui.components.shareOf
+import com.myfuturecode.mfcdash.ui.kit.KBarIcon
+import com.myfuturecode.mfcdash.ui.kit.KBigNum
+import com.myfuturecode.mfcdash.ui.kit.KBtn
+import com.myfuturecode.mfcdash.ui.kit.KButton
+import com.myfuturecode.mfcdash.ui.kit.KCard
+import com.myfuturecode.mfcdash.ui.kit.KDetailBar
+import com.myfuturecode.mfcdash.ui.kit.KEmpty
+import com.myfuturecode.mfcdash.ui.kit.KHero
+import com.myfuturecode.mfcdash.ui.kit.KHeroHead
+import com.myfuturecode.mfcdash.ui.kit.KIcons
+import com.myfuturecode.mfcdash.ui.kit.KKind
+import com.myfuturecode.mfcdash.ui.kit.KKv
+import com.myfuturecode.mfcdash.ui.kit.KListDivider
+import com.myfuturecode.mfcdash.ui.kit.KPill
+import com.myfuturecode.mfcdash.ui.kit.KProgress
+import com.myfuturecode.mfcdash.ui.kit.KRow
+import com.myfuturecode.mfcdash.ui.kit.KScreen
+import com.myfuturecode.mfcdash.ui.kit.KSection
+import com.myfuturecode.mfcdash.ui.kit.KSectionLink
+import com.myfuturecode.mfcdash.ui.kit.KSplit
+import com.myfuturecode.mfcdash.ui.kit.KTint
+import com.myfuturecode.mfcdash.ui.kit.KTwoPane
+import com.myfuturecode.mfcdash.ui.kit.isWide
+import com.myfuturecode.mfcdash.ui.theme.Mfc
+import com.myfuturecode.mfcdash.util.num
+import com.myfuturecode.mfcdash.util.pct
+import com.myfuturecode.mfcdash.util.t
+import com.myfuturecode.mfcdash.util.tFull
+import com.myfuturecode.mfcdash.util.tOnly
+import com.myfuturecode.mfcdash.util.tf
+
+private val ACTIVE = listOf("INVESTIGATING", "FIX_IN_PROGRESS", "TESTING", "AAB_BUILDING")
 
 /** Ek issue: kya hua, AI root cause, fix attempts (tests, diff), builds, aur actions. */
 @Composable
 fun HealthIssueScreen(vm: HealthVm, nav: NavHostController, id: Long) {
     val h by vm.s.collectAsStateWithLifecycle()
     val d = h.issue[id]
-    val active = d != null && (d.investigating || d.base.status in listOf("INVESTIGATING", "FIX_IN_PROGRESS", "TESTING", "AAB_BUILDING"))
+    val active = d != null && (d.investigating || d.base.status in ACTIVE)
     var reload by remember { mutableIntStateOf(0) }
     Poll(if (active) 5_000 else 30_000, id, active, reload) { vm.loadIssue(id) }
     var reject by remember { mutableStateOf(false) }
-    Column(Modifier.fillMaxSize()) {
-        HTopBar("ISS-$id", d?.base?.app, nav, busy = active, onRefresh = { reload++ })
-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(top = 4.dp, bottom = 24.dp)) {
-            if (d == null) { if (h.error != null) HProblem(h) { vm.loadIssue(id) } else Loading(); return@Column }
-            val i = d.base
-            val ex = MaterialTheme.extra
-            Panel(onClick = { nav.navigate("health/app/${i.pkg}") }) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    AppIcon(i.icon, i.app, 44.dp); Spacer(Modifier.width(12.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(i.app, style = MaterialTheme.typography.titleMedium)
-                        Text(d.consoleName.ifBlank { "no console".t() } + " · " + i.pkg, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
-                Spacer(Modifier.height(10.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { Pill(i.severity, sevColor(i.severity)); Pill(typeText(i.type), Info); StatusPill(i.status) }
-                Spacer(Modifier.height(6.dp))
-                Text(i.title, style = MaterialTheme.typography.titleMedium)
-                if (d.cause.isNotBlank()) Text(d.cause, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                if (d.location.isNotBlank()) Text(d.location, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            Spacer(Modifier.height(10.dp))
-            TileGrid(listOf(
-                Triple("Users".t(), i.users?.let { num(it.toDouble()) } ?: "–", null),
-                Triple("Events".t(), num(i.events.toDouble()), null),
-                Triple("Version".t(), i.version.ifBlank { "–" }, null),
-                Triple("First seen".t(), tFull(i.firstSeen), null),
-                Triple("Last seen".t(), ago(i.lastSeen), null),
-                Triple("Source".t(), i.source.ifBlank { "–" }, null),
-            ))
-
-            // ---- actions
-            SectionTitle("Actions".t())
-            Panel {
-                val open = i.status !in listOf("FIXED", "REJECTED", "RESOLVED")
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    BusyButton(if (d.investigating) "AI investigating…".t() else "Investigate with AI".t(), "investigate$id" in h.busy || d.investigating, Modifier.weight(1f), outlined = true) {
-                        vm.issueAction(id, "investigate", ok = "AI investigation started".t())
-                    }
-                    BusyButton("Auto-fix".t(), "autofix$id" in h.busy, Modifier.weight(1f), enabled = open && d.autofixBlock == null) {
-                        vm.issueAction(id, "autofix", ok = "AI fix started: tests + build run on GitHub".t())
-                    }
-                }
-                d.autofixBlock?.let { Text("Auto-fix not available: ".t() + it, style = MaterialTheme.typography.bodySmall, color = ex.warn, modifier = Modifier.padding(top = 4.dp)) }
-                Spacer(Modifier.height(6.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (open) {
-                        OutlinedButton(onClick = { reject = true }, modifier = Modifier.weight(1f)) { Text("Reject".t()) }
-                        BusyButton("Mark fixed".t(), "fixed$id" in h.busy, Modifier.weight(1f), outlined = true) { vm.issueAction(id, "fixed", ok = "Marked fixed".t()) }
-                    } else BusyButton("Reopen".t(), "reopen$id" in h.busy, Modifier.weight(1f), outlined = true) { vm.issueAction(id, "reopen", ok = "Reopened".t()) }
-                }
-                if (i.status == "REJECTED" && d.rejectReason.isNotBlank()) Text("Rejected: ".t() + d.rejectReason, style = MaterialTheme.typography.bodySmall, color = ex.warn)
-            }
-
-            // ---- AI root cause
-            Spacer(Modifier.height(12.dp))
-            SectionTitle("AI root cause".t(), d.aiAt?.let { ago(it) })
-            Panel {
-                if (d.aiAnalysis.isBlank()) Empty(if (d.investigating) "AI is reading the stack trace and code…".t() else "Not investigated yet.".t())
-                else {
-                    i.aiConfidence?.let { c ->
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("Confidence".t(), style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
-                            Text(pct(c, 0), style = MaterialTheme.typography.titleSmall, color = if (c >= .6) ex.good else ex.warn)
-                        }
-                        LinearProgressIndicator(progress = { c.toFloat() }, Modifier.fillMaxWidth().padding(vertical = 4.dp), color = if (c >= .6) ex.good else ex.warn)
-                    }
-                    Text(d.aiAnalysis, style = MaterialTheme.typography.bodyMedium)
-                    if (d.aiFix.isNotBlank()) {
-                        Spacer(Modifier.height(8.dp))
-                        Text("SUGGESTED FIX".t(), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-                        Text(d.aiFix, style = MaterialTheme.typography.bodySmall)
-                    }
-                    if (d.aiMissing.isNotEmpty()) {
-                        Spacer(Modifier.height(8.dp))
-                        Text("MISSING EVIDENCE".t(), style = MaterialTheme.typography.labelSmall, color = ex.warn)
-                        d.aiMissing.forEach { Text("• $it", style = MaterialTheme.typography.bodySmall) }
-                    }
-                    d.aiAutofixOk?.let { Text(if (it) "AI says: safe to auto-fix".t() else "AI says: needs a human".t(), style = MaterialTheme.typography.bodySmall, color = if (it) ex.good else ex.warn, modifier = Modifier.padding(top = 6.dp)) }
-                }
-            }
-
-            // ---- devices / stack
-            if (d.devices.isNotEmpty() || d.osVersions.isNotEmpty()) {
-                Spacer(Modifier.height(12.dp))
-                SectionTitle("Affected devices".t())
-                Panel {
-                    val tot = d.devices.sumOf { it.n }.toDouble()
-                    HBars(d.devices.take(6).map { Triple(it.k, num(it.n.toDouble()), shareOf(it.n.toDouble(), tot)) })
-                    if (d.osVersions.isNotEmpty()) {
-                        Spacer(Modifier.height(6.dp))
-                        val t2 = d.osVersions.sumOf { it.n }.toDouble()
-                        HBars(d.osVersions.take(6).map { Triple("Android " + it.k, num(it.n.toDouble()), shareOf(it.n.toDouble(), t2)) }, MaterialTheme.colorScheme.secondary)
-                    }
-                }
-            }
-            if (d.stack.isNotBlank()) {
-                Spacer(Modifier.height(12.dp))
-                var full by remember { mutableStateOf(false) }
-                SectionTitle("Stack trace".t(), if (full) "tap to fold".t() else "tap to expand".t())
-                Box(Modifier.clickable { full = !full }) { Mono(d.stack, if (full) Int.MAX_VALUE else 8) }
-            }
-
-            // ---- fix attempts
-            if (d.fixes.isNotEmpty()) {
-                Spacer(Modifier.height(12.dp))
-                SectionTitle("AI fix attempts".t(), tf("%s attempts", d.fixes.size))
-                d.fixes.forEach { FixCard(it); Spacer(Modifier.height(8.dp)) }
-            }
-            if (d.builds.isNotEmpty()) {
-                Spacer(Modifier.height(4.dp))
-                SectionTitle("Builds".t())
-                d.builds.forEach { BuildCard(it, h, vm, null); Spacer(Modifier.height(8.dp)) }
-            }
-            if (d.log.isNotEmpty()) {
-                Spacer(Modifier.height(4.dp))
-                SectionTitle("Timeline".t())
-                Panel { d.log.forEach { EventRow(it, null) } }
-            }
+    val back: () -> Unit = { if (!nav.popBackStack()) nav.navigate("home") }
+    val bar: @Composable ColumnScope.() -> Unit = {
+        KDetailBar(
+            "ISS-$id", back, sub = d?.base?.app?.ifBlank { null } ?: d?.base?.pkg,
+            actions = { KBarIcon(KIcons.Refresh, "Refresh".t(), { reload++ }, spinning = active) },
+        )
+    }
+    if (d == null) {
+        KScreen(top = bar) { if (h.error != null) HProblem(h) { vm.loadIssue(id) } else Loading() }
+    } else if (isWide()) {
+        // Fold: baayein hero + app + actions + AI, daayein devices / stack / fixes / builds / timeline
+        KScreen(top = bar) {
+            KTwoPane(
+                left = {
+                    IssueHero(d)
+                    IssueMain(d, h, vm, nav, id) { reject = true }
+                },
+                right = { IssueMore(d, h, vm) },
+            )
+        }
+    } else {
+        KScreen(top = { bar(); IssueHero(d) }) {
+            IssueMain(d, h, vm, nav, id) { reject = true }
+            IssueMore(d, h, vm)
         }
     }
     if (reject) {
         var reason by remember { mutableStateOf("") }
-        AlertDialog(onDismissRequest = { reject = false }, title = { Text("Reject this issue?".t()) },
-            text = { OutlinedTextField(reason, { reason = it.take(500) }, label = { Text("Reason (optional)".t()) }) },
-            confirmButton = { TextButton(onClick = { reject = false; vm.issueAction(id, "reject", mapOf("reason" to reason.trim()), ok = "Rejected".t()) }) { Text("Reject".t()) } },
-            dismissButton = { TextButton(onClick = { reject = false }) { Text("Cancel".t()) } })
+        AlertDialog(
+            onDismissRequest = { reject = false },
+            title = { Text("Reject this issue?".t()) },
+            text = { OutlinedTextField(reason, { reason = it.take(500) }, Modifier.fillMaxWidth(), label = { Text("Reason (optional)".t()) }) },
+            confirmButton = {
+                TextButton(onClick = {
+                    reject = false
+                    vm.issueAction(id, "reject", mapOf("reason" to reason.trim()), ok = "Rejected".t())
+                }) { Text("Reject".t()) }
+            },
+            dismissButton = { TextButton(onClick = { reject = false }) { Text("Cancel".t()) } },
+        )
     }
 }
 
+/** Rose hero: P0 · Crash + status pill, kitne users (bada), title, events / version / aakhri baar. */
+@Composable
+private fun IssueHero(d: HIssueDetail) {
+    val i = d.base
+    KHero(KTint.Rose) {
+        val c = Mfc.c
+        val head = listOf(i.severity, typeText(i.type)).filter { it.isNotBlank() }.joinToString(" · ")
+        KHeroHead(head, icon = hTypeIcon(i.type), trailing = { StatusPill(i.status) })
+        val u = i.users
+        KBigNum(
+            num((u ?: i.events).toDouble()), if (hSevKind(i.severity) == KKind.BAD) c.red else c.ink,
+            suffix = " " + (if (u != null) "users".t() else "events".t()), size = 48.sp,
+        )
+        Text(
+            i.title, Modifier.padding(top = 2.dp), color = c.ink, style = hStyle(16.sp, FontWeight.SemiBold, 22.sp),
+            maxLines = 3, overflow = TextOverflow.Ellipsis,
+        )
+        KSplit(
+            listOf(
+                "Events".t() to num(i.events.toDouble()),
+                "Version".t() to i.version.ifBlank { "–" },
+                "Last seen".t() to ago(i.lastSeen),
+            ),
+        )
+    }
+}
+
+/** App, detail, actions, AI root cause. */
+@Composable
+private fun IssueMain(d: HIssueDetail, h: HState, vm: HealthVm, nav: NavHostController, id: Long, onReject: () -> Unit) {
+    val c = Mfc.c
+    val i = d.base
+    val app = i.app.ifBlank { i.pkg }
+    KCard(list = true) {
+        KRow(
+            app, sub = d.consoleName.ifBlank { "no console".t() } + " · " + i.pkg, lead = { AppIcon(i.icon, app, 40.dp) },
+            chevron = true, onClick = { nav.navigate("health/app/${i.pkg}") },
+        )
+    }
+    KCard {
+        KKv("First seen".t(), tFull(i.firstSeen))
+        KKv("Last seen".t(), tFull(i.lastSeen))
+        KKv("Source".t(), i.source.ifBlank { "–" })
+        if (i.attempts > 0) KKv("AI fix attempts".t(), i.attempts.toString())
+        if (d.cause.isNotBlank()) {
+            HLabel("Cause".t())
+            Text(d.cause, Modifier.padding(top = 2.dp), color = c.ink, style = hStyle(14.sp, lh = 20.sp))
+        }
+        if (d.location.isNotBlank()) {
+            HLabel("Location".t())
+            Text(d.location, Modifier.padding(top = 2.dp), color = c.ink2, style = hStyle(14.sp, lh = 20.sp))
+        }
+    }
+
+    // ---- actions
+    KSection("Actions".t())
+    KCard {
+        val open = i.status !in listOf("FIXED", "REJECTED", "RESOLVED")
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            KButton(
+                if (d.investigating) "AI investigating…".t() else "Investigate".t(),
+                { vm.issueAction(id, "investigate", ok = "AI investigation started".t()) },
+                Modifier.weight(1f), kind = KBtn.SOFT, busy = "investigate$id" in h.busy || d.investigating,
+            )
+            KButton(
+                "Auto-fix".t(), { vm.issueAction(id, "autofix", ok = "AI fix started: tests + build run on GitHub".t()) },
+                Modifier.weight(1f), icon = KIcons.Wand, enabled = open && d.autofixBlock == null, busy = "autofix$id" in h.busy,
+            )
+        }
+        d.autofixBlock?.let { HNote("Auto-fix not available: ".t() + it, KKind.WARN) }
+        Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (open) {
+                KButton("Reject".t(), onReject, Modifier.weight(1f), kind = KBtn.OUTLINE, busy = "reject$id" in h.busy)
+                KButton(
+                    "Mark fixed".t(), { vm.issueAction(id, "fixed", ok = "Marked fixed".t()) }, Modifier.weight(1f), kind = KBtn.OUTLINE,
+                    icon = KIcons.Check, busy = "fixed$id" in h.busy,
+                )
+            } else {
+                KButton(
+                    "Reopen".t(), { vm.issueAction(id, "reopen", ok = "Reopened".t()) }, Modifier.weight(1f), kind = KBtn.OUTLINE,
+                    icon = KIcons.Refresh, busy = "reopen$id" in h.busy,
+                )
+            }
+        }
+        if (i.status == "REJECTED" && d.rejectReason.isNotBlank()) HNote("Rejected: ".t() + d.rejectReason, KKind.WARN)
+    }
+
+    // ---- AI root cause
+    KSection("AI root cause".t(), trailing = { d.aiAt?.let { HSecNote(ago(it)) } })
+    KCard {
+        if (d.aiAnalysis.isBlank()) {
+            KEmpty(if (d.investigating) "AI reading…".t() else "Not investigated".t(), KIcons.Spark)
+        } else {
+            i.aiConfidence?.let { cf ->
+                val good = cf >= .6
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Confidence".t(), Modifier.weight(1f), color = c.ink2, style = hStyle(15.sp, lh = 20.sp))
+                    Text(pct(cf, 0), color = if (good) c.green else c.amber, style = hStyle(18.sp, FontWeight.Bold, 22.sp))
+                }
+                KProgress(cf.toFloat(), if (good) c.zGreen else c.zAmber, top = 6.dp)
+                Spacer(Modifier.height(10.dp))
+            }
+            Text(d.aiAnalysis, color = c.ink, style = hStyle(15.sp, lh = 22.sp))
+            if (d.aiFix.isNotBlank()) {
+                HLabel("Suggested fix".t())
+                Text(d.aiFix, Modifier.padding(top = 2.dp), color = c.ink, style = hStyle(14.sp, lh = 20.sp))
+            }
+            if (d.aiMissing.isNotEmpty()) {
+                HLabel("Missing evidence".t())
+                d.aiMissing.forEach { Text("• $it", Modifier.padding(top = 2.dp), color = c.ink2, style = hStyle(14.sp, lh = 20.sp)) }
+            }
+            d.aiAutofixOk?.let { okFix ->
+                HNote(if (okFix) "AI says: safe to auto-fix".t() else "AI says: needs a human".t(), if (okFix) KKind.OK else KKind.WARN, Modifier.padding(top = 4.dp))
+            }
+        }
+    }
+}
+
+/** Devices, stack trace, fix attempts, builds, timeline. */
+@Composable
+private fun IssueMore(d: HIssueDetail, h: HState, vm: HealthVm) {
+    val c = Mfc.c
+    if (d.devices.isNotEmpty() || d.osVersions.isNotEmpty()) {
+        KSection("Affected devices".t())
+        KCard {
+            if (d.devices.isNotEmpty()) {
+                val tot = d.devices.sumOf { it.n }.toDouble()
+                HBars(d.devices.take(6).map { Triple(it.k, num(it.n.toDouble()), shareOf(it.n.toDouble(), tot)) })
+            }
+            if (d.osVersions.isNotEmpty()) {
+                if (d.devices.isNotEmpty()) Spacer(Modifier.height(8.dp))
+                val t2 = d.osVersions.sumOf { it.n }.toDouble()
+                HBars(d.osVersions.take(6).map { Triple("Android " + it.k, num(it.n.toDouble()), shareOf(it.n.toDouble(), t2)) }, c.zAmber)
+            }
+        }
+    }
+    if (d.stack.isNotBlank()) StackBlock(d.stack)
+    if (d.fixes.isNotEmpty()) {
+        KSection("AI fix attempts".t(), trailing = { HSecNote(tf("%s attempts", d.fixes.size)) })
+        d.fixes.forEach { FixCard(it) }
+    }
+    if (d.builds.isNotEmpty()) {
+        KSection("Builds".t())
+        d.builds.forEach { BuildCard(it, h, vm, null) }
+    }
+    if (d.log.isNotEmpty()) {
+        KSection("Timeline".t())
+        KCard { d.log.forEach { EventRow(it, null) } }
+    }
+}
+
+/** Stack trace: 8 line, tap = poora. */
+@Composable
+private fun StackBlock(stack: String) {
+    var full by remember { mutableStateOf(false) }
+    KSection("Stack trace".t(), trailing = { KSectionLink(if (full) "Fold".t() else "Expand".t()) { full = !full } })
+    Box(Modifier.clickable { full = !full }) { Mono(stack, if (full) Int.MAX_VALUE else 8) }
+}
+
+/** Ek AI fix koshish: tests, steps, files, diff, GitHub run. */
 @Composable
 private fun FixCard(f: HFix) {
     val ctx = LocalContext.current
-    val ex = MaterialTheme.extra
+    val c = Mfc.c
     var diff by remember { mutableStateOf(false) }
-    Panel {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(tf("Attempt %s", f.attempt), style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
-            StatusPill(when (f.success) { true -> "SUCCESS"; false -> "FAILED"; null -> "RUNNING" }, statusText(f.status.ifBlank { "running" }))
+    val k = when (f.success) {
+        true -> KKind.OK
+        false -> KKind.BAD
+        null -> KKind.ASK
+    }
+    KCard {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(tf("Attempt %s", f.attempt), Modifier.weight(1f), color = c.ink, style = hStyle(15.sp, FontWeight.SemiBold, 20.sp), maxLines = 1)
+            KPill(statusText(f.status.ifBlank { "running" }), k)
         }
-        Text(tFull(f.startedAt) + (f.finishedAt?.let { " → " + tOnly(it) } ?: "") + (f.branch.takeIf { it.isNotBlank() }?.let { " · $it" } ?: ""),
-            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.height(6.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) { TestMark("Unit".t(), f.unitOk); TestMark("Build".t(), f.buildOk); TestMark("Emulator".t(), f.deviceOk) }
-        if (f.failureReason.isNotBlank()) Text(f.failureReason, style = MaterialTheme.typography.bodySmall, color = ex.bad, modifier = Modifier.padding(top = 4.dp))
-        if (f.explanation.isNotBlank()) { Spacer(Modifier.height(6.dp)); Text(f.explanation, style = MaterialTheme.typography.bodySmall) }
-        if (f.steps.isNotEmpty()) {
-            Spacer(Modifier.height(6.dp))
+        Text(
+            tFull(f.startedAt) + (f.finishedAt?.let { " → " + tOnly(it) } ?: "") + (f.branch.takeIf { it.isNotBlank() }?.let { " · $it" } ?: ""),
+            Modifier.padding(top = 2.dp), color = c.ink3, style = hStyle(13.sp, lh = 18.sp), maxLines = 2, overflow = TextOverflow.Ellipsis,
+        )
+        Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            TestMark("Unit".t(), f.unitOk)
+            TestMark("Build".t(), f.buildOk)
+            TestMark("Emulator".t(), f.deviceOk)
+        }
+        if (f.failureReason.isNotBlank()) HNote(f.failureReason, KKind.BAD, maxLines = 6)
+        if (f.explanation.isNotBlank()) Text(f.explanation, Modifier.padding(top = 8.dp), color = c.ink, style = hStyle(14.sp, lh = 20.sp))
+        if (f.steps.isNotEmpty()) Column(Modifier.padding(top = 8.dp)) {
             f.steps.forEach { s ->
-                Row(Modifier.padding(vertical = 2.dp)) {
-                    Text(tOnly(s.createdAt), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.width(42.dp))
-                    Text(s.step.replace('_', ' '), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = statusColor(s.status), modifier = Modifier.width(92.dp))
-                    Text(s.detail, style = MaterialTheme.typography.bodySmall, maxLines = 3)
+                Row(Modifier.padding(vertical = 3.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(tOnly(s.createdAt), Modifier.width(44.dp), color = c.ink3, style = hStyle(13.sp, lh = 18.sp), maxLines = 1)
+                    Text(
+                        s.step.replace('_', ' '), Modifier.width(96.dp), color = statusColor(s.status), style = hStyle(13.sp, FontWeight.SemiBold, 18.sp),
+                        maxLines = 2, overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(s.detail, Modifier.weight(1f), color = c.ink2, style = hStyle(13.sp, lh = 18.sp), maxLines = 3, overflow = TextOverflow.Ellipsis)
                 }
             }
         }
-        if (f.filesInspected.isNotEmpty()) KV("Files inspected".t(), f.filesInspected.size.toString())
+        if (f.filesInspected.isNotEmpty()) KKv("Files inspected".t(), f.filesInspected.size.toString())
         if (f.filesModified.isNotEmpty()) {
-            Text("FILES MODIFIED".t(), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            f.filesModified.forEach { Text("• $it", style = MaterialTheme.typography.bodySmall) }
+            HLabel("Files modified".t())
+            f.filesModified.forEach { Text("• $it", Modifier.padding(top = 2.dp), color = c.ink2, style = hStyle(13.sp, lh = 18.sp)) }
         }
-        Row {
-            if (f.diff.isNotBlank()) TextButton(onClick = { diff = !diff }) { Text(if (diff) "Hide diff".t() else "Show diff".t()) }
-            if (f.ghRunUrl.isNotBlank()) TextButton(onClick = { openUrl(ctx, f.ghRunUrl) }) { Text("GitHub run ↗".t()) }
+        if (f.diff.isNotBlank() || f.ghRunUrl.isNotBlank()) Row(Modifier.fillMaxWidth().padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (f.diff.isNotBlank()) KButton(if (diff) "Hide diff".t() else "Show diff".t(), { diff = !diff }, Modifier.weight(1f), kind = KBtn.SOFT)
+            if (f.ghRunUrl.isNotBlank()) KButton("GitHub run".t(), { openUrl(ctx, f.ghRunUrl) }, Modifier.weight(1f), kind = KBtn.OUTLINE, icon = KIcons.Open)
         }
-        if (diff) Mono(f.diff)
+        // card ke andar diff: bina dibbe ka monospace text
+        if (diff) Text(
+            f.diff, Modifier.fillMaxWidth().padding(top = 10.dp), color = c.ink2,
+            style = TextStyle(fontSize = 13.sp, lineHeight = 18.sp, fontFamily = FontFamily.Monospace),
+        )
     }
 }
