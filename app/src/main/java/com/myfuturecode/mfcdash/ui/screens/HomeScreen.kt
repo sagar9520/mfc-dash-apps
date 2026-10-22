@@ -34,7 +34,7 @@ import com.myfuturecode.mfcdash.util.*
 fun HomeScreen(vm: DashVm, st: UiState, nav: NavHostController, cvm: CostVm? = null) {
     var sort by remember { mutableStateOf("profit") }
     var show by remember { mutableStateOf("") }
-    TabScreen("MFC Dashboard", vm, st, nav, filters = { v ->
+    TabScreen("MFC", vm, st, nav, filters = { v ->
         if (v.allApps) {
             FilterChips("Sort".t(), listOf("profit" to "Profit".t(), "revenue" to "Revenue".t(), "installs" to "Installs".t(), "live" to "Live".t(), "roas" to "ROAS"), sort) { sort = it }
             FilterChips("Show".t(), listOf("" to "All".t(), "profit" to "In profit".t(), "loss" to "In loss".t(), "paid" to "With ad spend".t(), "organic" to "Organic only".t()), show) { show = it }

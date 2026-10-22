@@ -75,7 +75,7 @@ fun SettingsScreen(vm: DashVm, nav: NavHostController) {
             // ---------------------------------------------------------------- notifications
             SectionTitle("Notifications".t(), if (st.alertsMissing) "needs alerts.php".t() else null)
             Panel {
-                if (!Notify.allowed(ctx)) Text("⚠ No notification permission — turn it on in phone Settings > Apps > MFC Dashboard > Notifications.".t(),
+                if (!Notify.allowed(ctx)) Text("⚠ No notification permission — turn it on in phone Settings > Apps > MFC > Notifications.".t(),
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(bottom = 8.dp))
                 ToggleRow("🔴 " + "Urgent".t(), "sound + vibration: data stopped, crash, loss".t(), st.notifyUrgent) { vm.setNotify(3, it) }
                 ToggleRow("🟠 " + "Watch".t(), "there is an issue, no fix needed right now".t(), st.notifyWarn) { vm.setNotify(2, it) }

@@ -150,7 +150,7 @@ val HI: Map<String, String> = mapOf(
     "Off = check every 15–60 min via Android background work (see below). On = issue → notification within about a minute: which app, which account, which ad unit, what happened, loss estimate and fix." to
         "Band = Android background work se har 15–60 min check (neeche). Chalu = issue aate hi ~1 minute me notification: kis app, kis account, kis ad unit me kya hua, nuksan ka andaza aur fix.",
     "Notifications" to "Notifications", "needs alerts.php" to "alerts.php chahiye",
-    "⚠ No notification permission — turn it on in phone Settings > Apps > MFC Dashboard > Notifications." to "⚠ Notification permission nahi hai — phone Settings > Apps > MFC Dashboard > Notifications on karo.",
+    "⚠ No notification permission — turn it on in phone Settings > Apps > MFC > Notifications." to "⚠ Notification permission nahi hai — phone Settings > Apps > MFC > Notifications on karo.",
     "sound + vibration: data stopped, crash, loss" to "awaaz + vibration: data band, crash, loss", "there is an issue, no fix needed right now" to "issue hai, abhi fix zaroori nahi",
     "morning brief, records, new campaign" to "subah ka brief, records, nayi campaign", "Background check interval when the monitor is off" to "Monitor band ho tab background check kitni der me",
     "With the app open: every 20 sec. 15 min is Android's minimum; on Xiaomi/Oppo/Vivo set this app to \"No restrictions\" in phone Settings > Battery, otherwise background checks stop." to
