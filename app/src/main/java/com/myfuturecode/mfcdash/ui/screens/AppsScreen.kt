@@ -61,6 +61,7 @@ import com.myfuturecode.mfcdash.ui.kit.kSortLead
 import com.myfuturecode.mfcdash.ui.kit.kSorted
 import com.myfuturecode.mfcdash.ui.kit.rememberKSort
 import com.myfuturecode.mfcdash.ui.theme.Mfc
+import com.myfuturecode.mfcdash.util.Lang
 import com.myfuturecode.mfcdash.util.inr
 import com.myfuturecode.mfcdash.util.num
 import com.myfuturecode.mfcdash.util.roasPct
@@ -78,7 +79,7 @@ fun AppsScreen(vm: DashVm, st: UiState, nav: NavHostController) {
     // sort: bar ka Sort button (default munafa zyada -> kam, aaj jaisa); bina chhede pill nahi
     val sort = rememberKSort("profit")
     val sortOpts = listOf(
-        "profit" to "Net profit".t(), "earned" to "Earnings".t(), "roas" to "ROAS", "spend" to "Ads spend".t(),
+        "profit" to (if (Lang.hi) "Profit (amount)".t() else "Profit"), "earned" to "Earnings".t(), "roas" to "ROAS", "spend" to "Ads spend".t(),
         "installs" to "Installs".t(), "live" to "Live users".t(), "name" to "Name".t(),
     )
     var show by rememberSaveable { mutableStateOf("") }          // "" sab | paid = ad kharch wale | organic

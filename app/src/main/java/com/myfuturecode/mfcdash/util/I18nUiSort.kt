@@ -15,4 +15,6 @@ val HI_UI_SORT: Map<String, String> = mapOf(
     "%s crash" to "%s crash",
     // App page: Play Store pill
     "Play" to "Play", "Open in Play Store" to "Play Store me kholo",
+    // Apps sort option for profit: owner's mockup says "Munafa" (not "Kul munafa"). English UI shows "Profit".
+    "Profit (amount)" to "Munafa",
 )
