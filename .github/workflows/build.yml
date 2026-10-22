@@ -22,8 +22,10 @@ jobs:
         with:
           name: MfcDash-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
-      # Isi commit ki server PHP files (api/*.php): zip ko Plesk me mfc_dash/api/ folder me upload karke Extract karo
+      # Isi commit ki server PHP files (api/ + lib/): zip ko Plesk me mfc_dash/ folder me upload karke Extract karo (config files isme nahi hain)
       - uses: actions/upload-artifact@v4
         with:
-          name: MFC-server-api-files
-          path: server/api/*.php
+          name: MFC-server-files
+          path: |
+            server/api/*.php
+            server/lib/*.php
