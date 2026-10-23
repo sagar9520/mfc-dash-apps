@@ -175,12 +175,15 @@ ok($c === 400, 'script running in an MCC is rejected (no linking)');
 [$c, $j] = $http('POST', 'api/gads_ingest.php', ['customer_id' => '777-888-9999', 'token' => $tok, 'action' => 'hello']);
 ok($c === 200 && $j['backfill_days'] === 35, 'hello asks for 35-day backfill on a new account');
 $days = []; $hours = [];
-for ($b = 0; $b <= 10; $b++) $days[] = ['day' => $day($b), 'campaign_id' => '301', 'cost' => 1000, 'impressions' => 9000, 'clicks' => 100, 'conversions' => 40, 'conv_value' => 900];
+// account C ka "aaj" uske apne tz (Europe/Berlin) me: A ka din (Etc/GMT-x) 22-24 UTC ke beech Berlin se ek din peeche hota hai
+$todayCb = (new DateTime('now', new DateTimeZone('Europe/Berlin')))->format('Y-m-d');
+$dayC = fn(int $back) => (new DateTimeImmutable($todayCb))->modify("-$back day")->format('Y-m-d');
+for ($b = 0; $b <= 10; $b++) $days[] = ['day' => $dayC($b), 'campaign_id' => '301', 'cost' => 1000, 'impressions' => 9000, 'clicks' => 100, 'conversions' => 40, 'conv_value' => 900];
 $payload = ['customer_id' => '777-888-9999', 'token' => $tok, 'action' => 'data', 'script_version' => '1.0',
     'account' => ['name' => 'SIM C', 'currency' => 'EUR', 'tz' => 'Europe/Berlin', 'status' => 'ENABLED', 'manager' => false],
     'campaigns' => [['campaign_id' => '301', 'name' => 'SIM C camp', 'status' => 'ENABLED', 'primary_status' => 'ELIGIBLE', 'primary_reasons' => [], 'channel' => 'MULTI_CHANNEL', 'bidding' => 'TARGET_CPA', 'target_cpa' => 20, 'budget' => 1500, 'start_date' => '2025-03-01']],
     'days' => $days, 'hours' => $hours,
-    'adgroups' => [['day' => $day(1), 'campaign_id' => '301', 'ad_group_id' => '3011', 'name' => 'SIM AG', 'status' => 'ENABLED', 'cost' => 1000, 'impressions' => 9000, 'clicks' => 100, 'conversions' => 40, 'conv_value' => 900]],
+    'adgroups' => [['day' => $dayC(1), 'campaign_id' => '301', 'ad_group_id' => '3011', 'name' => 'SIM AG', 'status' => 'ENABLED', 'cost' => 1000, 'impressions' => 9000, 'clicks' => 100, 'conversions' => 40, 'conv_value' => 900]],
     'geo' => [['day' => $day(1), 'campaign_id' => '301', 'country' => 'DE', 'cost' => 600, 'impressions' => 5000, 'clicks' => 60, 'conversions' => 20, 'conv_value' => 500]],
     'policy' => [['campaign_id' => '301', 'campaign' => 'SIM C camp', 'ad_group_id' => '3011', 'ad_id' => '90001', 'approval' => 'DISAPPROVED', 'review' => 'REVIEWED', 'topics' => ['MISLEADING_CONTENT (PROHIBITED)']]],
     'errors' => [['section' => 'assets', 'error' => 'SIMULATED query error']]];
