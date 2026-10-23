@@ -914,7 +914,8 @@ function st_port_brief(PDO $pdo): ?array
     $loss = $real && end($real)['profit_inr'] < 0 ? end($real) : null;
     $t = $v['totals'];
     return ['computed_at' => $v['computed_at'], 'profit_inr' => $t['profit_inr'], 'roas' => $t['roas'], 'ecpm_usd' => $t['ecpm_usd'], 'apps' => $t['apps'], 'apps_ads_on' => $t['apps_ads_on'],
-        'best' => $best ? ['cc' => $best['cc'], 'profit_inr' => $best['profit_inr']] : null, 'loss' => $loss ? ['cc' => $loss['cc'], 'profit_inr' => $loss['profit_inr']] : null];
+        'best' => $best ? ['cc' => $best['cc'], 'profit_inr' => $best['profit_inr'], 'spend_est' => $best['spend_est']] : null,
+        'loss' => $loss ? ['cc' => $loss['cc'], 'profit_inr' => $loss['profit_inr'], 'spend_est' => $loss['spend_est']] : null];
 }
 
 function st_port_stale(PDO $pdo): bool

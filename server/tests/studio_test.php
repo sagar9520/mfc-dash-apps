@@ -477,10 +477,12 @@ foreach (['overview', 'research&engine=organic', 'research&engine=paid&cc=US', '
 $jf = array_column($j['apps'] ?? [], null, 'pkg');
 ok(($j['empty'] ?? true) === false && count($j['apps'] ?? []) === 3 && ($j['spend_by_cc'] ?? '') === 'mixed' && abs(($j['totals']['profit_inr'] ?? 0) + 471.5) < 0.006 && ($j['running'] ?? null) === false
     && array_key_exists('roas', $jf['com.sim.fun'] ?? []) && $jf['com.sim.fun']['roas'] === null && ($jf['com.sim.cam']['ads_on'] ?? null) === true && count($j['insights'] ?? []) === 5
-    && ($j['days'] ?? 0) === 30 && ($j['rate'] ?? 0) == 95 && count($j['countries'] ?? []) === 4, 'view=mine over HTTP: totals, apps, countries, insights, not running');
+    && ($j['days'] ?? 0) === 30 && ($j['rate'] ?? 0) == 95 && count($j['countries'] ?? []) === 4 && is_array($j['last_run'] ?? null) && isset($j['last_run']['status']),
+    'view=mine over HTTP: totals, apps, countries, insights, not running, last portfolio run');
 [$c, $j] = $http('GET', 'api/studio.php?view=overview');
-ok(($j['mine']['best']['cc'] ?? '') === 'US' && ($j['mine']['loss']['cc'] ?? '') === 'IN' && ($j['mine']['apps_ads_on'] ?? 0) === 1 && abs(($j['mine']['roas'] ?? 0) - 0.8129) < 0.0001,
-    'overview.mine: profit country US, biggest loss IN, 1 app with ads on, ROAS');
+ok(($j['mine']['best']['cc'] ?? '') === 'US' && ($j['mine']['loss']['cc'] ?? '') === 'IN' && ($j['mine']['apps_ads_on'] ?? 0) === 1 && abs(($j['mine']['roas'] ?? 0) - 0.8129) < 0.0001
+    && is_bool($j['mine']['best']['spend_est'] ?? null) && is_bool($j['mine']['loss']['spend_est'] ?? null) && ($j['schedule']['weekly_dow'] ?? 0) === 1,
+    'overview.mine: profit country US, biggest loss IN (with spend_est), 1 app with ads on, ROAS; schedule.weekly_dow');
 [$c, $j] = $http('GET', "api/studio.php?view=opp&id=$aId");
 ok(is_array($j['item']['fit'] ?? null) && isset($j['item']['fit']['rating']), 'opp row exposes fit (own_fit summary) at top level');
 [$c, $j] = $http('GET', "api/studio.php?view=project&id=$pid");

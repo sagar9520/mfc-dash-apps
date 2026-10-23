@@ -166,13 +166,16 @@ switch ($view) {
         $out['activity'] = h_q($pdo, "SELECT id, kind, level, actor, msg, created_at, project_id, opp_id FROM st_events WHERE kind <> 'log' ORDER BY id DESC LIMIT 8");
         $out['top'] = array_map(fn($o) => st_opp_row($o), h_q($pdo, "SELECT * FROM st_opps WHERE status IN ('NEW','WATCH') ORDER BY GREATEST(COALESCE(organic_score,0), COALESCE(paid_score,0)) DESC LIMIT 3"));
         $out['schedule'] = ['daily' => st_set('st_daily') === '1', 'weekly' => st_set('st_weekly') === '1', 'monthly' => st_set('st_monthly') === '1',
-            'last_daily' => kv_get('st_daily_day'), 'last_weekly' => kv_get('st_weekly_wk'), 'last_monthly' => kv_get('st_monthly_m')];
+            'weekly_dow' => (int)st_set('st_weekly_dow'), 'last_daily' => kv_get('st_daily_day'), 'last_weekly' => kv_get('st_weekly_wk'), 'last_monthly' => kv_get('st_monthly_m')];
         $out['mine'] = st_port_brief($pdo);
         break;
 
     case 'mine':   // aapke apne apps: eCPM, kamai, spend, ROAS, country-wise profit/loss (last 30 days)
         $out += st_port_view($pdo);
         $out['running'] = (int)h_q1($pdo, "SELECT COUNT(*) FROM st_runs WHERE job = 'portfolio' AND status IN ('QUEUED','RUNNING')") > 0;
+        // aakhri portfolio run (fail hua ho to app wajah dikhata hai)
+        $lr = h_q($pdo, "SELECT status, error_text, finished_at FROM st_runs WHERE job = 'portfolio' ORDER BY id DESC LIMIT 1");
+        $out['last_run'] = $lr ? ['status' => (string)$lr[0]['status'], 'error_text' => $lr[0]['error_text'], 'finished_at' => $lr[0]['finished_at']] : null;
         break;
 
     case 'research':

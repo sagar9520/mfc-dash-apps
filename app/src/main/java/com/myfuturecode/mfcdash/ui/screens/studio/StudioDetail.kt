@@ -64,7 +64,9 @@ import com.myfuturecode.mfcdash.ui.kit.KTint
 import com.myfuturecode.mfcdash.ui.kit.KTwoPane
 import com.myfuturecode.mfcdash.ui.kit.fg
 import com.myfuturecode.mfcdash.ui.kit.isWide
+import com.myfuturecode.mfcdash.ui.kit.kRoasColor
 import com.myfuturecode.mfcdash.ui.kit.word
+import com.myfuturecode.mfcdash.ui.screens.moneySigned
 import com.myfuturecode.mfcdash.ui.theme.Mfc
 import com.myfuturecode.mfcdash.util.arr
 import com.myfuturecode.mfcdash.util.b
@@ -115,6 +117,7 @@ fun StudioOppScreen(vm: StudioVm, nav: NavHostController, id: Long) {
                     OppHero(it0)
                     OppActions(it0, pid, nav) { ask = it }
                     OppFacts(it0)
+                    OppFit(it0)
                     OppTexts(it0)
                     DecisionCard(it0.obj("decision_card"), it0.sn("confidence"))
                 },
@@ -126,6 +129,7 @@ fun StudioOppScreen(vm: StudioVm, nav: NavHostController, id: Long) {
             ) else {
                 OppActions(it0, pid, nav) { ask = it }
                 OppFacts(it0)
+                OppFit(it0)
                 OppTexts(it0)
                 DecisionCard(it0.obj("decision_card"), it0.sn("confidence"))
                 OppFactors(it0)
@@ -234,6 +238,33 @@ private fun OppFacts(it0: JSONObject) {
         }
         KKv("Updated".t(), sAgo(it0.s("updated_at")))
         it0.sn("user_note")?.let { Para("Your note".t(), it) }
+    }
+}
+
+/** Aapke apps ka data (portfolio, pichhle 30 din): focus / paid-ghate wale desh, category ROAS / profit, fit 0-10 + label. fit null = kuch nahi. */
+@Composable
+private fun OppFit(it0: JSONObject) {
+    val f = it0.optJSONObject("fit") ?: return
+    val c = Mfc.c
+    val basis = f.s("basis")
+    val r = f.dn("rating")
+    val focus = f.arr("focus_ccs").strings().filter { it.isNotBlank() }
+    val avoid = f.arr("avoid_paid_ccs").strings().filter { it.isNotBlank() }
+    KSection("Your apps data".t(), trailing = { KPill(if (basis == "VERIFIED") "VERIFIED".t() else "ESTIMATE".t(), labelKind(basis)) })
+    KCard(padding = PaddingValues(horizontal = 20.dp, vertical = 4.dp)) {
+        KKv(
+            "Fit with your data".t(), r?.let { num(it, 1) } ?: "–", valueSub = "/ 10",
+            valueColor = when {
+                r == null -> c.ink3
+                r >= 6 -> c.green
+                r < 4 -> c.amber
+                else -> c.ink
+            },
+        )
+        if (focus.isNotEmpty()) KKv("Focus countries".t(), focus.joinToString(", "), valueColor = c.green)
+        if (avoid.isNotEmpty()) KKv("Avoid paid ads".t(), avoid.joinToString(", "), valueColor = c.amber)
+        f.dn("category_roas")?.let { KKv("Category ROAS".t(), roasTxt(it), valueColor = kRoasColor(it, 1.0)) }
+        f.dn("category_profit_inr")?.let { KKv("Category profit".t(), moneySigned(it), valueColor = if (it < 0) c.red else c.green) }
     }
 }
 

@@ -86,6 +86,7 @@ import com.myfuturecode.mfcdash.ui.kit.KTwoPane
 import com.myfuturecode.mfcdash.ui.kit.KStatus
 import com.myfuturecode.mfcdash.ui.kit.fg
 import com.myfuturecode.mfcdash.ui.kit.icon
+import com.myfuturecode.mfcdash.ui.kit.shape
 import com.myfuturecode.mfcdash.ui.theme.Mfc
 import com.myfuturecode.mfcdash.util.agoText
 import com.myfuturecode.mfcdash.util.arr
@@ -99,6 +100,7 @@ import com.myfuturecode.mfcdash.util.sn
 import com.myfuturecode.mfcdash.util.strings
 import com.myfuturecode.mfcdash.util.t
 import com.myfuturecode.mfcdash.util.tFull
+import com.myfuturecode.mfcdash.util.tf
 import com.myfuturecode.mfcdash.util.tsMs
 import com.myfuturecode.mfcdash.util.usd
 import kotlinx.coroutines.delay
@@ -219,7 +221,7 @@ fun JSONArray.objs(): List<JSONObject> = mapObj { it }
 fun jobName(j: String) = when (j) {
     "economics" -> "Internal economics".t(); "discover" -> "Daily discovery".t(); "rank" -> "Weekly ranking".t(); "deep" -> "Monthly deep research".t()
     "competitors" -> "Competitor analysis".t(); "revise_features" -> "Revise feature spec".t(); "evaluate_idea" -> "Evaluate idea".t(); "source_check" -> "Source test".t()
-    "more_research" -> "More research".t()
+    "more_research" -> "More research".t(); "portfolio" -> "Your apps analysis".t()
     else -> j
 }
 
@@ -579,13 +581,43 @@ internal fun IdeaRow(o: JSONObject, engine: String, selected: Boolean?, onToggle
             } else {
                 ideaMeta(o)
             }
-            if (meta.isNotBlank()) SText(meta, 13.sp, c.ink2, Modifier.padding(top = 2.dp), lh = 18.sp)
+            // aapke apps ke data se mel: hara "fits your data" / amber "paid ads lose in ..."; warna wahi meta
+            val fit = ideaFit(o)
+            if (fit != null) SFitLine(fit.first, fit.second, Modifier.padding(top = 2.dp))
+            else if (meta.isNotBlank()) SText(meta, 13.sp, c.ink2, Modifier.padding(top = 2.dp), lh = 18.sp)
         }
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             SScore(score(main), main == null)
             SText("score".t(), 13.sp, c.ink3, Modifier.padding(top = 1.dp), lh = 18.sp)
         }
         Icon(KIcons.Chev, null, tint = c.chev, modifier = Modifier.offset(x = 6.dp).size(22.dp))
+    }
+}
+
+/** KStatus jaisa (shape + rangeen shabd), par 2 line tak: chhote phone par "fits your data" / desh kate nahi. */
+@Composable
+private fun SFitLine(text: String, kind: KKind, modifier: Modifier = Modifier) {
+    val col = kind.fg()
+    Row(modifier, verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+        kind.shape()?.let { Icon(it, null, tint = col, modifier = Modifier.padding(top = 3.dp).size(12.dp)) }
+        SText(text, 13.sp, col, weight = FontWeight.SemiBold, lh = 18.sp, maxLines = 2)
+    }
+}
+
+/**
+ * Idea aapke apps ke data (fit) se: rating 6+ aur focus desh = "Tools · US, GB · fits your data" (hara);
+ * rating 4 se kam aur paid ads wale ghate ke desh = "Tools · paid ads lose in IN" (amber). Baaki = null (sada meta).
+ */
+internal fun ideaFit(o: JSONObject): Pair<String, KKind>? {
+    val f = o.optJSONObject("fit") ?: return null
+    val r = f.dn("rating") ?: return null
+    val focus = f.arr("focus_ccs").strings().filter { it.isNotBlank() }
+    val avoid = f.arr("avoid_paid_ccs").strings().filter { it.isNotBlank() }
+    val cat = o.s("category").ifBlank { null }
+    return when {
+        r >= 6 && focus.isNotEmpty() -> listOfNotNull(cat, focus.joinToString(", "), "fits your data".t()).joinToString(" · ") to KKind.OK
+        r < 4 && avoid.isNotEmpty() -> listOfNotNull(cat, tf("paid ads lose in %s", avoid.joinToString(", "))).joinToString(" · ") to KKind.WARN
+        else -> null
     }
 }
 

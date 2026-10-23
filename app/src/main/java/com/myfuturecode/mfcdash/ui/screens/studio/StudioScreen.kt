@@ -100,6 +100,7 @@ import com.myfuturecode.mfcdash.ui.kit.isWide
 import com.myfuturecode.mfcdash.ui.kit.kSorted
 import com.myfuturecode.mfcdash.ui.kit.rememberKSort
 import com.myfuturecode.mfcdash.ui.kit.word
+import com.myfuturecode.mfcdash.ui.screens.moneySigned
 import com.myfuturecode.mfcdash.ui.theme.Mfc
 import com.myfuturecode.mfcdash.util.arr
 import com.myfuturecode.mfcdash.util.b
@@ -120,13 +121,14 @@ import kotlinx.coroutines.delay
 import org.json.JSONObject
 
 val STABS = listOf(
-    "overview" to "Overview", "research" to "Research & Ranking", "projects" to "Projects", "approvals" to "Approvals", "history" to "History",
+    "overview" to "Overview", "research" to "Research & Ranking", "mine" to "Your apps", "projects" to "Projects", "approvals" to "Approvals", "history" to "History",
     "runs" to "Runs", "sources" to "Data sources", "settings" to "Settings",
 )
 
 private fun tabIcon(k: String): ImageVector = when (k) {
     "overview" -> KIcons.Bulb
     "research" -> KIcons.Chart
+    "mine" -> KIcons.Rupee
     "projects" -> KIcons.Apps
     "approvals" -> KIcons.DoneAll
     "history" -> KIcons.History
@@ -140,9 +142,10 @@ private fun tabLabel(k: String): String = STABS.firstOrNull { it.first == k }?.s
 
 // Sort (bar ka Sort button): har list tab ka apna; default = server ka aaj ka order (bina chhede wahi list).
 // research: score zyada -> kam; projects: aapka intezaar (gate) wale pehle, phir naye; approvals (recent) / runs: naye pehle.
+// mine (Your apps): profit zyada -> kam (Apps aur Countries list).
 // History (server pages, Newer / Older) aur Data sources (config order) par Sort nahi.
 private val S_SORT_DEF = mapOf(
-    "research" to ("score" to true), "projects" to ("status" to true), "approvals" to ("time" to true), "runs" to ("time" to true),
+    "research" to ("score" to true), "mine" to MINE_SORT_DEF, "projects" to ("status" to true), "approvals" to ("time" to true), "runs" to ("time" to true),
 )
 private val S_SORT_KINDS = mapOf("time" to KSortKind.DATE, "updated" to KSortKind.DATE)
 
@@ -151,6 +154,7 @@ private fun sSortOpts(tab: String): List<Pair<String, String>> = when (tab) {
     "projects" -> listOf("status" to "Waiting for you".t(), "updated" to "Updated".t(), "name" to "Name".t())
     "approvals" -> listOf("time" to "Time".t(), "gate" to "Gate".t(), "name" to "Name".t())
     "runs" -> listOf("time" to "Time".t(), "cost" to "Cost".t(), "errors" to "Errors".t())
+    "mine" -> mineSortOpts()
     else -> emptyList()
 }
 
@@ -180,11 +184,14 @@ fun StudioScreen(vm: StudioVm, nav: NavHostController, startTab: String) {
     // har list tab ka apna sort (tab badalne par yaad); baaki tabs par null
     val sorts = S_SORT_DEF.mapValues { (k, d) -> key(k) { rememberKSort(d.first, d.second) } }
     val sort = sorts[tab]
+    // Your apps: Apps | Countries | For research (yahan yaad, taaki "For research" par bar ka Sort chhupe)
+    var mineSeg by rememberSaveable { mutableIntStateOf(0) }
     val bar: @Composable ColumnScope.() -> Unit = {
-        StudioBar(tab, g, back, go, { idea = true }, { reload.intValue++ }, sort)
+        val barSort = if (tab == "mine" && !mineSortOn(mineSeg, isWide())) null else sort
+        StudioBar(tab, g, back, go, { idea = true }, { reload.intValue++ }, barSort)
     }
     if (tab == "overview") OverviewPage(g, vm, nav, r, bar, go)
-    else key(tab) { KScreen(top = bar) { TabBody(tab, g, vm, nav, r, go, sort) } }
+    else key(tab) { TabBody(tab, g, vm, nav, r, go, sort, bar, mineSeg) { mineSeg = it } }
     if (idea) IdeaDialog(g, vm, nav) { idea = false }
 }
 
@@ -197,7 +204,11 @@ private fun StudioBar(
     val o = g.view("overview")
     var menu by remember { mutableStateOf(false) }
     val pend = o?.arr("pending")?.length() ?: 0
-    val sub = if (tab == "overview") o?.let { tf("%s ideas", num(ideaTotal(it).toDouble())) } ?: sUpdated(g) else "Research Studio".t()
+    val sub = when (tab) {
+        "overview" -> o?.let { tf("%s ideas", num(ideaTotal(it).toDouble())) } ?: sUpdated(g)
+        "mine" -> mineSub(g) ?: "Research Studio".t()
+        else -> "Research Studio".t()
+    }
     KDetailBar(
         if (tab == "overview") "Research Studio".t() else tabLabel(tab), back, sub = sub,
         actions = {
@@ -237,8 +248,18 @@ private fun StudioBar(
     )
 }
 
+/** Tab ka page. "mine" ka hero top me (Overview jaisa), isliye woh apna KScreen khud banata hai. */
 @Composable
-private fun TabBody(tab: String, g: GState, vm: StudioVm, nav: NavHostController, reload: Int, go: (String) -> Unit, sort: KSortState?) {
+private fun TabBody(
+    tab: String, g: GState, vm: StudioVm, nav: NavHostController, reload: Int, go: (String) -> Unit, sort: KSortState?,
+    bar: @Composable ColumnScope.() -> Unit, mineSeg: Int, onMineSeg: (Int) -> Unit,
+) {
+    if (tab == "mine") MinePage(g, vm, nav, reload, bar, sort, mineSeg, onMineSeg)
+    else KScreen(top = bar) { TabList(tab, g, vm, nav, reload, go, sort) }
+}
+
+@Composable
+private fun TabList(tab: String, g: GState, vm: StudioVm, nav: NavHostController, reload: Int, go: (String) -> Unit, sort: KSortState?) {
     when (tab) {
         "research" -> ResearchTab(g, vm, nav, reload, sort)
         "projects" -> ProjectsTab(g, vm, nav, reload, sort)
@@ -293,6 +314,7 @@ private fun OverviewPage(g: GState, vm: StudioVm, nav: NavHostController, reload
                     left = {
                         StudioHero(ov)
                         OkSection(ov, nav, go)
+                        MineSection(ov, g, vm, go)
                         TopIdeas(ov, nav, go)
                         BudgetCard(ov, go)
                         ScheduleCard(ov, go)
@@ -309,6 +331,7 @@ private fun OverviewPage(g: GState, vm: StudioVm, nav: NavHostController, reload
         KScreen(top = { bar(); if (o != null) StudioHero(o) else if (sSkelOn(g, o)) KSkelHero(KTint.Lav) }) {
             SLoad(g, o, { vm.load("overview") }, { OverviewSkel(false) }) { ov ->
                 OkSection(ov, nav, go)
+                MineSection(ov, g, vm, go)
                 TopIdeas(ov, nav, go)
                 BudgetCard(ov, go)
                 MoreCard(ov, go)
@@ -327,6 +350,8 @@ private fun OverviewSkel(wide: Boolean) {
         val left: @Composable ColumnScope.() -> Unit = {
             KSkelSection()
             KSkelRows(2)
+            KSkelSection(width = 100.dp)   // Your apps
+            KSkelCard(3)
             KSkelSection(width = 110.dp)
             KSkelRows(3)
             KSkelCard(3)
@@ -499,6 +524,22 @@ private fun MoreCard(o: JSONObject, go: (String) -> Unit) {
             lead = { KIconTile(tabIcon("research")) }, chevron = true, onClick = { go("research") },
         )
         KListDivider(true)
+        // key hi nahi (purana server / cache) = row nahi; null = job kabhi nahi chala
+        if (o.has("mine")) {
+            val mine = o.optJSONObject("mine")
+            KRow(
+                "Your apps".t(),
+                sub = when {
+                    mine != null -> tf("Profit %s", moneySigned(mine.d("profit_inr"))) + " · " +
+                        (mine.dn("roas")?.let { "ROAS " + roasTxt(it) } ?: "No ad spend".t())
+                    mineRunning(o) -> "Running".t()
+                    else -> "Not run yet".t()
+                },
+                subKind = if (mine == null && mineRunning(o)) KKind.ASK else null,
+                lead = { KIconTile(tabIcon("mine")) }, chevron = true, onClick = { go("mine") },
+            )
+            KListDivider(true)
+        }
         KRow(
             "Projects".t(),
             sub = tf("%s active", num(cnt.d("projects_active"))) + " · " + tf("%s published", num(cnt.d("published"))),
@@ -871,10 +912,13 @@ private fun HistoryTab(g: GState, vm: StudioVm, nav: NavHostController, reload: 
 
 // ---------------------------------------------------------------- Runs
 
-private val RUN_JOBS = listOf("economics" to "No AI cost", "discover" to "AI + web", "rank" to "AI + web", "deep" to "AI + web")
+private val RUN_JOBS = listOf(
+    "economics" to "No AI cost", "portfolio" to "No AI cost", "discover" to "AI + web", "rank" to "AI + web", "deep" to "AI + web",
+)
 
 private fun jobIcon(j: String): ImageVector = when (j) {
     "economics" -> KIcons.Rupee
+    "portfolio" -> KIcons.Wallet
     "discover" -> KIcons.Search
     "rank" -> KIcons.Sort
     "deep" -> KIcons.Spark
