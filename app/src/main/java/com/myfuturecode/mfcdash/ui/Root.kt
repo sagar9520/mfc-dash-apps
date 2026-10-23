@@ -65,6 +65,9 @@ import com.myfuturecode.mfcdash.ui.screens.AppDetailScreen
 import com.myfuturecode.mfcdash.ui.screens.AppsScreen
 import com.myfuturecode.mfcdash.ui.screens.CampaignScreen
 import com.myfuturecode.mfcdash.ui.screens.CrossPromoScreen
+import com.myfuturecode.mfcdash.ui.screens.PaymentsAppScreen
+import com.myfuturecode.mfcdash.ui.screens.PaymentsScreen
+import com.myfuturecode.mfcdash.ui.screens.PromoAppScreen
 import com.myfuturecode.mfcdash.ui.screens.HomeScreen
 import com.myfuturecode.mfcdash.ui.screens.LiveScreen
 import com.myfuturecode.mfcdash.ui.screens.LoginScreen
@@ -191,6 +194,13 @@ private fun AppNav(nav: NavHostController, vm: DashVm, st: UiState, hvm: HealthV
         composable("ads") { AdsScreen(vm, st, nav) }
         composable("live") { LiveScreen(vm, st, nav) }
         composable("promo") { CrossPromoScreen(vm, st, nav) }
+        composable("promo/app/{pkg}", arguments = listOf(navArgument("pkg") { type = NavType.StringType })) {
+            PromoAppScreen(vm, st, nav, it.arguments?.getString("pkg") ?: "")
+        }
+        composable("payments") { PaymentsScreen(vm, st, nav) }
+        composable("payments/app/{pkg}", arguments = listOf(navArgument("pkg") { type = NavType.StringType })) {
+            PaymentsAppScreen(vm, st, nav, it.arguments?.getString("pkg") ?: "")
+        }
         composable("settings") { SettingsScreen(vm, nav) }
         composable("alerts") { AlertsScreen(vm, st, nav) }
         composable("widgets") { WidgetsScreen(nav) }

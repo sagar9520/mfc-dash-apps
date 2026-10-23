@@ -424,7 +424,7 @@ class DashVm(private val app: App) : ViewModel() {
 private const val SWITCH_WAIT_MS = 350L
 
 /** In screens par DashVm ka data dikhta hai: inke khule rehte 20 s wala refresh upar ki line kholta hai (Root ka route). */
-private val DASH_ROUTES = setOf("home", "apps", "money", "users", "ads", "live", "promo", "alerts", "app/{pkg}", "campaign/{idx}")
+private val DASH_ROUTES = setOf("home", "apps", "money", "users", "ads", "live", "promo", "promo/app/{pkg}", "payments", "payments/app/{pkg}", "alerts", "app/{pkg}", "campaign/{idx}")
 
 /**
  * Disk wala copy kaam ka? Custom period (pakki taareekhein) = haan. Aaj / kal / 7 din / 30 din = sirf aaj ka bana ho:
