@@ -20,7 +20,7 @@ require_once __DIR__ . '/common.php';
 require_once __DIR__ . '/health.php';
 if (is_file(__DIR__ . '/cost.php')) require_once __DIR__ . '/cost.php';   // AI Cost & Usage Manager (optional): cost_log() / budget_check()
 
-const ST_SCHEMA_V = '2';   // v2: st_port (apne apps ka portfolio)
+const ST_SCHEMA_V = '3';   // v2: st_port (apne apps ka portfolio); v3: live progress (st_runs frac, detail, beat_at, steps_json) + polling indexes
 const ST_LABELS = ['VERIFIED', 'ESTIMATE', 'INFERENCE', 'UNKNOWN'];
 const ST_RECS = ['STRONGLY CONSIDER', 'TEST FIRST', 'WATCH MARKET', 'REJECT'];   // cautious order: index bada = zyada cautious
 const ST_GATES = [1 => 'Research idea selection', 2 => 'Competitor analysis + feature scope', 3 => 'Final UI/UX design', 4 => 'Working app demo',
@@ -123,7 +123,8 @@ function st_schema(PDO $pdo): void
   steps_done INT NOT NULL DEFAULT 0, steps_total INT NOT NULL DEFAULT 0, errors INT NOT NULL DEFAULT 0, error_text VARCHAR(1000) NOT NULL DEFAULT '',
   ai_calls INT NOT NULL DEFAULT 0, searches INT NOT NULL DEFAULT 0, cost_usd DECIMAL(10,4) NOT NULL DEFAULT 0, summary VARCHAR(1000) NOT NULL DEFAULT '',
   queued_at DATETIME NOT NULL, started_at DATETIME NULL, finished_at DATETIME NULL,
-  UNIQUE KEY u_uid (run_uid), KEY k_status (status, id), KEY k_job (job, id))$T");
+  frac DECIMAL(5,4) NOT NULL DEFAULT 0, detail VARCHAR(160) NOT NULL DEFAULT '', beat_at DATETIME NULL, steps_json TEXT NULL,
+  UNIQUE KEY u_uid (run_uid), KEY k_status (status, id), KEY k_job (job, id), KEY k_fin (finished_at))$T");
     $pdo->exec("CREATE TABLE IF NOT EXISTS st_events (
   id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY, run_id INT UNSIGNED NULL, project_id INT UNSIGNED NULL, opp_id INT UNSIGNED NULL,
   kind VARCHAR(20) NOT NULL DEFAULT 'log', level VARCHAR(8) NOT NULL DEFAULT 'info', actor VARCHAR(60) NOT NULL DEFAULT 'system', msg VARCHAR(1000) NOT NULL,
@@ -169,7 +170,7 @@ function st_schema(PDO $pdo): void
     $pdo->exec("CREATE TABLE IF NOT EXISTS st_usage (
   id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY, run_id INT UNSIGNED NULL, kind VARCHAR(20) NOT NULL, model VARCHAR(40) NOT NULL DEFAULT '',
   in_tokens INT NOT NULL DEFAULT 0, out_tokens INT NOT NULL DEFAULT 0, searches INT NOT NULL DEFAULT 0, cost_usd DECIMAL(10,4) NOT NULL DEFAULT 0, ok TINYINT NOT NULL DEFAULT 1,
-  created_at DATETIME NOT NULL, KEY k_time (created_at))$T");
+  created_at DATETIME NOT NULL, KEY k_time (created_at), KEY k_run (run_id))$T");
     $pdo->exec("CREATE TABLE IF NOT EXISTS st_sources (
   id VARCHAR(30) NOT NULL PRIMARY KEY, last_ok_at DATETIME NULL, last_error_at DATETIME NULL, last_error VARCHAR(500) NOT NULL DEFAULT '', last_items INT NOT NULL DEFAULT 0,
   verified TEXT NULL, updated_at DATETIME NOT NULL)$T");
@@ -181,6 +182,12 @@ function st_schema(PDO $pdo): void
   installs INT NOT NULL DEFAULT 0, paid_installs INT NOT NULL DEFAULT 0, imps BIGINT NOT NULL DEFAULT 0, ad_rev_inr DOUBLE NOT NULL DEFAULT 0, pay_inr DOUBLE NOT NULL DEFAULT 0,
   spend_inr DOUBLE NOT NULL DEFAULT 0, spend7_inr DOUBLE NOT NULL DEFAULT 0, spend_est TINYINT NOT NULL DEFAULT 0, apps INT NOT NULL DEFAULT 0, evidence_id INT UNSIGNED NULL,
   computed_at DATETIME NOT NULL, PRIMARY KEY (kind, pkg, cc, category))$T");
+    // v3: live progress. Purane server (v1/v2) par st_runs / st_usage pehle se hain (upar IF NOT EXISTS kuch nahi karta): sirf jo column / index nahi, wahi ek ALTER me
+    // upload ke turant baad kai requests (app ke parallel GET + cron) ek saath upgrade kar sakti hain: har ALTER alag, doosri ne pehle jod diya (1060 / 1061) = theek
+    foreach (['frac' => "frac DECIMAL(5,4) NOT NULL DEFAULT 0", 'detail' => "detail VARCHAR(160) NOT NULL DEFAULT ''", 'beat_at' => 'beat_at DATETIME NULL', 'steps_json' => 'steps_json TEXT NULL'] as $c => $def)
+        st_alter_add($pdo, 'st_runs', "ADD COLUMN $def", fn() => st_has_col($pdo, 'st_runs', $c));
+    st_alter_add($pdo, 'st_runs', 'ADD KEY k_fin (finished_at)', fn() => st_has_key($pdo, 'st_runs', 'k_fin'));   // view=live: pichhle 15 min me khatam runs
+    st_alter_add($pdo, 'st_usage', 'ADD KEY k_run (run_id)', fn() => st_has_key($pdo, 'st_usage', 'k_run'));     // chalti run ka live kharcha (har poll)
     kv_set('st_schema_v', ST_SCHEMA_V);
 }
 
@@ -195,6 +202,9 @@ function st_log(PDO $pdo, string $msg, string $level = 'info', array $ref = [], 
 
 // ================================================================ jobs (durable queue, retries, cancel, crash recovery)
 const ST_JOBS = ['economics', 'portfolio', 'discover', 'rank', 'deep', 'evaluate_idea', 'more_research', 'competitors', 'revise_features', 'source_check'];
+// economics / portfolio ke step labels: rank inhe pehle se reserve karta hai (StRun::plan adopt), isliye ek hi jagah
+const ST_ECON_STEPS = ['Install cohorts', 'Retention + D7 revenue', 'Cost per install', 'Save economics'];
+const ST_PORT_STEPS = ['Your apps: earnings + installs', 'Google Ads spend', 'App, country, category totals', 'Save + insights'];
 const ST_MAX_ATTEMPTS = 2;
 
 function st_run_new(PDO $pdo, string $job, array $o = []): int
@@ -208,25 +218,138 @@ function st_run_new(PDO $pdo, string $job, array $o = []): int
     return $id;
 }
 
-/** Asli progress: har step DB me (koi fake percentage nahi). */
+if (!defined('ST_LIVE_SEC')) define('ST_LIVE_SEC', 3);   // live progress (frac / detail) DB me isse jaldi nahi likhte (app har kuch sec poll karta hai)
+
+/**
+ * Asli progress: har step DB me (koi fake percentage nahi).
+ *  - plan(): int (purana: sirf ginti) ya step labels ki list. Naye steps pehle khule (abhi tak na chale) step se PEHLE judte hain: andar chalne wala job
+ *    (rank ke andar economics, source test me economics) apne steps wahin daalta hai jahan wo sach me chal raha hai. Return: pehle naye step ka index.
+ *    plan(labels, reserve k): pehle k steps "reserved" (rank: andar chalne wale economics / portfolio pehle se plan me, patti kabhi peeche nahi jaati);
+ *    wo job baad me wahi labels plan() kare to naye nahi judte, wahi reserved steps uske ho jaate hain (adopt).
+ *  - step(): chalu step done, frac / detail / live note reset. mark(i): koi khaas step done (rank: reuse hui research). note(): step ka note ("9 sources", "reused").
+ *  - progress(frac, detail): step ke andar ka hissa (0..0.97, step() tak kabhi peeche nahi), DB me throttled (ST_LIVE_SEC) + beat_at. beat(): sirf heartbeat (turant).
+ *  - error(): chalu step par error ('e'; step() hone par 'f'). halt(): ruki run ka chalu step (cancel). closeOpen(from, n): andar wala job fail: uske bache steps band ('f'),
+ *    har band step done me gina (step() jaisa), taaki "Step N of M" / pct step list se mile.
+ * Step state (steps_json): w = baaki, e = chalu step me error, d = done, f = fail. Live columns ka likhna kabhi job nahi todta (fail = purana UPDATE / chup).
+ */
 final class StRun
 {
     public int $id; public string $uid; public string $job; public array $row; public array $params;
     public int $total = 0; public int $done = 0; public int $errors = 0; public array $errText = []; public string $summary = '';
+    public array $steps = [];            // [['l' => label|null, 'n' => note, 's' => w|e|d|f, 'r' => reserved (sirf jab tak andar wala job adopt na kare)]]
+    public float $frac = 0.0; public string $detail = ''; public string $liveNote = '';
+    public float $wrote = 0.0;           // aakhri live write (microtime): tests peeche kar sakte hain
+    private bool $dirty = false; private bool $liveErr = false;
     private PDO $pdo;
     public function __construct(PDO $pdo, array $row) { $this->pdo = $pdo; $this->row = $row; $this->id = (int)$row['id']; $this->uid = (string)$row['run_uid']; $this->job = (string)$row['job']; $this->params = (array)st_dec($row['params'], []); }
-    public function stage(string $s): void { $this->checkCancel(); h_x($this->pdo, 'UPDATE st_runs SET stage = ? WHERE id = ?', [st_cut($s, 200), $this->id]); st_log($this->pdo, "{$this->uid} · $s", 'info', ['run' => $this->id]); }
-    public function plan(int $n): void { $this->total += $n; $this->flush(); }
-    public function step(int $n = 1): void { $this->done += $n; $this->flush(); }
-    public function error(string $m): void { $this->errors++; $this->errText[] = $m; st_log($this->pdo, "{$this->uid} · error: $m", 'error', ['run' => $this->id]); $this->flush(); }
+    public function stage(string $s): void { $this->checkCancel(); $this->upd('stage = ?', [st_cut($s, 200)]); st_log($this->pdo, "{$this->uid} · $s", 'info', ['run' => $this->id]); }
+    /** @param int|array $p */
+    public function plan($p, int $reserve = 0): int
+    {
+        $new = array_map(fn($l) => ['l' => $l === null ? null : st_cut((string)$l, 80), 'n' => '', 's' => 'w'], is_array($p) ? array_values($p) : array_fill(0, max(0, (int)$p), null));
+        $at = $this->cur() ?? count($this->steps);
+        // pehle se reserved (rank ne plan kiya) aur bilkul yahi labels: wahi steps is job ke, total nahi badhta
+        $k = count($new); $adopt = $k > 0 && is_array($p);
+        for ($j = 0; $adopt && $j < $k; $j++) { $s = $this->steps[$at + $j] ?? null; $adopt = $s !== null && !empty($s['r']) && $s['s'] === 'w' && $s['l'] === $new[$j]['l']; }
+        if ($adopt) { for ($j = 0; $j < $k; $j++) unset($this->steps[$at + $j]['r']); return $at; }
+        for ($j = 0; $j < min($reserve, $k); $j++) $new[$j]['r'] = true;
+        array_splice($this->steps, $at, 0, $new);
+        $this->total += count($new);
+        $this->flush();
+        return $at;
+    }
+    public function step(int $n = 1): void
+    {
+        for ($k = 0; $k < $n; $k++) { if (($c = $this->cur()) !== null) $this->steps[$c]['s'] = $this->steps[$c]['s'] === 'e' ? 'f' : 'd'; $this->done++; }
+        $this->frac = 0.0; $this->detail = ''; $this->liveNote = '';
+        $this->flush();
+    }
+    public function mark(int $i, string $note = ''): void
+    {
+        if (isset($this->steps[$i]) && in_array($this->steps[$i]['s'], ['w', 'e'], true)) { $this->steps[$i]['s'] = $this->steps[$i]['s'] === 'e' ? 'f' : 'd'; if ($note !== '') $this->steps[$i]['n'] = st_cut($note, 40); }
+        $this->done++;
+        $this->flush();
+    }
+    /** Step ka note (default: chalu step); DB me agle flush / live write ke saath. */
+    public function note(string $n, ?int $i = null): void { $i ??= $this->cur(); if ($i !== null && isset($this->steps[$i])) { $this->steps[$i]['n'] = st_cut($n, 40); $this->dirty = true; } }
+    public function error(string $m, ?int $i = null): void
+    {
+        $this->errors++; $this->errText[] = $m;
+        $i ??= $this->cur();
+        if ($i !== null && isset($this->steps[$i])) $this->steps[$i]['s'] = $this->steps[$i]['s'] === 'd' || $this->steps[$i]['s'] === 'f' ? 'f' : 'e';
+        st_log($this->pdo, "{$this->uid} · error: $m", 'error', ['run' => $this->id]);
+        $this->flush();
+    }
+    public function halt(): void { if (($c = $this->cur()) !== null) { $this->steps[$c]['s'] = 'e'; $this->dirty = true; } }
+    /** Steps [from, from + n) me jo khule (w / e) wo 'f' (n null = aakhir tak); har ek done me gina, jaise step() 'e' ko 'f' karke ginta hai. */
+    public function closeOpen(int $from = 0, ?int $n = null): void
+    {
+        $to = $n === null ? count($this->steps) : min(count($this->steps), $from + $n);
+        $k = 0;
+        for ($i = max(0, $from); $i < $to; $i++) if (in_array($this->steps[$i]['s'], ['w', 'e'], true)) { $this->steps[$i]['s'] = 'f'; unset($this->steps[$i]['r']); $this->done++; $k++; }
+        if ($k > 0) { $this->frac = 0.0; $this->detail = ''; $this->liveNote = ''; }   // chalu step badla (step() jaisa)
+        $this->flush();
+    }
+    /** Pehla khula step (w / e) = chalu step; sab band = null. */
+    public function cur(): ?int { foreach ($this->steps as $i => $s) if ($s['s'] === 'w' || $s['s'] === 'e') return $i; return null; }
+    /** Step ke andar ka live hissa. frac step() tak sirf aage (max 0.97: step poora tab hi jab step() ho). note: chalu step ka live note ("4 of ~10"), null = jaisa hai. */
+    public function progress(float $frac, string $detail, ?string $note = null, bool $force = false): void
+    {
+        $f = round(max($this->frac, min(0.97, max(0.0, $frac))), 4);
+        $d = st_cut($detail, 160);
+        $n = $note === null ? $this->liveNote : st_cut($note, 40);
+        if ($f !== $this->frac || $d !== $this->detail || $n !== $this->liveNote) { $this->frac = $f; $this->detail = $d; $this->liveNote = $n; $this->dirty = true; }
+        if ($force || ($this->dirty && microtime(true) - $this->wrote >= ST_LIVE_SEC)) $this->live();
+    }
+    /** Heartbeat: beat_at (+ jo live badla) abhi likho. Stream ke beech har ST_STREAM_CHECK_SEC. */
+    public function beat(): void { $this->live(); }
     public function flush(): void
     {
-        h_x($this->pdo, 'UPDATE st_runs SET steps_total = ?, steps_done = ?, errors = ?, error_text = ? WHERE id = ?',
-            [max($this->total, $this->done), $this->done, $this->errors, st_cut(implode(' | ', array_slice($this->errText, 0, 5)), 1000), $this->id]);
+        $this->upd('steps_total = ?, steps_done = ?, errors = ?, error_text = ?', [max($this->total, $this->done), $this->done, $this->errors, $this->errorText()]);
+    }
+    /** error_text: pehle 4 + aakhri galti (aakhri = jis par run ruki; app wajah me wahi dikhata hai), ' | ' se; 1000 tak, aakhri kabhi nahi katti. */
+    public function errorText(): string
+    {
+        $e = $this->errText;
+        if (!$e) return '';
+        $last = st_cut((string)array_pop($e), 400);
+        if (count($e) > 4) $e = array_slice($e, 0, 4);
+        $head = implode(' | ', $e);
+        return $head === '' ? $last : st_cut($head, 1000 - mb_strlen($last) - 3) . ' | ' . $last;
     }
     public function checkCancel(): void
     {
         if ((string)h_q1($this->pdo, 'SELECT status FROM st_runs WHERE id = ?', [$this->id]) === 'CANCELLING') throw new StCancelled('cancelled by user');
+    }
+    /** steps_json: label wale plan ki list [{l, n, s}]; koi step bina label (purana int plan) ya steps nahi = null (app steps [] dikhata hai). Chalu step ka note khaali ho to live note. */
+    public function stepsJson(): ?string
+    {
+        if (!$this->steps) return null;
+        $c = $this->cur(); $out = [];
+        foreach ($this->steps as $i => $s) {
+            if ($s['l'] === null) return null;
+            $out[] = ['l' => $s['l'], 'n' => $s['n'] !== '' ? $s['n'] : ($i === $c ? $this->liveNote : ''), 's' => $s['s']];
+        }
+        return st_json($out);
+    }
+    /** Live columns ke saath UPDATE; wo na chale (naye columns nahi, ya DB hichki) to bina unke purana UPDATE (pehle jaisa: wo bhi fail = asli DB problem, job ko pata chale). */
+    private function upd(string $set, array $p): void
+    {
+        try {
+            h_x($this->pdo, "UPDATE st_runs SET $set, frac = ?, detail = ?, steps_json = ?, beat_at = UTC_TIMESTAMP() WHERE id = ?", [...$p, $this->frac, $this->detail, $this->stepsJson(), $this->id]);
+            $this->wrote = microtime(true); $this->dirty = false;
+        } catch (Throwable $e) {
+            h_x($this->pdo, "UPDATE st_runs SET $set WHERE id = ?", [...$p, $this->id]);
+        }
+    }
+    /** Sirf live columns + beat_at. Kabhi throw nahi (progress likhna fail = job chalta rahe). */
+    private function live(): void
+    {
+        $this->wrote = microtime(true);
+        try {
+            h_x($this->pdo, 'UPDATE st_runs SET frac = ?, detail = ?, steps_json = ?, beat_at = UTC_TIMESTAMP() WHERE id = ?', [$this->frac, $this->detail, $this->stepsJson(), $this->id]);
+            $this->dirty = false;
+        } catch (Throwable $e) { if (!$this->liveErr) error_log('mfc studio live progress: ' . $e->getMessage()); $this->liveErr = true; }   // log ek baar (stream me har kuch sec aata)
     }
 }
 final class StCancelled extends RuntimeException {}
@@ -239,6 +362,7 @@ function st_run_exec(PDO $pdo, int $id): void
     if (!$row || $row['status'] !== 'QUEUED') return;
     if (h_x($pdo, "UPDATE st_runs SET status = 'RUNNING', started_at = UTC_TIMESTAMP(), attempts = attempts + 1, stage = 'starting' WHERE id = ? AND status = 'QUEUED'", [$id]) !== 1) return;
     $run = new StRun($pdo, $row);
+    $run->beat();   // pichhle attempt ke steps / frac / detail saaf, beat_at = abhi
     st_log($pdo, "{$run->uid} started · {$run->job} (attempt " . ((int)$row['attempts'] + 1) . ')', 'info', ['run' => $id]);
     $final = 'DONE';
     try {
@@ -259,6 +383,7 @@ function st_run_exec(PDO $pdo, int $id): void
     } catch (StCancelled $e) {
         $final = 'CANCELLED';
         $run->summary = 'cancelled by user';
+        $run->halt();   // jis step par ruki wo app me laal
     } catch (StBudget $e) {
         $run->error($e->getMessage());
         $final = 'BLOCKED';
@@ -280,6 +405,12 @@ function st_run_exec(PDO $pdo, int $id): void
         [$final, (int)$usage['n'], (int)$usage['s'], (float)$usage['c'], st_cut($run->summary, 1000), $id]);
     st_log($pdo, "{$run->uid} finished · $final · {$run->done}/" . max($run->total, $run->done) . " steps · {$run->errors} errors · AI calls {$usage['n']} · \$" . round((float)$usage['c'], 3)
         . ($run->summary !== '' ? ' · ' . $run->summary : ''), $final === 'DONE' ? 'info' : 'warn', ['run' => $id]);
+    // weekly ranking ruki (FAILED, retry nahi): app ka live card kehta hai "notification when it ends" — wajah + research saved ho to Run again
+    if ($run->job === 'rank' && $final === 'FAILED') {
+        try { $saved = (bool)(st_run_rows($pdo, [$pdo->query('SELECT * FROM st_runs WHERE id = ' . $id)->fetch()])[0]['can_reuse'] ?? false); } catch (Throwable $e) { $saved = false; }
+        $why = rtrim(st_cut((string)($run->errText[count($run->errText) - 1] ?? 'unknown error'), 300), '. ');
+        st_notify($pdo, 1, 'studio_run', "rankfail|$id", 'Weekly ranking stopped', $why . ($saved ? '. Research is saved: Run again within 24 h, no new web search cost.' : '. Open Studio to run it again.'), 'studio/ranking', false);
+    }
     if (in_array($run->job, ['competitors', 'revise_features'], true) && $final !== 'DONE') {
         $pid = (int)($row['ref_id'] ?? 0);
         h_x($pdo, 'UPDATE st_projects SET blocker = ?, updated_at = UTC_TIMESTAMP() WHERE id = ?', [st_cut("{$run->job} $final: " . implode(' | ', $run->errText), 500), $pid]);
@@ -425,6 +556,7 @@ if (!defined('ST_RETRY_WAIT')) define('ST_RETRY_WAIT', 5);              // retry
  * Ek AI call. $o: system, user, search (int max_uses, 0 = no web), schema (array JSON schema -> structured output), max_tokens, effort,
  * salvage (schema ki top-level list key): max_tokens par ya output ke baad kata stream (timeout / idle / connection / error event) par JSON adhoora ho to sirf poore items,
  * 'truncated' => true, 'cut' => wajah (0 items = saaf "cut off" / asli stream error).
+ * Live progress ($run ho to, st_live_calc): expect (salvage list me kitne items ki ummeed, "4 of ~10 ideas written"), noun ('ideas'), span ([from, to]: step ke andar is call ka hissa).
  * Transport: streaming (SSE, curl). curl nahi ya env ST_NO_STREAM = purana non-streaming http_json (600 s).
  * Return: ['text', 'json', 'sources' => [[url,title,page_age]], 'cost', 'stop' ('cut' = stream beech me kata), 'truncated', 'cut'].
  */
@@ -450,9 +582,23 @@ function st_ai(PDO $pdo, ?StRun $run, array $o): array
     if ($stream) $body['stream'] = true;
     $text = ''; $alt = ''; $sources = []; $cost = 0.0; $j = null;
     $salvage = !empty($o['schema']) && !empty($o['salvage']);
+    // live progress: stream ki halat se (st_live_calc), step ke span me; DB write StRun throttle karta hai
+    $L = st_live_new($o);
+    $t0 = microtime(true);
+    $tick = $run === null ? null : function (array $st, float $now) use ($run, &$L, $t0): void {
+        if ($now - $L['at'] < 0.25) return;
+        $L['at'] = $now;
+        if ($L['mode'] === 'items' && $now - $L['scan'] >= ST_LIVE_SEC) {   // poore items ginna: text badla ho tabhi, har ST_LIVE_SEC me max ek baar
+            $L['scan'] = $now;
+            $t = st_ai_text($st['blocks'], true);
+            if (strlen($t) !== $L['len']) { $L['len'] = strlen($t); $L['items'] = count(st_json_salvage_list($t, $L['key'])); }
+        }
+        [$f, $d, $n] = st_live_calc($L, $st, $now - $t0);
+        $run->progress($L['span'][0] + ($L['span'][1] - $L['span'][0]) * $f, $d, $n);
+    };
     for ($turn = 0; $turn < 4; $turn++) {
         if ($stream) {
-            try { $j = st_ai_stream($pdo, $run, $model, st_json($body), $headers, $turn, $salvage); }
+            try { $j = st_ai_stream($pdo, $run, $model, st_json($body), $headers, $turn, $salvage, $tick); }
             catch (StNoStream $e) {   // SSL / DNS / connect fail, kuch nahi mila (bill nahi): isi turn ko http_json se, 6 ghante streaming band
                 kv_set('st_nostream_until', (string)(time() + 6 * 3600));
                 st_log($pdo, 'Claude streaming could not connect (' . st_cut($e->getMessage(), 150) . '); using the normal request for 6 hours', 'warn', ['run' => $run?->id]);
@@ -460,6 +606,7 @@ function st_ai(PDO $pdo, ?StRun $run, array $o): array
                 $turn--; continue;
             }
         } else {
+            $run?->progress($L['span'][0], 'waiting for Claude', null, true);   // blocking call: beech me heartbeat nahi ho sakta
             $t0 = microtime(true);
             [$code, $resp, $err] = http_json('POST', ST_API_URL, st_json($body), $headers, 600);
             if ($code === 429 || $code === 529 || $code >= 500) { sleep(ST_RETRY_WAIT * (1 + 2 * $turn)); $t0 = microtime(true); [$code, $resp, $err] = http_json('POST', ST_API_URL, st_json($body), $headers, 600); }
@@ -485,6 +632,7 @@ function st_ai(PDO $pdo, ?StRun $run, array $o): array
         }
         if (($j['stop_reason'] ?? '') === 'refusal') throw new RuntimeException('Claude declined this request (refusal)');
         if (($j['stop_reason'] ?? '') !== 'pause_turn') break;
+        $L['base_n'] += count(array_filter($content, fn($b) => ($b['type'] ?? '') === 'server_tool_use' && ($b['name'] ?? '') === 'web_search'));   // agle turn me "N web searches" jaari
         // server-side search loop ruka: assistant content wapas bhejo, server wahin se aage chalata hai (fallback se pehle ke model-internal blocks nahi)
         $body['messages'] = [$body['messages'][0], ['role' => 'assistant', 'content' => st_ai_echo($content)]];
     }
@@ -518,10 +666,10 @@ function st_ai_neterr(string $err, float $secs, bool $timeout): string
  * Output aa chuka ho to retry nahi (dobara bill hota). Fail par bhi jo pata hai (message_start ke input tokens, output ~ bytes/4) st_usage me ok=0.
  * $partial (salvage wali call): 200 ke baad text aa kar stream kata = throw nahi, jitna aaya wo message + stop_reason 'cut', 'cut' => error text, usage (andaza); st_ai usage ok=0 likhta hai.
  */
-function st_ai_stream(PDO $pdo, ?StRun $run, string $model, string $json, array $headers, int $turn, bool $partial = false): array
+function st_ai_stream(PDO $pdo, ?StRun $run, string $model, string $json, array $headers, int $turn, bool $partial = false, ?callable $tick = null): array
 {
     for ($try = 0; ; $try++) {
-        $r = st_ai_stream_once($pdo, $run, $json, $headers);
+        $r = st_ai_stream_once($pdo, $run, $json, $headers, $tick);
         $msg = st_sse_message($r['st']);
         $use = fn() => $msg !== null ? st_usage_add($pdo, $run, (string)($msg['model'] ?? $model), st_sse_usage($r['st']), false) : 0.0;
         if ($r['dberr'] !== null) throw new RuntimeException('Database connection lost during the Claude answer: ' . st_cut($r['dberr']->getMessage(), 200));
@@ -539,10 +687,11 @@ function st_ai_stream(PDO $pdo, ?StRun $run, string $model, string $json, array 
 }
 
 /**
- * Ek streaming HTTP request (curl, SSE). Progress callback: idle (ST_STREAM_IDLE_SEC tak koi byte nahi) = abort; har ST_STREAM_CHECK_SEC cancel check + DB ping.
- * Callback ke andar ka koi exception curl tak nahi jaata (pakdo, yaad rakho, abort). Return: code, raw (non-200 body), st (SSE state), idle, cancel, dberr, errno, err, secs.
+ * Ek streaming HTTP request (curl, SSE). Progress callback: idle (ST_STREAM_IDLE_SEC tak koi byte nahi) = abort; $tick (live progress, st_ai) har baar (khud throttle karta hai);
+ * har ST_STREAM_CHECK_SEC heartbeat (beat_at) + cancel check + DB ping.
+ * Callback ke andar ka koi exception curl tak nahi jaata (pakdo, yaad rakho, abort; live progress ka fail chup). Return: code, raw (non-200 body), st (SSE state), idle, cancel, dberr, errno, err, secs.
  */
-function st_ai_stream_once(PDO $pdo, ?StRun $run, string $json, array $headers): array
+function st_ai_stream_once(PDO $pdo, ?StRun $run, string $json, array $headers, ?callable $tick = null): array
 {
     $r = ['code' => 0, 'raw' => '', 'st' => st_sse_new(), 'idle' => false, 'cancel' => false, 'dberr' => null, 'errno' => 0, 'err' => '', 'secs' => 0.0];
     $t0 = microtime(true); $seen = $t0; $chk = $t0;
@@ -555,11 +704,13 @@ function st_ai_stream_once(PDO $pdo, ?StRun $run, string $json, array $headers):
             if ($r['code'] === 200) st_sse_feed($r['st'], $d); elseif (strlen($r['raw']) < 65536) $r['raw'] .= $d;   // error = normal JSON body
             return strlen($d);
         },
-        (defined('CURLOPT_XFERINFOFUNCTION') ? CURLOPT_XFERINFOFUNCTION : CURLOPT_PROGRESSFUNCTION) => function () use ($pdo, $run, &$r, &$seen, &$chk): int {
+        (defined('CURLOPT_XFERINFOFUNCTION') ? CURLOPT_XFERINFOFUNCTION : CURLOPT_PROGRESSFUNCTION) => function () use ($pdo, $run, $tick, &$r, &$seen, &$chk): int {
             $now = microtime(true);
             if ($now - $seen >= ST_STREAM_IDLE_SEC) { $r['idle'] = true; return 1; }
+            if ($tick !== null && $r['code'] === 200) { try { $tick($r['st'], $now); } catch (Throwable $e) {} }   // live progress kabhi stream na roke
             if ($now - $chk < ST_STREAM_CHECK_SEC) return 0;
             $chk = $now;
+            $run?->beat();   // beat_at: app "No update for N min" isi se (khud kabhi throw nahi karta)
             try {   // ye query connection ko zinda bhi rakhti hai (MySQL server has gone away nahi)
                 if ($run !== null && (string)h_q1($pdo, 'SELECT status FROM st_runs WHERE id = ?', [$run->id]) === 'CANCELLING') { $r['cancel'] = true; return 1; }
                 if ($run === null) $pdo->query('SELECT 1');
@@ -591,6 +742,52 @@ function st_stream_fail(array $r): array
     if ($r['errno'] !== 0) return [$none, st_ai_neterr((string)$r['err'], (float)$r['secs'], false)];
     return [$none, 'Claude API answer stopped early (connection closed)'];
 }
+
+// ---------------------------------------------------------------- live progress of one AI call (pure: tests me alag se)
+/** st_ai ke options se live hisaab ki shuruaat: mode items (salvage list: poore items gino) | search (web search) | write (baaki). */
+function st_live_new(array $o): array
+{
+    $span = isset($o['span']) && is_array($o['span']) && count($o['span']) === 2 ? array_map('floatval', array_values($o['span'])) : [0.0, 1.0];
+    return ['mode' => !empty($o['schema']) && !empty($o['salvage']) ? 'items' : (!empty($o['search']) ? 'search' : 'write'), 'max' => max(1, (int)($o['search'] ?? 0)),
+        'expect' => max(1, (int)($o['expect'] ?? 10)), 'noun' => (string)($o['noun'] ?? 'ideas'), 'key' => (string)($o['salvage'] ?? ''), 'span' => $span,
+        'base_n' => 0, 'items' => 0, 'len' => -1, 'scan' => 0.0, 'at' => 0.0];
+}
+
+/**
+ * Stream ki abhi ki halat se imaandar progress: [frac 0..0.97 (is call ke andar), detail (app ka sub-text), note (chalu step ka chhota note)]. $secs = call shuru hue kitne sec.
+ * Soch (thinking, abhi text nahi): time ke saath dheere badhta hai (max 0.25, rukta nahi dikhta). items: 0.25 + 0.7 x poore items / expect ($L['items'], caller ginta hai).
+ * search: web searches (server_tool_use web_search) / max_uses tak 0.6, phir notes ka text (aakhri search ke baad 400+ bytes) badhne se. write: text badhne se.
+ */
+function st_live_calc(array $L, array $st, float $secs): array
+{
+    $n = (int)($L['base_n'] ?? 0); $txt = 0; $after = 0;
+    foreach ($st['blocks'] ?? [] as $b) {
+        $t = (string)($b['type'] ?? '');
+        if ($t === 'server_tool_use' && ($b['name'] ?? '') === 'web_search') { $n++; $after = 0; }
+        elseif ($t === 'web_search_tool_result') $after = 0;
+        elseif ($t === 'text') { $k = strlen((string)($b['text'] ?? '')); $txt += $k; $after += $k; }
+    }
+    $secs = max(0.0, $secs);
+    $think = fn(float $cap, float $half): float => $cap * $secs / ($secs + $half);
+    $cap = fn(float $f): float => round(min(0.97, max(0.0, $f)), 4);
+    switch ($L['mode'] ?? 'write') {
+        case 'items':
+            if ($txt === 0) return [$cap($think(0.25, 90)), 'AI is thinking', ''];
+            $i = (int)($L['items'] ?? 0); $e = max(1, (int)($L['expect'] ?? 10));
+            return [$cap(0.25 + 0.7 * min(1, $i / $e)), "$i of ~$e " . ($L['noun'] ?? 'ideas') . ' written', "$i of ~$e"];
+        case 'search':
+            if ($n === 0) return [$cap($think(0.1, 30)), $txt > 0 ? 'starting web search' : 'AI is thinking', ''];
+            $note = st_n($n, 'search', 'searches');
+            if ($after > 400) return [$cap(0.6 + 0.37 * $after / ($after + 6000)), 'writing notes', $note];
+            return [$cap(0.6 * min(1, $n / max(1, (int)($L['max'] ?? 1)))), st_n($n, 'web search', 'web searches'), $note];
+        default:
+            if ($txt === 0) return [$cap($think(0.25, 90)), 'AI is thinking', ''];
+            return [$cap(0.25 + 0.72 * $txt / ($txt + 20000)), 'AI is writing', ''];
+    }
+}
+
+/** "1 source" / "9 sources". */
+function st_n(int $n, string $one, ?string $many = null): string { return "$n " . ($n === 1 ? $one : ($many ?? $one . 's')); }
 
 // ---------------------------------------------------------------- SSE accumulator (pure: tests me alag se)
 /** State: buf (adhoori line), event/data (chalu event), msg (message_start + message_delta), blocks (index => block), json (tool input tukde), done (message_stop), error, delta (message_delta aaya), out (output bytes). */
@@ -882,7 +1079,7 @@ function st_job_economics(PDO $pdo, StRun $run): void
     // category key = DB ki barabari (st_econ.category ka collation), PHP ka fold nahi; jo naam DB me '*' ke barabar ho wo bhi "sab apps" se na takraye
     $wk = st_econ_catkeys($pdo, ['*', ...array_values($catOf)]);
     $catOf = array_filter($catOf, fn($c) => $wk[$c] !== $wk['*']);
-    $run->plan(4);
+    $run->plan(ST_ECON_STEPS);
     $run->stage('cohorts: installs 8-28 days ago, retention + D7 revenue');
     $from = gmdate('Y-m-d', time() - 28 * 86400); $to = gmdate('Y-m-d', time() - 8 * 86400);
     [$rows, $revRows] = st_econ_cohorts($pdo, $from, $to, $run);
@@ -898,6 +1095,7 @@ function st_job_economics(PDO $pdo, StRun $run): void
     };
     foreach ($rows as $r) $put($r, ['installs' => (int)$r['installs'], 'r1' => (int)$r['r1'], 'r7' => (int)$r['r7']]);
     foreach ($revRows as $r) $put($r, ['rev' => (float)$r['rev']]);
+    $run->note(number_format(array_sum(array_column($C, 'installs'))) . ' installs');
     $run->step(2);
     $run->stage('CPI from Google Ads (30 days, per app)');
     $cpi = [];
@@ -911,6 +1109,7 @@ function st_job_economics(PDO $pdo, StRun $run): void
             $cpi[$p] = ($cpi[$p] ?? 0) + $usd / (float)$r['conv'];
         }
     }
+    $run->note(st_n(count($cpi), 'app'));
     $run->step();
     // per app per cc per type -> per category per cc per type (+ ALL countries row '*'); category key = DB weight ('w' + hex, '*' se kabhi barabar nahi), naam pehli spelling
     $agg = []; $names = [];
@@ -953,6 +1152,7 @@ function st_job_economics(PDO $pdo, StRun $run): void
         }
         $pdo->commit();
     } catch (Throwable $e) { if ($pdo->inTransaction()) $pdo->rollBack(); throw $e; }
+    $run->note(st_n($n, 'row'));
     $run->step();
     st_source_mark($pdo, 'internal', true, '', $n);
     $unmapped = count(array_diff(array_unique(array_column($C, 'pkg')), array_keys($catOf)));
@@ -1122,6 +1322,14 @@ function st_rate(): float { return (float)cfg('inr_per_usd') ?: 88.0; }   // nay
 function st_has_table(PDO $pdo, string $t): bool { return (bool)$pdo->query('SHOW TABLES LIKE ' . $pdo->quote($t))->fetch(); }
 function st_port_ready(PDO $pdo): bool { foreach (ST_PORT_TABLES as $t) if (st_has_table($pdo, $t)) return true; return false; }
 function st_has_col(PDO $pdo, string $t, string $c): bool { try { return (bool)$pdo->query("SHOW COLUMNS FROM `$t` LIKE " . $pdo->quote($c))->fetch(); } catch (Throwable $e) { return false; } }
+/** ALTER TABLE $t $add, sirf jab $have() false. Saath chalti doosri request ne abhi joda (Duplicate column 1060 / key 1061) ya ab hai = theek; baaki galti throw. */
+function st_alter_add(PDO $pdo, string $t, string $add, callable $have): void
+{
+    if ($have()) return;
+    try { $pdo->exec("ALTER TABLE `$t` $add"); }
+    catch (PDOException $e) { if (!in_array((int)($e->errorInfo[1] ?? 0), [1060, 1061], true) && !$have()) throw $e; }
+}
+function st_has_key(PDO $pdo, string $t, string $k): bool { try { return (bool)$pdo->query("SHOW INDEX FROM `$t` WHERE Key_name = " . $pdo->quote($k))->fetch(); } catch (Throwable $e) { return false; } }
 function st_inr(float $v): string { $r = round($v); return ($r < 0 ? '-' : '') . '₹' . number_format(abs($r)); }
 
 /**
@@ -1149,7 +1357,7 @@ function st_job_portfolio(PDO $pdo, StRun $run): void
         if (!preg_match('/^[A-Z]{2}$/', $cc)) $cc = '';
         $A[$key][$cc][$k] = ($A[$key][$cc][$k] ?? 0) + $v;
     };
-    $run->plan(4);
+    $run->plan(ST_PORT_STEPS);
     $run->stage('your apps: ad revenue, payments, installs (last ' . ST_PORT_DAYS . ' days)');
     if ($has('imps')) foreach (h_q($pdo, "SELECT pkg, cc, COUNT(*) n, SUM(rev_usd) rev FROM imps WHERE ts >= $W GROUP BY pkg, cc") as $r) {
         $put($r['pkg'], $r['cc'], 'imps', (float)$r['n']); $put($r['pkg'], $r['cc'], 'ad_rev_inr', (float)$r['rev'] * $rate);
@@ -1166,6 +1374,7 @@ function st_job_portfolio(PDO $pdo, StRun $run): void
     // paid install = gclid ya utm_campaign (st_job_economics wali definition); column na ho to skip
     $paidSql = implode(' OR ', array_filter([$dev && st_has_col($pdo, 'devices', 'gclid') ? "COALESCE(gclid, '') <> ''" : '', $dev && st_has_col($pdo, 'devices', 'utm_campaign') ? "COALESCE(utm_campaign, '') <> ''" : '']));
     if ($paidSql !== '') foreach (h_q($pdo, "SELECT pkg, cc, COUNT(*) n FROM devices WHERE first_seen >= $W AND ($paidSql) GROUP BY pkg, cc") as $r) $put($r['pkg'], $r['cc'], 'paid_installs', (float)$r['n']);
+    $run->note(st_n(count($A), 'app'));
     $run->step();
 
     $run->stage('Google Ads spend per app + country split');
@@ -1209,6 +1418,7 @@ function st_job_portfolio(PDO $pdo, StRun $run): void
             $put($P[$k], (string)$cc, 'spend_inr', $v); $put($P[$k], (string)$cc, 'est', $v);
         }
     }
+    $run->note(st_n(count($camp), 'campaign'));
     $run->step();
 
     $run->stage('app / country / category rows');
@@ -1252,6 +1462,7 @@ function st_job_portfolio(PDO $pdo, StRun $run): void
     $t = $v['totals'];
     $sbc = $t['spend_inr'] <= 0 ? 'none' : ($estAll <= 0.004 ? 'exact' : ($exact <= 0.004 ? 'estimate' : 'mixed'));
     $insights = st_port_insights($v);
+    $run->note(st_n(count($out), 'row'));
     $run->step();
 
     $run->stage('save portfolio + evidence + insights');
@@ -1268,6 +1479,7 @@ function st_job_portfolio(PDO $pdo, StRun $run): void
             'total_eid' => $tid, 'missing' => array_values(array_diff([...ST_PORT_TABLES, 'ga_geo_day'], $tabs))]));
         $pdo->commit();
     } catch (Throwable $e) { if ($pdo->inTransaction()) $pdo->rollBack(); throw $e; }
+    $run->note(st_n(count($insights), 'insight'));
     $run->step();
     st_source_mark($pdo, 'internal', true, '', count($out) + 1);
     $ncc = count(array_filter($v['countries'], fn($c) => $c['cc'] !== ''));
@@ -1377,6 +1589,9 @@ function st_port_brief(PDO $pdo): ?array
         'loss' => $loss ? ['cc' => $loss['cc'], 'profit_inr' => $loss['profit_inr'], 'spend_est' => $loss['spend_est']] : null];
 }
 
+/** Portfolio me kitne apne apps (0 = abhi nahi / table nahi). */
+function st_port_apps(PDO $pdo): int { try { return (int)h_q1($pdo, "SELECT COUNT(*) FROM st_port WHERE kind = 'app'"); } catch (Throwable $e) { return 0; } }
+
 function st_port_stale(PDO $pdo): bool
 {
     $m = st_dec(kv_get('st_port_meta'), null);
@@ -1458,10 +1673,10 @@ const ST_RESEARCH_SYS = "You are a senior Android market researcher for a small 
     . "Be critical: high downloads or heavy advertising do not prove profit. Prefer realistic profit, real user demand, technical feasibility on current Android APIs, Google Play policy compliance. "
     . "Only state facts you found in search results and say where. Never invent download counts, revenue, ad spend or ratings: if not found, say 'unknown'. Distinguish what a source says from your own inference.";
 
-/** Web research notes for one theme. Returns [notes text, [Sx => evidence id]]. */
-function st_web_notes(PDO $pdo, StRun $run, string $theme, string $question, array $ccs, int $maxUses): array
+/** Web research notes for one theme. Returns [notes text, [Sx => evidence id]]. $span: step ke andar is call ka hissa (live progress). */
+function st_web_notes(PDO $pdo, StRun $run, string $theme, string $question, array $ccs, int $maxUses, array $span = [0.0, 1.0]): array
 {
-    $r = st_ai($pdo, $run, ['system' => ST_RESEARCH_SYS, 'search' => $maxUses, 'cc' => $ccs[0] ?? '', 'effort' => 'medium', 'max_tokens' => 12000,
+    $r = st_ai($pdo, $run, ['system' => ST_RESEARCH_SYS, 'search' => $maxUses, 'cc' => $ccs[0] ?? '', 'effort' => 'medium', 'max_tokens' => 12000, 'span' => $span,
         'user' => "Research theme: $theme\nCountries in focus: " . implode(', ', $ccs) . "\n\n$question\n\nWrite concise research notes (bullets). After each claim put the source URL in brackets. Mark each claim [SOURCE SAYS] or [MY INFERENCE]."]);
     $map = [];
     $i = 0;
@@ -1495,11 +1710,12 @@ function st_job_discover(PDO $pdo, StRun $run, string $mode): void
 {
     $ccs = st_on_countries();
     $cats = st_categories();
-    $run->plan(2);
+    $run->plan(['Web scan', 'Findings']);
     $run->stage('web discovery: new trends and competitor moves');
     [$notes, $map] = st_web_notes($pdo, $run, 'Daily trend scan: ' . implode(', ', $cats),
         'What meaningful changes happened in the last 7-14 days in these Android app categories: new fast-growing apps, notable new competitors, Google Play policy changes affecting them, '
         . 'apps that started or stopped heavy advertising? Ignore trivial news. If nothing meaningful happened, say so.', $ccs, 6);
+    $run->note(st_n(count($map), 'source'));
     $run->step();
     $run->stage('structuring findings');
     $pl = fn(int $k, string $w) => "$k $w" . ($k === 1 ? '' : 's');
@@ -1528,6 +1744,7 @@ function st_job_discover(PDO $pdo, StRun $run, string $mode): void
     } catch (Throwable $e) {
         $run->error('structuring findings: ' . $e->getMessage());
     }
+    $run->note($findings === null ? 'notes only' : st_n(count($findings), 'finding'));
     $run->step();
     $save($findings);
 }
@@ -1804,13 +2021,26 @@ function st_job_rank(PDO $pdo, StRun $run): void
 {
     $ccs = st_on_countries();
     $cats = st_categories();
-    if (!h_q1($pdo, 'SELECT 1 FROM st_econ LIMIT 1')) { $run->stage('economics first (internal analytics)'); try { st_job_economics($pdo, $run); } catch (Throwable $e) { $run->error('economics: ' . $e->getMessage()); } }
-    // apne apps ka portfolio purana (36 ghante) ya kabhi bana hi nahi: pehle wahi (pure SQL, AI cost nahi; dashboard tables hi nahi to skip)
-    if (st_port_ready($pdo) && st_port_stale($pdo)) { $run->stage('portfolio first (your apps, last ' . ST_PORT_DAYS . ' days)'); try { st_job_portfolio($pdo, $run); } catch (StCancelled $e) { throw $e; } catch (Throwable $e) { $run->error('portfolio: ' . $e->getMessage()); } }
-    $run->plan(count($cats) + 3);
+    $econ1 = !h_q1($pdo, 'SELECT 1 FROM st_econ LIMIT 1');                // economics kabhi nahi bana: pehle wahi (internal analytics)
+    $port1 = st_port_ready($pdo) && st_port_stale($pdo);                  // apne apps ka portfolio purana (36 ghante) ya kabhi nahi bana (pure SQL, AI cost nahi; tables hi nahi to skip)
     $allNotes = ''; $smap = []; $adsTxt = '';
     $n = 0;
     $adsOn = !empty((stcfg('bigquery') ?? [])['project']);
+    // har category ka web step, Ads (configured ho to) ya apne apps + daily discovery, AI ranking, save: count(cats) + 3 (pehle jaisa).
+    // Andar chalne wale economics / portfolio ke steps bhi abhi se (reserved): pura plan shuru se dikhe, % kabhi 99 tak ja kar peeche na aaye
+    $own = [...array_map(fn($c) => "Web research: $c", $cats), $adsOn ? 'Ads activity' : 'Your apps + daily discovery', 'AI ranking', 'Save + notify you'];
+    $pre = [...($econ1 ? ST_ECON_STEPS : []), ...($port1 ? ST_PORT_STEPS : [])];
+    $run->plan([...$pre, ...$own], count($pre));
+    // andar wala job: fail = error + sirf uske bache steps band (closeOpen us range me), rank ke apne steps apni jagah; cancel = poori run ruki
+    $inner = function (string $name, string $stage, int $k, callable $job) use ($run): void {
+        $run->stage($stage);
+        $from = $run->cur() ?? 0;
+        try { $job(); } catch (StCancelled $e) { throw $e; } catch (Throwable $e) { $run->error("$name: " . $e->getMessage()); $run->closeOpen($from, $k); }
+    };
+    if ($econ1) $inner('economics', 'economics first (internal analytics)', count(ST_ECON_STEPS), fn() => st_job_economics($pdo, $run));
+    if ($port1) $inner('portfolio', 'portfolio first (your apps, last ' . ST_PORT_DAYS . ' days)', count(ST_PORT_STEPS), fn() => st_job_portfolio($pdo, $run));
+    $base = count($run->steps) - count($own);
+    $adsI = $base + count($cats); $aiI = $adsI + 1;
     // pichhli ruki run ki research (24 ghante ke andar, same categories + countries; crash ke baad isi run ki bhi): web search ka paisa dobara nahi. Wahan jo category / Ads fail hua sirf wahi dobara
     $reuse = st_rank_notes_reuse($pdo, $run->id, $cats, $ccs);
     $todo = $cats; $done = []; $adsDo = true; $adsOk = false; $fresh = 0;   // fresh: is run ki nayi research (save karni hai)
@@ -1819,7 +2049,8 @@ function st_job_rank(PDO $pdo, StRun $run): void
         $allNotes = $reuse['notes']; $adsTxt = $reuse['ads']; $smap = $reuse['smap']; $n = $reuse['n'];
         $redo = array_merge($todo, $adsDo && $adsOn ? ['Ads Transparency'] : []);
         $run->stage('reusing research notes from ' . ($reuse['uid'] === $run->uid ? 'the earlier attempt' : $reuse['uid']) . ' (' . ($redo ? 'new research only for: ' . implode(', ', $redo) : 'no new web search') . ')');
-        $run->step(count($done) + ($adsDo ? 0 : 1));   // ho chuke web + Ads steps (progress N/N jaisa normal run me)
+        foreach ($done as $c) $run->mark($base + (int)array_search($c, $cats, true), 'reused');   // ho chuke web + Ads steps (progress N/N jaisa normal run me)
+        if (!$adsDo) $run->mark($adsI, 'reused');
     }
     // research ka paisa lag chuka: notes save (discovery se pehle). Ranking fail / budget / cancel ho to agli rank run 24 ghante tak inhe hi use karti hai
     $saveNotes = function () use ($pdo, $run, $ccs, $cats, $reuse, &$allNotes, &$adsTxt, &$smap, &$n, &$done, &$adsOk, &$fresh): void {
@@ -1841,6 +2072,7 @@ function st_job_rank(PDO $pdo, StRun $run): void
                 foreach ($map as $k => $v) { $n++; $smap['S' . $n] = $v; $ren[$k] = 'S' . $n; }
                 $notes = preg_replace_callback('/^(S\d+):/m', fn($m) => isset($ren[$m[1]]) ? $ren[$m[1]] . ':' : $m[0], $notes);
                 $allNotes .= $notes . "\n\n"; $done[] = $cat; $fresh++;
+                $run->note(st_n(count($map), 'source'));
             } catch (StBudget | StCancelled $e) { throw $e; } catch (Throwable $e) { $run->error("$cat: " . $e->getMessage()); }
             $run->step();
         }
@@ -1848,8 +2080,10 @@ function st_job_rank(PDO $pdo, StRun $run): void
         if ($adsDo) {
             if ($adsOn) {
                 $run->stage('Ads Transparency activity');
-                $adsTxt = ''; $adsOk = true;
-                foreach ($cats as $cat) {
+                $adsTxt = ''; $adsOk = true; $adsN = 0; $nc = count($cats);
+                foreach (array_values($cats) as $ci => $cat) {
+                    // BigQuery: har category 60 s tak, beech me heartbeat nahi ho sakta: har category ke baad (app "No update for N min" na dikhaye)
+                    if ($ci > 0) $run->progress($ci / $nc, "$ci of $nc categories checked", null, true);
                     try {
                         $act = st_ads_activity($pdo, $run, preg_split('/\s+/', strtolower($cat)), $ccs);
                         foreach ($act as $a) {
@@ -1857,12 +2091,12 @@ function st_job_rank(PDO $pdo, StRun $run): void
                                 'title' => "Advertisers matching '$cat' in {$a['cc']} (30 days)", 'value' => $a, 'url' => 'https://adstransparency.google.com/',
                                 'method' => 'BigQuery public dataset google_ads_transparency_center.creative_stats; advertiser name keyword match; counts only, no spend'], $run->id);
                             $n++; $smap['S' . $n] = $eid;
-                            $adsTxt .= "S$n: Ads Transparency $cat {$a['cc']}: {$a['advertisers']} advertisers, {$a['creatives']} creatives, shown {$a['first_shown']}..{$a['last_shown']}\n";
+                            $adsTxt .= "S$n: Ads Transparency $cat {$a['cc']}: {$a['advertisers']} advertisers, {$a['creatives']} creatives, shown {$a['first_shown']}..{$a['last_shown']}\n"; $adsN++;
                         }
                     } catch (Throwable $e) { $adsOk = false; $run->error("ads $cat: " . $e->getMessage()); break; }
                 }
-                if ($adsOk) $fresh++;
-            }
+                if ($adsOk) { $fresh++; $run->note(st_n($adsN, 'result')); }
+            } else $run->note(($k = st_port_apps($pdo)) > 0 ? st_n($k, 'app') : '');   // apne apps + daily discovery ranking prompt me (neeche, isi waqt)
             $run->step();
         }
     } catch (StBudget | StCancelled $e) { $saveNotes(); throw $e; }   // jitni research ho chuki wo bacha lo, phir BLOCKED / CANCELLED
@@ -1882,19 +2116,21 @@ function st_job_rank(PDO $pdo, StRun $run): void
         . "or -1 if there is no evidence. basis: VERIFIED only for E* or P* evidence (owner's own analytics), ESTIMATE only for licensed third-party estimates or P* lines marked as estimated, INFERENCE for anything from web notes or your judgement, UNKNOWN when rating is -1. "
         . "evidence: list of ids exactly as given (S1, E2, P3...); never invent ids. Use recommendation REJECT for ideas with high policy risk (deceptive pranks, impersonation, fake functionality, sensitive permissions without core need). "
         . "Critically assess the owner's own ideas too.\nBe brief: concept at most 30 words; each factor note at most 15 words; each decision_card field at most 25 words; why_build and why_avoid at most 30 words each; "
-        . "at most 3 competitors, 4 risks and 4 monetization items per opportunity.\n" . ST_PORT_GUIDE, 'effort' => 'high', 'max_tokens' => $maxTok, 'schema' => st_opp_schema(), 'salvage' => 'opportunities',
+        . "at most 3 competitors, 4 risks and 4 monetization items per opportunity.\n" . ST_PORT_GUIDE, 'effort' => 'high', 'max_tokens' => $maxTok, 'schema' => st_opp_schema(), 'salvage' => 'opportunities', 'expect' => 10,
         'user' => "Countries enabled: " . implode(', ', $ccs) . "\nCategories: " . implode(', ', $cats) . "\n\n=== Web research notes (untrusted) ===\n$allNotes\n=== Ads Transparency ===\n" . ($adsTxt ?: "(source not configured)\n")
             . "\n=== Owner's own analytics (verified) ===\n$econ\n=== Owner's own apps, last " . ST_PORT_DAYS . " days (verified) ===\n$port\n=== Owner's own ideas to evaluate ===\n" . ($own ?: "(none)\n")]);
     $list = (array)($r['json']['opportunities'] ?? []);
     if ($r['truncated'] && count($list) < 3) throw new RuntimeException("Claude's answer was cut off ({$r['cut']}): only " . count($list) . ' complete ideas');
+    $run->note(st_n(count($list), 'idea'));
     $run->step();
     $ids = st_store_opps($pdo, $run, $list, $smap + $emap + $pmap, 'ai');
-    if ($r['truncated']) $run->error("AI answer was cut off ({$r['cut']}); kept " . count($ids) . ' ideas');   // run PARTIAL; ranking + Gate 1 phir bhi
+    if ($r['truncated']) $run->error("AI answer was cut off ({$r['cut']}); kept " . count($ids) . ' ideas', $aiI);   // run PARTIAL; ranking + Gate 1 phir bhi (AI ranking step laal)
     st_rank_positions($pdo, $ids);
     // reused_from.runs: notes ki poori chain (jin runs ki research thi) — ranking ho gayi to 24 ghante tak inme se kisi ke notes dobara nahi
     $aid = st_artifact_save($pdo, null, $run->id, 'ranking', ['opportunity_ids' => $ids, 'countries' => $ccs, 'categories' => $cats, 'weights' => st_weights(), 'discovery_ids' => $discIds,
         'reused_from' => $reuse ? ['artifact_id' => $reuse['id'], 'run_uid' => $reuse['uid'], 'runs' => $reuse['runs']] : null, 'truncated' => $r['truncated']], 'weekly ranking', 'ai');
     $run->step();
+    $run->detail = st_n(count($ids), 'idea');   // khatam card: "11 ideas · 9 min · $1.92" (step() live text saaf karta hai; st_run_exec ka flush ye likhta hai)
     $run->summary = count($ids) . ' opportunities · ranking artifact #' . $aid . ($reuse ? ' · research notes reused from ' . ($reuse['uid'] === $run->uid ? 'the earlier attempt' : $reuse['uid']) : '');
     if ($ids) {
         $top = h_q($pdo, 'SELECT title, final_rec FROM st_opps WHERE id IN (' . implode(',', $ids) . ") ORDER BY GREATEST(COALESCE(organic_score,0), COALESCE(paid_score,0)) DESC LIMIT 3");
@@ -2211,8 +2447,9 @@ function st_rank_positions(PDO $pdo, array $ids): void
 
 function st_job_deep(PDO $pdo, StRun $run): void
 {
-    $ids = array_map('intval', array_column(h_q($pdo, "SELECT id FROM st_opps WHERE status IN ('SELECTED','WATCH') ORDER BY updated_at LIMIT 8"), 'id'));
-    $run->plan(count($ids) + 1);
+    $rows = h_q($pdo, "SELECT id, title FROM st_opps WHERE status IN ('SELECTED','WATCH') ORDER BY updated_at LIMIT 8");
+    $ids = array_map('intval', array_column($rows, 'id'));
+    $run->plan([...array_map(fn($o) => 'Recheck: ' . $o['title'], $rows), 'Monthly review']);   // har idea ek step + review
     foreach ($ids as $id) { st_reassess($pdo, $run, $id, 'Monthly reassessment: has the market moved? Any new competitors, policy changes, or demand shifts?'); $run->step(); }
     // pichli recommendations ka review: jo REJECT/ WATCH the unme kya hua
     $hist = h_q($pdo, "SELECT final_rec, status, COUNT(*) n FROM st_opps WHERE first_seen >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL 90 DAY) GROUP BY final_rec, status");
@@ -2226,7 +2463,7 @@ function st_job_evaluate(PDO $pdo, StRun $run, int $oppId, bool $more): void
 {
     $o = $pdo->query('SELECT * FROM st_opps WHERE id = ' . $oppId)->fetch();
     if (!$o) throw new RuntimeException("OPP-$oppId not found");
-    $run->plan(1);
+    $run->plan([$more ? 'More web research + AI review' : 'Web research + AI review']);
     st_reassess($pdo, $run, $oppId, $more ? ('Additional research requested by owner. ' . $o['user_note']) : 'Owner submitted this idea. Evaluate it critically; if it is weak say why.');
     $run->step();
     $n = $pdo->query('SELECT title, final_rec FROM st_opps WHERE id = ' . $oppId)->fetch();
@@ -2237,11 +2474,13 @@ function st_reassess(PDO $pdo, StRun $run, int $oppId, string $why): void
 {
     $o = $pdo->query('SELECT * FROM st_opps WHERE id = ' . $oppId)->fetch();
     $ccs = $o['countries'] !== '' ? explode(',', $o['countries']) : st_on_countries();
-    [$notes, $map] = st_web_notes($pdo, $run, (string)$o['title'], "$why\nIdea: {$o['title']} — {$o['concept']}\nFind the most relevant real competitors, their user complaints, demand signals and policy risks.", $ccs, 5);
+    // ek step me 2 AI calls: web notes pehla ~45%, evaluation baaki (live progress ka span)
+    [$notes, $map] = st_web_notes($pdo, $run, (string)$o['title'], "$why\nIdea: {$o['title']} — {$o['concept']}\nFind the most relevant real competitors, their user complaints, demand signals and policy risks.", $ccs, 5, [0.0, 0.45]);
+    $run->note(st_n(count($map), 'source'));
     [$econ, $emap] = st_econ_context($pdo);
     [$port, $pmap] = st_portfolio_context($pdo);
     $r = st_ai($pdo, $run, ['system' => ST_RESEARCH_SYS . "\nReturn exactly one opportunity (the idea below, same title). Factor rules: rating 0-10 (10 = more of that thing), -1 if no evidence (basis UNKNOWN); basis VERIFIED only for E* or P* ids (ESTIMATE for P* lines marked as estimated); INFERENCE for web/judgement; never invent evidence ids.\n" . ST_PORT_GUIDE,
-        'effort' => 'high', 'max_tokens' => 24000, 'schema' => st_opp_schema(),
+        'effort' => 'high', 'max_tokens' => 24000, 'schema' => st_opp_schema(), 'span' => [0.45, 1.0],
         'user' => "Idea title (keep exactly): {$o['title']}\nCategory: {$o['category']}\nConcept: {$o['concept']}\n\n=== Web notes (untrusted) ===\n$notes\n=== Owner's analytics ===\n$econ"
             . "\n=== Owner's own apps, last " . ST_PORT_DAYS . " days (verified) ===\n$port"]);
     $list = (array)($r['json']['opportunities'] ?? []);
@@ -2416,20 +2655,22 @@ function st_job_competitors(PDO $pdo, StRun $run, int $projectId): void
     if (!$p) throw new RuntimeException('project not found');
     $o = $pdo->query('SELECT * FROM st_opps WHERE id = ' . (int)$p['opp_id'])->fetch();
     $ccs = $p['countries'] !== '' ? explode(',', $p['countries']) : st_on_countries();
-    $run->plan(3);
+    $run->plan(['Web research: competitors', 'AI analysis + feature list', 'Save + notify you']);
     $known = implode('; ', array_map(fn($c) => $c['name'] . ($c['package'] ? " ({$c['package']})" : ''), (array)st_dec($o['competitors'], [])));
     $run->stage('web research: top competitors + recent reviews');
     [$notes, $map] = st_web_notes($pdo, $run, "Competitors for {$p['name']}",
         "App idea: {$p['name']} — {$o['concept']}\nKnown candidates: " . ($known ?: 'none') . "\nIdentify the TOP 3 most relevant real Android competitors on Google Play. For each: package name, developer, Play URL, "
         . "install range, rating and rating count if a source shows them, last update, core features, monetization/ads experience, premium, and especially repeated complaints in recent 1-3 star reviews "
         . "(crashes, lag, excessive ads, misleading functionality, paywalls, battery drain, permissions, missing features). Quote complaint themes, not personal data.", $ccs, 8);
+    $run->note(st_n(count($map), 'source'));
     $run->step();
     $run->stage('AI analysis: comparison + feature spec');
     $r = st_ai($pdo, $run, ['system' => ST_PRODUCT_SYS, 'effort' => 'high', 'max_tokens' => 48000, 'schema' => st_comp_schema(),
         'user' => "Project {$p['puid']}: {$p['name']}\nConcept: {$o['concept']}\nCategory: {$o['category']}\nTarget countries: " . implode(', ', $ccs)
             . "\nOwner's team builds lightweight Kotlin apps monetized with AppLovin MAX / AdMob.\n\n=== Research notes (untrusted) ===\n$notes"]);
-    $run->step();
     $spec = st_clean_spec((array)$r['json'], $map);
+    $run->note(st_n(count($spec['features']), 'feature'));
+    $run->step();
     $aid = st_artifact_save($pdo, $projectId, $run->id, 'features', $spec, 'v1: competitor analysis + proposed feature scope', 'ai');
     h_x($pdo, "UPDATE st_projects SET stage = 'FEATURES_PENDING', next_gate = 2, blocker = '', updated_at = UTC_TIMESTAMP() WHERE id = ?", [$projectId]);
     $run->step();
@@ -2471,7 +2712,7 @@ function st_job_revise_features(PDO $pdo, StRun $run, int $projectId): void
     $fb = (string)($run->params['feedback'] ?? '');
     $prev = st_dec($a['content'], []);
     $map = (array)($prev['evidence_map'] ?? []);
-    $run->plan(1);
+    $run->plan(['AI revision from your feedback']);
     $run->stage('AI revision from your feedback');
     $r = st_ai($pdo, $run, ['system' => ST_PRODUCT_SYS . "\nRevise the spec per the owner's feedback. Keep everything else unchanged. Owner decisions override AI preferences, but if a requested feature is impossible or against policy, keep it as REJECT and explain why.",
         'effort' => 'high', 'max_tokens' => 48000, 'schema' => st_comp_schema(),
@@ -2481,6 +2722,7 @@ function st_job_revise_features(PDO $pdo, StRun $run, int $projectId): void
     $spec['changes'] = st_spec_diff($prev, $spec);
     $aid = st_artifact_save($pdo, $projectId, $run->id, 'features', $spec, 'v' . ((int)$a['version'] + 1) . " after your feedback: " . st_cut($fb, 300), 'ai');
     h_x($pdo, "UPDATE st_projects SET stage = 'FEATURES_PENDING', next_gate = 2, blocker = '', updated_at = UTC_TIMESTAMP() WHERE id = ?", [$projectId]);
+    $run->note(st_n(count($spec['changes']), 'change'));
     $run->step();
     $run->summary = 'spec v' . ((int)$a['version'] + 1) . ' · ' . count($spec['changes']) . ' changes';
     st_notify($pdo, 2, 'studio_gate', "gate2|$projectId|$aid", "Gate 2 again: revised scope for {$p['name']}", count($spec['changes']) . ' changes after your feedback. Please review and approve again.', 'studio/project/' . $projectId, true);
@@ -2503,7 +2745,8 @@ function st_spec_diff(array $old, array $new): array
 function st_job_source_check(PDO $pdo, StRun $run): void
 {
     $only = (string)($run->params['source'] ?? '');
-    $run->plan(1);
+    // internal: economics ke 4 steps is step se pehle judte hain (StRun::plan)
+    $run->plan([['internal' => 'Check your dashboard data', 'ads_transparency' => 'Read the Ads dataset schema', 'claude_web' => 'Test web search'][$only] ?? 'Source test']);
     if ($only === 'internal') { st_job_economics($pdo, $run); }
     elseif ($only === 'ads_transparency') { st_bq_schema_ok($pdo); $run->summary = 'Ads Transparency dataset schema verified'; }
     elseif ($only === 'claude_web') {
@@ -2583,12 +2826,84 @@ function st_pending(PDO $pdo): array
     return $out;
 }
 
-function st_run_row(array $r): array
+const ST_ACTIVE = ['RUNNING', 'CANCELLING'];
+const ST_REUSE_STATUSES = ['FAILED', 'PARTIAL', 'BLOCKED', 'CANCELLED'];   // st_rank_notes_reuse jaisa: inki research agli rank run le sakti hai
+
+/**
+ * Ek run (app: runs list, overview, run detail, view=live). Live: frac (chalu step ka hissa), pct (DONE = 100, warna (done + frac) / total, max 99), detail, steps
+ * [{label, state done|on|wait|fail, note}] ([] = purani run / bina label), beat_at (UTC), source (source_check ka source, warna null). $x (st_run_rows deta hai): running (QUEUED run kiske peeche),
+ * usage [run id => [n, s, c]] (chalti run ka live kharcha), reuse (can_reuse ke liye). Bina $x: waiting_for null, can_reuse false, kharcha DB wala.
+ */
+function st_run_row(array $r, array $x = []): array
 {
-    return ['id' => (int)$r['id'], 'uid' => $r['run_uid'], 'job' => $r['job'], 'ref_id' => $r['ref_id'] !== null ? (int)$r['ref_id'] : null, 'trigger' => $r['trigger_type'], 'by' => $r['triggered_by'],
-        'status' => $r['status'], 'stage' => $r['stage'], 'steps_done' => (int)$r['steps_done'], 'steps_total' => (int)$r['steps_total'], 'errors' => (int)$r['errors'], 'error_text' => $r['error_text'],
-        'ai_calls' => (int)$r['ai_calls'], 'searches' => (int)$r['searches'], 'cost_usd' => (float)$r['cost_usd'], 'summary' => $r['summary'], 'attempts' => (int)$r['attempts'],
-        'queued_at' => $r['queued_at'], 'started_at' => $r['started_at'], 'finished_at' => $r['finished_at']];
+    $st = (string)$r['status']; $id = (int)$r['id'];
+    $done = (int)$r['steps_done']; $total = (int)$r['steps_total']; $frac = (float)($r['frac'] ?? 0);
+    $u = in_array($st, ST_ACTIVE, true) ? ($x['usage'][$id] ?? null) : null;   // chalti run: st_runs me kharcha khatam hone par likha jaata hai, tab tak st_usage ka jod
+    $re = $x['reuse'] ?? null;
+    return ['id' => $id, 'uid' => $r['run_uid'], 'job' => $r['job'], 'ref_id' => $r['ref_id'] !== null ? (int)$r['ref_id'] : null, 'trigger' => $r['trigger_type'], 'by' => $r['triggered_by'],
+        'status' => $st, 'stage' => $r['stage'], 'steps_done' => $done, 'steps_total' => $total, 'frac' => round($frac, 4),
+        'pct' => $st === 'DONE' ? 100 : min(99, (int)floor(100 * ($done + $frac) / max(1, $total) + 1e-9)), 'detail' => (string)($r['detail'] ?? ''),
+        'steps' => st_steps_view($r['steps_json'] ?? null, $st), 'errors' => (int)$r['errors'], 'error_text' => $r['error_text'] !== '' ? $r['error_text'] : null,
+        'ai_calls' => $u ? (int)$u['n'] : (int)$r['ai_calls'], 'searches' => $u ? (int)$u['s'] : (int)$r['searches'], 'cost_usd' => round($u ? (float)$u['c'] : (float)$r['cost_usd'], 4),
+        'summary' => $r['summary'] !== '' ? $r['summary'] : null, 'attempts' => (int)$r['attempts'],
+        'queued_at' => $r['queued_at'], 'started_at' => $r['started_at'], 'finished_at' => $r['finished_at'], 'beat_at' => $r['beat_at'] ?? null,
+        'waiting_for' => $st === 'QUEUED' ? ($x['running'] ?? null) : null,
+        'source' => $r['job'] === 'source_check' ? (((string)(((array)st_dec($r['params'] ?? null, []))['source'] ?? '')) ?: null) : null,   // Run again: source test kis source ka
+        'can_reuse' => $r['job'] === 'rank' && in_array($st, ST_REUSE_STATUSES, true) && $re !== null && (in_array((string)$r['run_uid'], $re['runs'], true) || $id === $re['newest'])];
+}
+
+/**
+ * Kai runs ek saath (har view isi se): context ek baar — QUEUED ho to chalti run ka job (waiting_for), chalti runs ka live kharcha (ek grouped query),
+ * aur rank run FAILED/PARTIAL/BLOCKED/CANCELLED ho to st_rank_notes_reuse ek baar (can_reuse: notes har category cover karte hain aur is run ki chain ke hain, ya ye sabse nayi rank run hai).
+ */
+function st_run_rows(PDO $pdo, array $rows): array
+{
+    $x = ['running' => null, 'usage' => [], 'reuse' => null];
+    $act = array_values(array_filter($rows, fn($r) => in_array($r['status'], ST_ACTIVE, true)));
+    if (in_array('QUEUED', array_column($rows, 'status'), true))
+        $x['running'] = $act ? (string)$act[0]['job'] : (($j = h_q1($pdo, "SELECT job FROM st_runs WHERE status IN ('RUNNING','CANCELLING') ORDER BY id DESC LIMIT 1")) !== null ? (string)$j : null);
+    if ($act) {
+        $ids = implode(',', array_map(fn($r) => (int)$r['id'], $act));
+        foreach (h_q($pdo, "SELECT run_id, COUNT(*) n, COALESCE(SUM(searches),0) s, COALESCE(SUM(cost_usd),0) c FROM st_usage WHERE run_id IN ($ids) GROUP BY run_id") as $u) $x['usage'][(int)$u['run_id']] = $u;
+    }
+    if (array_filter($rows, fn($r) => $r['job'] === 'rank' && in_array($r['status'], ST_REUSE_STATUSES, true))) {
+        try {
+            $cats = st_categories();
+            $re = st_rank_notes_reuse($pdo, 0, $cats, st_on_countries());
+            // sirf jab har category ki research saved ho: app "no new web search cost" kehta hai (adhoori = baaki categories ka web search phir lagega)
+            if ($re && !array_diff($cats, $re['done'])) $x['reuse'] = ['runs' => array_values(array_unique([$re['uid'], ...$re['runs']])), 'newest' => (int)h_q1($pdo, "SELECT MAX(id) FROM st_runs WHERE job = 'rank'")];
+        } catch (Throwable $e) { error_log('mfc studio can_reuse: ' . $e->getMessage()); }
+    }
+    return array_map(fn($r) => st_run_row($r, $x), $rows);
+}
+
+/**
+ * steps_json -> app ke steps. d = done, f = fail. Pehla khula step (w / e): chalti run me 'on'; FAILED / BLOCKED / CANCELLED me 'fail' (wahin ruki; crash recovery bhi);
+ * DONE me sab done. Baaki khule = wait ('e' = error wala step, run ruki to fail). Purani run (NULL) / kharab JSON = [].
+ */
+function st_steps_view(?string $json, string $status): array
+{
+    $l = $json === null ? null : json_decode($json, true);
+    if (!is_array($l) || !array_is_list($l)) return [];
+    $out = []; $first = true;
+    foreach ($l as $s) {
+        if (!is_array($s)) return [];
+        $k = (string)($s['s'] ?? 'w');
+        if ($k === 'd' || $status === 'DONE') $state = 'done';
+        elseif ($k === 'f') $state = 'fail';
+        else {
+            $state = $first ? (in_array($status, ST_ACTIVE, true) ? 'on' : (in_array($status, ['FAILED', 'BLOCKED', 'CANCELLED'], true) || $k === 'e' ? 'fail' : 'wait')) : ($k === 'e' ? 'fail' : 'wait');
+            $first = false;
+        }
+        $out[] = ['label' => (string)($s['l'] ?? ''), 'state' => $state, 'note' => (string)($s['n'] ?? '')];
+    }
+    return $out;
+}
+
+/** view=live: har QUEUED / RUNNING / CANCELLING run + pichhle 15 min me khatam hui, newest first, max 20 (app har kuch sec poll karta hai: ek query + st_run_rows). */
+function st_live_runs(PDO $pdo): array
+{
+    return st_run_rows($pdo, h_q($pdo, "SELECT * FROM st_runs WHERE status IN ('QUEUED','RUNNING','CANCELLING') OR finished_at >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL 15 MINUTE) ORDER BY id DESC LIMIT 20"));
 }
 
 function st_project_row(PDO $pdo, array $p, bool $full = false): array
@@ -2612,7 +2927,7 @@ function st_project_row(PDO $pdo, array $p, bool $full = false): array
         $r['features'] = $a ? ['artifact_id' => (int)$a['id'], 'version' => (int)$a['version'], 'hash' => $a['hash'], 'created_at' => $a['created_at'], 'note' => $a['change_note'],
             'content' => st_dec($a['content'], new stdClass())] : null;
         $r['versions'] = h_q($pdo, 'SELECT id, kind, version, change_note, created_by, created_at FROM st_artifacts WHERE project_id = ? ORDER BY id DESC', [(int)$p['id']]);
-        $r['runs'] = array_map('st_run_row', h_q($pdo, "SELECT * FROM st_runs WHERE ref_id = ? AND job IN ('competitors','revise_features') ORDER BY id DESC LIMIT 10", [(int)$p['id']]));
+        $r['runs'] = st_run_rows($pdo, h_q($pdo, "SELECT * FROM st_runs WHERE ref_id = ? AND job IN ('competitors','revise_features') ORDER BY id DESC LIMIT 10", [(int)$p['id']]));
         $r['approvals'] = h_q($pdo, 'SELECT gate, artifact_version, decision, feedback, user, created_at FROM st_approvals WHERE project_id = ? ORDER BY id DESC', [(int)$p['id']]);
         $ev = [];
         if ($a) foreach ((array)(st_dec($a['content'], [])['evidence_map'] ?? []) as $k => $id) $ev[] = (int)$id;

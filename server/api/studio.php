@@ -7,7 +7,15 @@
  *
  * App (login cookie):
  *   GET ?view=overview | research&engine=organic|paid|combined&cc=&category=&status= | opp&id= | compare&ids=1,2,3 | evidence&ids= | projects
- *            | project&id= | approvals | history&q=&kind=&page= | runs | run&id= | sources | settings | mine | discovery
+ *            | project&id= | approvals | history&q=&kind=&page= | runs | run&id= | sources | settings | mine | discovery | live
+ *   GET ?view=live (app har kuch sec poll karta hai; halka: runs ki ek query + chalti runs ke kharche ki ek grouped query) -> {ok, view, server_time (UTC), cron_last,
+ *              runs[]: har QUEUED / RUNNING / CANCELLING run + pichhle 15 min me khatam, newest first, max 20}
+ *       run (runs, overview.runs, run, project.runs, research.last_ranking me bhi yahi): {id, uid, job, status, ref_id|null, trigger, steps_done, steps_total,
+ *              frac (0..1, chalu step ke andar), pct (DONE = 100, warna floor(100 x (steps_done + frac) / max(1, steps_total)), max 99), stage, detail ("4 of ~10 ideas written", '' = kuch nahi),
+ *              steps[]:{label, state done|on|wait|fail, note} ([] = purani run), queued_at, started_at|null, finished_at|null, beat_at|null (aakhri heartbeat UTC),
+ *              cost_usd (RUNNING: st_usage ka live jod), ai_calls, searches, error_text|null, summary|null, waiting_for (QUEUED: chalti run ka job, warna null),
+ *              can_reuse (rank FAILED/PARTIAL/BLOCKED/CANCELLED jiski poori research (har category) agli rank run abhi le legi: dobara web search ka kharcha nahi),
+ *              source (source_check: kis source ka test, Run again isse; warna null), by, errors, attempts}. DONE rank: detail = "11 ideas".
  *       overview.mine = null (portfolio kabhi nahi chala) ya {computed_at, profit_inr, roas, ecpm_usd, apps, apps_ads_on, best:{cc, profit_inr}|null, loss:{cc, profit_inr}|null}
  *       mine = aapke apne apps, pichhle 30 local din from..to (aaj samet; pure SQL, AI cost nahi), roz ek baar 'portfolio' job:
  *              {empty (job kabhi nahi chala), computed_at (UTC), from, to, days, rate (INR/USD), spend_by_cc: exact|estimate|mixed|none, running (portfolio run QUEUED/RUNNING),
@@ -168,7 +176,7 @@ switch ($view) {
             'evidence' => (int)h_q1($pdo, 'SELECT COUNT(*) FROM st_evidence')];
         $out['spend'] = ['month_usd' => round(st_month_spend($pdo), 2), 'limit_usd' => (float)st_set('st_ai_budget_usd')];
         $out['sources'] = array_map(fn($s) => ['id' => $s['id'], 'name' => $s['name'], 'status' => $s['status'], 'missing' => $s['missing'], 'paid' => $s['paid']], st_sources($pdo));
-        $out['runs'] = array_map('st_run_row', h_q($pdo, 'SELECT * FROM st_runs ORDER BY id DESC LIMIT 6'));
+        $out['runs'] = st_run_rows($pdo, h_q($pdo, 'SELECT * FROM st_runs ORDER BY id DESC LIMIT 6'));
         $out['activity'] = h_q($pdo, "SELECT id, kind, level, actor, msg, created_at, project_id, opp_id FROM st_events WHERE kind <> 'log' ORDER BY id DESC LIMIT 8");
         $out['top'] = array_map(fn($o) => st_opp_row($o), h_q($pdo, "SELECT * FROM st_opps WHERE status IN ('NEW','WATCH') ORDER BY GREATEST(COALESCE(organic_score,0), COALESCE(paid_score,0)) DESC LIMIT 3"));
         $out['schedule'] = ['daily' => st_set('st_daily') === '1', 'weekly' => st_set('st_weekly') === '1', 'monthly' => st_set('st_monthly') === '1',
@@ -207,7 +215,7 @@ switch ($view) {
         $out['countries'] = st_countries();
         $out['categories'] = array_values(array_unique(array_merge(st_categories(), array_column(h_q($pdo, "SELECT DISTINCT category FROM st_opps WHERE category <> ''"), 'category'))));
         $last = $pdo->query("SELECT r.*, a.version FROM st_artifacts a JOIN st_runs r ON r.id = a.run_id WHERE a.project_id IS NULL AND a.kind = 'ranking' ORDER BY a.id DESC LIMIT 1")->fetch();
-        $out['last_ranking'] = $last ? st_run_row($last) + ['version' => (int)$last['version']] : null;
+        $out['last_ranking'] = $last ? st_run_rows($pdo, [$last])[0] + ['version' => (int)$last['version']] : null;
         $out['weights'] = st_weights();
         break;
 
@@ -259,13 +267,17 @@ switch ($view) {
         break;
 
     case 'runs':
-        $out['items'] = array_map('st_run_row', h_q($pdo, 'SELECT * FROM st_runs ORDER BY id DESC LIMIT 50'));
+        $out['items'] = st_run_rows($pdo, h_q($pdo, 'SELECT * FROM st_runs ORDER BY id DESC LIMIT 50'));
+        break;
+
+    case 'live':   // chalti / queued / abhi khatam runs: har screen ka live card isi se
+        $out['runs'] = st_live_runs($pdo);
         break;
 
     case 'run':
         $r = $pdo->query('SELECT * FROM st_runs WHERE id = ' . (int)($_GET['id'] ?? 0))->fetch();
         if (!$r) json_out(['ok' => false, 'error' => 'not found'], 404);
-        $out['item'] = st_run_row($r);
+        $out['item'] = st_run_rows($pdo, [$r])[0];
         $out['log'] = h_q($pdo, 'SELECT level, msg, created_at FROM st_events WHERE run_id = ? ORDER BY id LIMIT 300', [(int)$r['id']]);
         $out['usage'] = h_q($pdo, 'SELECT kind, model, in_tokens, out_tokens, searches, cost_usd, ok, created_at FROM st_usage WHERE run_id = ? ORDER BY id', [(int)$r['id']]);
         break;

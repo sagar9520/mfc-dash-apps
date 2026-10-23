@@ -22,4 +22,7 @@ val HI_UI_HOME: Map<String, String> = mapOf(
     "Today's top apps" to "Aaj ke top apps", "Top apps" to "Top apps", "No apps" to "Koi app nahi",
     // Ads kharcha (By app): Home card + Ads + Live widget
     "today · ROAS" to "aaj · ROAS", "No ad spend today" to "Aaj ad kharcha nahi",
+    // period tabs (Aaj | Kal | 7 din | 30 din): Ads kharcha ka column + top apps ka title
+    "yesterday · ROAS" to "kal · ROAS", "7 days · ROAS" to "7 din · ROAS", "30 days · ROAS" to "30 din · ROAS",
+    "period · ROAS" to "period · ROAS", "period" to "period", "Yesterday's top apps" to "Kal ke top apps",
 )

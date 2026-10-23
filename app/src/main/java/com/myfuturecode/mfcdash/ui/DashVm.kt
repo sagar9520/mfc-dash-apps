@@ -64,7 +64,7 @@ data class UiState(
 class DashVm(private val app: App) : ViewModel() {
     private val api: Api = app.api
     private val prefs: Prefs = app.prefs
-    private val _s = MutableStateFlow(UiState(loggedIn = prefs.hasLogin, range = prefs.range, roasTarget = prefs.roasTarget,
+    private val _s = MutableStateFlow(UiState(loggedIn = prefs.hasLogin, range = startRange(), roasTarget = prefs.roasTarget,
         notifyUrgent = prefs.notifyUrgent, notifyWarn = prefs.notifyWarn, notifyInfo = prefs.notifyInfo, checkMinutes = prefs.checkMinutes, lang = prefs.lang, liveMonitor = prefs.liveMonitor))
     val s: StateFlow<UiState> = _s
     /** Notification tap se aayi screen ("alerts"); Root consume karke null kar deta hai. */
@@ -114,9 +114,15 @@ class DashVm(private val app: App) : ViewModel() {
         AlertsSync.cancel(app)
         MonitorService.stop(app)
         api.logout(); prefs.clearLogin()
-        _s.value = UiState(loggedIn = false, range = prefs.range, roasTarget = prefs.roasTarget,
+        _s.value = UiState(loggedIn = false, range = startRange(), roasTarget = prefs.roasTarget,
             notifyUrgent = prefs.notifyUrgent, notifyWarn = prefs.notifyWarn, notifyInfo = prefs.notifyInfo, checkMinutes = prefs.checkMinutes, lang = prefs.lang, liveMonitor = prefs.liveMonitor)
     }
+
+    /**
+     * App khulne par yaad wala period. Custom ki taareekhein yaad nahi rehtin (sirf "custom"): bina taareekh Api aaj bhejta,
+     * tab "Custom" chuna dikhta aur number aaj ke. Isliye custom = aaj.
+     */
+    private fun startRange(): String = prefs.range.let { if (it == "custom") "today" else it }
 
     fun setRange(r: String, from: String? = null, to: String? = null) {
         PageLoad.start()   // user ne period badla = naya load (upar ki neeli line); refresh() me nahi, 20 s poll bhi wahi bulata hai

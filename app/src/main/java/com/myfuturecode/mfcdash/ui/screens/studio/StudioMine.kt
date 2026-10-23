@@ -289,17 +289,24 @@ internal fun MinePage(
 ) {
     val m = g.view("mine")
     val running = m?.b("running") == true
-    SPoll(if (running) 15_000L else 300_000L, reload, running) { vm.load("mine") }
+    val live = sLive(vm)
+    val lr = live.forPage(setOf("portfolio", "economics"))
+    // live chalu (naya server): khatam hone par fin se reload, 15 s wala poll nahi; purana server = pehle jaisa
+    val fast = running && !live.ok
+    SPoll(if (fast) 15_000L else 300_000L, reload, fast, live.finOf("portfolio", "economics")) { vm.load("mine") }
     val wide = isWide()
     val ready = m != null && !m.b("empty")
+    // live card dikh raha = apni "Updating…" / "Running…" line nahi (wahi baat card me)
+    val liveCard = lr.any { it.s("job") == "portfolio" }
     KScreen(top = {
         bar()
-        if (!wide && m != null && ready) MineHero(m)
+        if (!wide && m != null && ready) MineHero(m, !liveCard)
         else if (!wide && sSkelOn(g, m)) KSkelHero(KTint.Green, split = 3)
     }) {
+        SLiveCards(lr, live, g, vm, nav)
         SLoad(g, m, { vm.load("mine") }, { MineSkel(wide) }) { mm ->
-            if (mm.b("empty")) MineEmpty(mm, g, vm)
-            else MineBody(mm, g, vm, nav, wide, sort, seg, onSeg)
+            if (mm.b("empty")) MineEmpty(mm, g, vm, !liveCard)
+            else MineBody(mm, g, vm, nav, wide, sort, seg, onSeg, !liveCard)
         }
     }
 }
@@ -310,11 +317,12 @@ internal fun mineSortOn(seg: Int, wide: Boolean): Boolean = wide || seg < 2
 @Composable
 private fun MineBody(
     m: JSONObject, g: GState, vm: StudioVm, nav: NavHostController, wide: Boolean, sort: KSortState?, seg: Int, onSeg: (Int) -> Unit,
+    showRun: Boolean = true,
 ) {
     if (wide) {
         KTwoPane(
             left = {
-                MineHero(m)
+                MineHero(m, showRun)
                 KSection("For research".t())
                 MineResearch(m, g, vm)
             },
@@ -337,9 +345,9 @@ private fun MineBody(
     MineUpdated(m)
 }
 
-/** Hara hero: "Profit · 30 days" + ROAS pill, bada profit, Earnings | Ads spend | eCPM. Job chal raha = chhoti "Updating" line. */
+/** Hara hero: "Profit · 30 days" + ROAS pill, bada profit, Earnings | Ads spend | eCPM. Job chal raha = chhoti "Updating" line (live card na ho to). */
 @Composable
-private fun MineHero(m: JSONObject) {
+private fun MineHero(m: JSONObject, showRun: Boolean = true) {
     val t = m.obj("totals")
     val profit = t.d("profit_inr")
     KHero(KTint.Green) {
@@ -349,7 +357,7 @@ private fun MineHero(m: JSONObject) {
             listOf("Earnings".t() to inrK(t.d("earn_inr")), "Ads spend".t() to inrK(t.d("spend_inr")), "eCPM" to ecpmText(t.dn("ecpm_usd"))),
             compact = true,
         )
-        if (m.b("running")) KStatus("Updating… new numbers in a few minutes".t(), KKind.ASK, Modifier.padding(top = 10.dp))
+        if (showRun && m.b("running")) KStatus("Updating… new numbers in a few minutes".t(), KKind.ASK, Modifier.padding(top = 10.dp))
     }
 }
 
@@ -643,7 +651,7 @@ private fun mineFail(m: JSONObject): String? {
 
 /** Job kabhi nahi chala (ya pichhla run fail): "No analysis yet" + wajah + Run now (chal raha ho to wait line). */
 @Composable
-private fun MineEmpty(m: JSONObject, g: GState, vm: StudioVm) {
+private fun MineEmpty(m: JSONObject, g: GState, vm: StudioVm, showRun: Boolean = true) {
     val c = Mfc.c
     val running = m.b("running")
     KCard {
@@ -658,7 +666,7 @@ private fun MineEmpty(m: JSONObject, g: GState, vm: StudioVm) {
                 align = TextAlign.Center,
             )
         }
-        if (running) MineWait(Modifier.fillMaxWidth().padding(top = 14.dp), TextAlign.Center)
+        if (running) { if (showRun) MineWait(Modifier.fillMaxWidth().padding(top = 14.dp), TextAlign.Center) }
         else KButton(
             "Run now".t(), {
                 vm.act("run", mapOf("job" to "portfolio"), "run_portfolio", ok = "Queued. The server picks it up within 5 minutes.".t()) { vm.load("mine") }

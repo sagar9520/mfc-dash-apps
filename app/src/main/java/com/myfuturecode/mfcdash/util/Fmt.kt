@@ -78,6 +78,39 @@ fun fmtDay(d: String?, year: Boolean = false): String {
     val x = runCatching { dayIn.parse(d) }.getOrNull() ?: return d
     return (if (year) dayOutY else dayOut).format(x)
 }
+
+private val dayWk = SimpleDateFormat("EEE, dd MMM", Locale.US)
+private val dayNum = SimpleDateFormat("dd", Locale.US)
+private val dayYm = SimpleDateFormat("yyyyMM", Locale.US)
+private val dayY = SimpleDateFormat("yyyy", Locale.US)
+
+/** "2026-10-22" → "Wed, 22 Oct" (hafte ke din ke saath; ek din wala period). */
+fun fmtDayWk(d: String?): String {
+    if (d.isNullOrBlank()) return "–"
+    val x = runCatching { dayIn.parse(d) }.getOrNull() ?: return d
+    return dayWk.format(x)
+}
+
+/**
+ * Chhota period: ek hi mahina = "16 – 22 Oct", warna "28 Sep – 04 Oct"; ek hi din = "22 Oct". Saal: is saal ka = nahi likhte;
+ * pichhle saal ka = ant me ("16 – 22 Oct 2025"); do saal = dono me ("28 Oct 2025 – 04 Oct 2026", warna ulta / chhota lagta).
+ */
+fun fmtDayRange(from: String?, to: String?): String {
+    if (from.isNullOrBlank() || to.isNullOrBlank() || from == to) return fmtDay(from?.ifBlank { null } ?: to)
+    val a = runCatching { dayIn.parse(from) }.getOrNull()
+    val b = runCatching { dayIn.parse(to) }.getOrNull()
+    if (a == null || b == null) return fmtDay(from) + " – " + fmtDay(to)
+    if (dayY.format(a) != dayY.format(b)) return dayOutY.format(a) + " – " + dayOutY.format(b)
+    val end = if (dayY.format(b) == dayY.format(java.util.Date())) dayOut.format(b) else dayOutY.format(b)
+    return (if (dayYm.format(a) == dayYm.format(b)) dayNum.format(a) else dayOut.format(a)) + " – " + end
+}
+
+/** "2026-10-22" ka ant: agle din 00:00 (phone ka time zone), ms me. Galat taareekh = null. */
+fun dayEndMs(d: String?): Long? {
+    if (d.isNullOrBlank()) return null
+    val x = runCatching { dayIn.parse(d) }.getOrNull() ?: return null
+    return java.util.Calendar.getInstance().apply { time = x; add(java.util.Calendar.DAY_OF_MONTH, 1) }.timeInMillis
+}
 fun agoText(ms: Long): String {
     val s = (System.currentTimeMillis() - ms) / 1000
     return when {

@@ -6,6 +6,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
@@ -53,11 +54,13 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.isSpecified
 import androidx.compose.ui.graphics.takeOrElse
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -425,7 +428,12 @@ fun KKv(label: String, value: String, modifier: Modifier = Modifier, valueColor:
 
 // ---------------- controls ----------------
 
-/** Segmented tabs: 48dp track, chuna hua safed pill 4dp andar. Card/hero ke andar track = page rang. */
+/**
+ * Segmented tabs: 48dp track, chuna hua safed pill 4dp andar. Card/hero ke andar track = page rang.
+ * fit = true (Home ke 4-5 period tabs, patla phone / bada font): naam "..." se nahi katte. Sab barabar chaude tab me aa jaayen
+ * to barabar; warna har tab apne naam jitna (+ bachi jagah barabar baant ke), aur phir bhi tang ho to SAB naam ek hi chhote
+ * size me (14sp ka 60% tak; phir bhi na aaye tabhi "..."). Badge ki jagah nahi ginte.
+ */
 @Composable
 fun KSegTabs(
     options: List<String>,
@@ -434,6 +442,41 @@ fun KSegTabs(
     modifier: Modifier = Modifier,
     badges: List<Int> = emptyList(),
     track: Color = Color.Unspecified,
+    fit: Boolean = false,
+) {
+    if (!fit || options.isEmpty()) { KSegRow(options, selected, onSelect, modifier, badges, track, 14.sp, null); return }
+    BoxWithConstraints(modifier.fillMaxWidth()) {
+        val tm = rememberTextMeasurer()
+        val tw = remember(options, tm) {
+            options.map { tm.measure(it, kStyle(14.sp, FontWeight.SemiBold), maxLines = 1, softWrap = false).size.width.toFloat() }
+        }
+        val n = options.size
+        val w = constraints.maxWidth.toFloat()
+        // text ke dono taraf ki padding (har tab)
+        val pad = with(LocalDensity.current) { (SEG_PAD * 2).toPx() }
+        val sum = tw.sum()
+        val (scale, weights) = when {
+            !constraints.hasBoundedWidth || tw.max() + pad <= w / n -> 1f to null
+            else -> {
+                // chhota karna pade to 2% aur (gol hone se 1px bada text "..." na bane)
+                val fitK = if (sum <= 0f) 1f else (w - n * pad) / sum
+                val k = if (fitK >= 1f) 1f else (fitK * .98f).coerceAtLeast(.6f)
+                val extra = ((w - n * pad - sum * k) / n).coerceAtLeast(0f)
+                k to tw.map { it * k + pad + extra }
+            }
+        }
+        KSegRow(options, selected, onSelect, Modifier, badges, track, 14.sp * scale, weights)
+    }
+}
+
+/** Tab ke naam aur track ke kinare ki doori: chuna hua pill 4dp andar, to naam pill se 4dp door. */
+private val SEG_PAD = 8.dp
+
+/** weights = har tab ki chaudai ka hissa (null = sab barabar). */
+@Composable
+private fun KSegRow(
+    options: List<String>, selected: Int, onSelect: (Int) -> Unit, modifier: Modifier, badges: List<Int>, track: Color, size: TextUnit,
+    weights: List<Float>?,
 ) {
     val c = Mfc.c
     val inCard = LocalKInCard.current
@@ -449,7 +492,7 @@ fun KSegTabs(
         options.forEachIndexed { i, label ->
             val on = i == selected
             Box(
-                Modifier.weight(1f).fillMaxHeight().clip(RoundedCornerShape(24.dp))
+                Modifier.weight(weights?.getOrNull(i)?.takeIf { it > 0f } ?: 1f).fillMaxHeight().clip(RoundedCornerShape(24.dp))
                     .selectable(selected = on, role = Role.Tab, onClick = { onSelect(i) }),
                 contentAlignment = Alignment.Center,
             ) {
@@ -458,8 +501,8 @@ fun KSegTabs(
                     if (!c.isDark && !c.onBrand) pill = pill.border(1.dp, c.line, RoundedCornerShape(20.dp))
                     Box(pill)
                 }
-                Row(Modifier.padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    KT(label, 14.sp, if (on) c.tabOnFg else c.ink2, weight = FontWeight.SemiBold)
+                Row(Modifier.padding(horizontal = SEG_PAD), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    KT(label, size, if (on) c.tabOnFg else c.ink2, weight = FontWeight.SemiBold)
                     val b = badges.getOrNull(i) ?: 0
                     if (b > 0) KBadge(b, ring = Color.Transparent)
                 }

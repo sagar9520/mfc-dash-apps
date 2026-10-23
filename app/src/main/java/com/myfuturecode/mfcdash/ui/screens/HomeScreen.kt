@@ -118,11 +118,13 @@ import com.myfuturecode.mfcdash.ui.kit.KScreen
 import com.myfuturecode.mfcdash.ui.kit.KSection
 import com.myfuturecode.mfcdash.ui.kit.KSectionLink
 import com.myfuturecode.mfcdash.ui.kit.KSegBar
+import com.myfuturecode.mfcdash.ui.kit.KSegTabs
 import com.myfuturecode.mfcdash.ui.kit.KSkelCircle
 import com.myfuturecode.mfcdash.ui.kit.KSkelLine
 import com.myfuturecode.mfcdash.ui.kit.KSkeleton
 import com.myfuturecode.mfcdash.ui.kit.KSplit
 import com.myfuturecode.mfcdash.ui.kit.KStatus
+import com.myfuturecode.mfcdash.ui.kit.KT
 import com.myfuturecode.mfcdash.ui.kit.KSteps
 import com.myfuturecode.mfcdash.ui.kit.KTint
 import com.myfuturecode.mfcdash.ui.kit.KTwoPane
@@ -139,7 +141,10 @@ import com.myfuturecode.mfcdash.util.arr
 import com.myfuturecode.mfcdash.util.b
 import com.myfuturecode.mfcdash.util.d
 import com.myfuturecode.mfcdash.util.dn
+import com.myfuturecode.mfcdash.util.dayEndMs
 import com.myfuturecode.mfcdash.util.fmtDay
+import com.myfuturecode.mfcdash.util.fmtDayRange
+import com.myfuturecode.mfcdash.util.fmtDayWk
 import com.myfuturecode.mfcdash.util.inr
 import com.myfuturecode.mfcdash.util.inrK
 import com.myfuturecode.mfcdash.util.mapObj
@@ -213,14 +218,16 @@ fun HomeScreen(vm: DashVm, st: UiState, nav: NavHostController, hvm: HealthVm, g
                 KHomeBar("MFC", hello, unread, urgent, { tab("alerts") }, middle = { HaalHead(Modifier.weight(1f), todo, known) })
             } else {
                 KHomeBar("MFC", hello, unread, urgent, { tab("alerts") })
-                HomeHero(st, money, vm, open, tab)
+                HomePeriodTabs(vm, st, Modifier.padding(start = 16.dp, end = 16.dp, top = 2.dp, bottom = 4.dp))
+                HomeHero(st, money, { vm.refresh() }, open, tab)
             }
         }) {
             if (wide) {
-                // Fold: baayein paisa, daayein aaj ka haal (heading app bar me)
+                // Fold: baayein period tabs + paisa, daayein aaj ka haal (heading app bar me)
                 KTwoPane(
                     left = {
-                        HomeHero(st, money, vm, open, tab)
+                        HomePeriodTabs(vm, st)
+                        HomeHero(st, money, { vm.refresh() }, open, tab)
                         TopCard(st, gOv, open)
                         TopApps(st, money, open, tab)
                         MoreLinks(open)
@@ -340,8 +347,9 @@ private fun rememberLive30(pkgs: List<String>): Map<String, Double?> {
 }
 
 /**
- * Card ka Ads kharcha hamesha aaj ka: Paisa screen par doosra samay (kal / 7 din / 30 din) chuna ho tab data.php aaj alag se.
- * Pehle disk wala (aaj ka hi), phir network; 60 sec cache (process bhar). Fail = pichhla rahe (kabhi aaya hi nahi = failed).
+ * Live users wala aadha hamesha abhi ka: Home par doosra period (kal / 7 din / 30 din / custom) chuna ho tab data.php aaj
+ * alag se (6 min ginti + aaj ka ROAS; DashVm purane period ko 20 s me taaza nahi karta). Pehle disk wala (aaj ka hi), phir
+ * network; 60 sec cache (process bhar). Fail = pichhla rahe (kabhi aaya hi nahi = failed).
  */
 private object HomeToday {
     var d by mutableStateOf<DashData?>(null)
@@ -373,10 +381,10 @@ private object HomeToday {
     }
 }
 
-/** Card ke Ads kharche ka data: Paisa par aaj chuna = wahi (DashVm), warna [HomeToday] (null = abhi aaya nahi). */
+/** Live users ka data: Home par aaj wala view = wahi (DashVm, 20 s), warna [HomeToday] har minute (null = abhi aaya nahi). */
 @Composable
-private fun rememberTodayData(dd: DashData?): DashData? {
-    if (isTodayView(dd)) return dd
+private fun rememberLiveData(st: UiState): DashData? {
+    if (homeToday(st)) return st.data
     val app = LocalContext.current.applicationContext as App
     val rev = HomeToday.rev
     val life = LocalLifecycleOwner.current.lifecycle
@@ -440,35 +448,90 @@ private fun signedInr(v: Double): String = when {
     else -> inr(v)
 }
 
-private fun periodLabel(dd: DashData): String = if (dd.single) fmtDay(dd.from) else fmtDay(dd.from) + " – " + fmtDay(dd.to)
+// ---- period (Home ke tabs, Paisa ke saath ek hi: DashVm.setRange)
 
-private fun isTodayView(dd: DashData?): Boolean = dd == null || (dd.today && dd.single)
+private val HOME_RANGES = listOf("today", "yesterday", "7d", "30d")
 
-/** Hero ka label, Paisa screen jaisa: Aaj / Kal / 7 din / 30 din ka munafa, custom par tareekh. */
-private fun profitLabel(range: String, dd: DashData): String = when {
-    isTodayView(dd) -> "Today's profit".t()
-    range == "yesterday" -> "Yesterday's profit".t()
-    range == "7d" -> "7 days profit".t()
-    range == "30d" -> "30 days profit".t()
-    else -> "Profit".t() + " · " + periodLabel(dd)
+/** Home ke period tabs: Aaj | Kal | 7 din | 30 din. Paisa par custom chuna ho to paanchva "Custom" (chuna hua). */
+@Composable
+private fun HomePeriodTabs(vm: DashVm, st: UiState, modifier: Modifier = Modifier) {
+    HomeTabs(st.range, modifier) { k ->
+        // chuna hua tab dobara = bas refresh (setRange wahi period pehchaan leta hai; custom ki taareekhein bhi wahi)
+        if (k == st.range) vm.setRange(k, st.from, st.to) else vm.setRange(k)
+    }
 }
 
 @Composable
-private fun HomeHero(st: UiState, m: HomeMoney?, vm: DashVm, open: (String) -> Unit, tab: (String) -> Unit) {
+private fun HomeTabs(range: String, modifier: Modifier = Modifier, pick: (String) -> Unit) {
+    val keys = if (range == "custom") HOME_RANGES + "custom" else HOME_RANGES
+    val labels = keys.map { k -> (RANGES.firstOrNull { it.first == k }?.second ?: k).t() }
+    // patle phone par (5 tab bhi) naam chhote font me, "..." nahi; Fold par poori chaudai nahi
+    KSegTabs(labels, keys.indexOf(range), { pick(keys[it]) }, modifier.widthIn(max = 560.dp), fit = true)
+}
+
+private fun isTodayView(dd: DashData): Boolean = dd.today && dd.single
+
+/** Aaj wala view? Data ho to usi se (custom me aaj ka ek din bhi), warna chuna hua tab (naya period abhi aa raha). */
+private fun homeToday(st: UiState): Boolean = st.data?.let { isTodayView(it) } ?: (st.range == "today")
+
+/** Period ki taareekhein (data se, warna custom ki chuni hui): from to to. Pata nahi = null. */
+private fun periodDays(st: UiState): Pair<String, String>? {
+    val dd = st.data
+    val from = (dd?.from ?: st.from)?.takeIf { it.isNotBlank() } ?: return null
+    val to = (dd?.to ?: st.to)?.takeIf { it.isNotBlank() } ?: from
+    return from to (if (dd?.single == true) from else to)
+}
+
+/** Hero ka label, Paisa screen jaisa: Aaj / Kal / 7 din / 30 din ka munafa; custom = "Profit" (taareekh daayein pill me). */
+private fun profitLabel(st: UiState): String = when {
+    homeToday(st) -> "Today's profit".t()
+    st.range == "yesterday" -> "Yesterday's profit".t()
+    st.range == "7d" -> "7 days profit".t()
+    st.range == "30d" -> "30 days profit".t()
+    else -> "Profit".t()
+}
+
+/**
+ * Top apps ka title: "Today's top apps" / "Yesterday's top apps" / "Top apps · 7 days" / "Top apps · 16 – 22 Oct".
+ * Jagah kam (patla phone / bada font) = sirf "Top apps" ([TopAppsHead]; period upar tab aur hero ki goli me hai).
+ */
+private fun topAppsTitle(st: UiState): String = when {
+    homeToday(st) -> "Today's top apps".t()
+    st.range == "yesterday" -> "Yesterday's top apps".t()
+    st.range == "7d" -> "Top apps".t() + " · " + "7 days".t()
+    st.range == "30d" -> "Top apps".t() + " · " + "30 days".t()
+    else -> "Top apps".t() + (periodDays(st)?.let { (a, b) -> " · " + fmtDayRange(a, b) } ?: "")
+}
+
+/**
+ * Ads kharcha ke kul ke daayein column label, pehla jo aa jaye: aaj = "today · ROAS" (pehle jaisa); doosra period =
+ * "yesterday · ROAS", jagah kam ho to sirf "yesterday" (ROAS patti ki pill batati hai). 7 / 30 din / custom bhi aise hi.
+ */
+private fun spendLabels(st: UiState): List<String> = when {
+    homeToday(st) -> listOf("today · ROAS".t())
+    st.range == "yesterday" -> listOf("yesterday · ROAS".t(), "yesterday".t())
+    st.range == "7d" -> listOf("7 days · ROAS".t(), "7 days".t())
+    st.range == "30d" -> listOf("30 days · ROAS".t(), "30 days".t())
+    else -> listOf("period · ROAS".t(), "period".t())
+}
+
+@Composable
+private fun HomeHero(st: UiState, m: HomeMoney?, retry: () -> Unit, open: (String) -> Unit, tab: (String) -> Unit) {
     val dd = st.data
     if (dd == null || m == null) {
-        // data aa raha (ya abhi shuru hi nahi hua) = hero ka dhaancha; fail = "–" + Dobara try
-        if (st.loading || st.error == null) { HomeHeroSkel(); return }
+        // data aa raha (ya abhi shuru hi nahi hua) = hero ka dhaancha; fail = "–" + Dobara try. Label chune hue period ka.
+        if (st.loading || st.error == null) { HomeHeroSkel(profitLabel(st)); return }
         KHero(KTint.Green) {
-            KHeroHead("Today's profit".t())
+            KHeroHead(profitLabel(st))
             KBigNum("–", size = 48.sp)
-            KButton("Try again".t(), { vm.refresh() }, Modifier.padding(top = 8.dp), kind = KBtn.SOFT, icon = KIcons.Refresh)
+            KButton("Try again".t(), retry, Modifier.padding(top = 8.dp), kind = KBtn.SOFT, icon = KIcons.Refresh)
         }
         return
     }
     KHero(KTint.Green, onClick = { open("money") }) {
         val c = Mfc.c
-        KHeroHead(profitLabel(st.range, dd), trailing = { HeroFresh(st, dd) })
+        val pills = if (homeToday(st) || lagInPeriod(dd)) null else dayPills(st)
+        if (pills == null) KHeroHead(profitLabel(st), trailing = { HeroFresh(st, dd) }) else HeroDaysHead(profitLabel(st), pills)
         KBigNum(signedInr(m.profit), if (m.profit >= 0) c.green else c.red, size = 48.sp)
         KSplit(moneySplit(m.ads, m.pay, m.spend))
         KRoasMeter(m.roas, st.roasTarget)
@@ -478,10 +541,10 @@ private fun HomeHero(st: UiState, m: HomeMoney?, vm: DashVm, open: (String) -> U
 
 /** Paisa aane tak hero ka dhaancha: label, bada number, Kamai | Ads se | Payments | Kharcha, ROAS meter, profit | loss patti (asli jitna ooncha). */
 @Composable
-private fun HomeHeroSkel() {
+private fun HomeHeroSkel(label: String) {
     KHero(KTint.Green) {
         val c = Mfc.c
-        KHeroHead("Today's profit".t())
+        KHeroHead(label)
         KSkeleton {
             Column(Modifier.fillMaxWidth()) {
                 Box(Modifier.fillMaxWidth().height(56.dp), contentAlignment = Alignment.CenterStart) { KSkelLine(.52f, 38.dp) }
@@ -526,11 +589,81 @@ private fun HomeHeroSkel() {
     }
 }
 
-/** Hero ke kone me: "Live · 2 min pehle"; summary purana ho to amber note. */
+/**
+ * Hero ke kone me: aaj = "Live · 2 min pehle"; summary purana ho (aur period ke andar tak, [lagInPeriod]) to amber note.
+ * Doosre period par note na ho to yahan nahi aate: taareekh ki goli ([HeroDaysHead]).
+ */
 @Composable
 private fun HeroFresh(st: UiState, dd: DashData) {
-    if (dd.aggLagSec > 900) KStatus(tf("data %s min old", (dd.aggLagSec / 60).toInt()), KKind.WARN)
+    if (lagInPeriod(dd)) KStatus(tf("data %s min old", (dd.aggLagSec / 60).toInt()), KKind.WARN)
     else if (dd.today && st.lastOk > 0 && !dd.cached) KLive("Live".t() + " · " + agoText(st.lastOk))   // disk wala copy = Live nahi
+}
+
+/**
+ * Summary (cron) 15 min se peeche hai aur period ka kuch hissa abhi gina nahi gaya? Aaj wala period = haan. Band period (kal /
+ * purana custom) = tabhi jab summary period ke ant se pehle tak hi pahuncha (raat 00:20 par 40 min peeche = kal ke aakhri
+ * 20 min nahi). Disk wale copy me aggLagSec me uski umar judi hai, to "abhi - lag" = summary kahan tak tha, wahi sahi.
+ */
+private fun lagInPeriod(dd: DashData): Boolean {
+    if (dd.aggLagSec <= 900) return false
+    if (dd.today) return true
+    val end = dayEndMs(dd.to) ?: return true
+    return System.currentTimeMillis() - (dd.aggLagSec * 1000).toLong() < end
+}
+
+/**
+ * Doosre period ki goli ke roop, lambe se chhote: Kal = "Wed, 22 Oct" (icon) → "22 Oct" (icon) → "22 Oct"; 7 / 30 din / custom
+ * = "16 – 22 Oct" (icon) → bina icon. Aakhri null = goli hi nahi (label poora; period upar ke tab me likha hai). Custom me
+ * taareekh hi period batati hai: goli rehti hai. Taareekh pata nahi = null (goli nahi).
+ */
+private fun dayPills(st: UiState): List<Pair<String, Boolean>?>? {
+    val (a, b) = periodDays(st) ?: return null
+    val l = if (a != b) fmtDayRange(a, b).let { listOf(it to true, it to false) } else listOf(fmtDayWk(a) to true, fmtDay(a) to true, fmtDay(a) to false)
+    return if (st.range == "custom") l else l + null
+}
+
+/**
+ * Hero ki pehli line, doosra period: label (KHeroHead jaisa) + daayein taareekh ki goli. Label pehle: goli ka pehla roop jisme
+ * label poora aaye (null roop = goli nahi); koi na aaye (bada font, patla phone) = sabse chhota roop, label "..." (kam se kam 48dp).
+ */
+@Composable
+private fun HeroDaysHead(label: String, pills: List<Pair<String, Boolean>?>) {
+    val c = Mfc.c
+    Layout(
+        content = {
+            KT(label, 15.sp, c.ink2, weight = FontWeight.SemiBold, lh = 20.sp)
+            pills.forEach { p -> if (p == null) Box(Modifier) else DaysPill(p.first, p.second) }
+        },
+        modifier = Modifier.fillMaxWidth().heightIn(min = 28.dp),
+    ) { ms, cs ->
+        val w = cs.maxWidth
+        val labW = ms[0].maxIntrinsicWidth(Constraints.Infinity)
+        val opts = ms.drop(1)
+        fun gap(pw: Int) = if (pw > 0) 10.dp.roundToPx() else 0
+        val pick = opts.firstOrNull { val pw = it.maxIntrinsicWidth(Constraints.Infinity); labW + gap(pw) + pw <= w } ?: opts.last()
+        val pill = pick.measure(Constraints(maxWidth = (w - 10.dp.roundToPx() - min(labW, 48.dp.roundToPx())).coerceAtLeast(0)))
+        val lab = ms[0].measure(Constraints(maxWidth = (w - gap(pill.width) - pill.width).coerceAtLeast(0)))
+        val h = max(cs.minHeight, max(lab.height, pill.height))
+        layout(w, h) {
+            lab.place(0, (h - lab.height) / 2)
+            pill.place(w - pill.width, (h - pill.height) / 2)
+        }
+    }
+}
+
+/** Taareekh ki goli: card rang (brand band me halki safed), calendar icon (icon = false: bina), 13sp. */
+@Composable
+private fun DaysPill(text: String, icon: Boolean) {
+    val c = Mfc.c
+    Row(
+        Modifier.height(26.dp).clip(RoundedCornerShape(13.dp)).background(if (c.onBrand) Color.White.copy(alpha = .18f) else c.card)
+            .padding(horizontal = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+    ) {
+        if (icon) Icon(KIcons.Calendar, null, tint = c.ink2, modifier = Modifier.size(14.dp))
+        HT(text, 13.sp, c.ink2, weight = FontWeight.SemiBold, lh = 18.sp)
+    }
 }
 
 private fun winSide(m: HomeMoney): KDuoSide? {
@@ -551,13 +684,10 @@ private fun lossSide(m: HomeMoney): KDuoSide? {
     )
 }
 
-/** Aaj ke top apps: ek card, baayein profit wale 2, daayein loss wale 2 (har naam tap = app detail). */
+/** Chune hue period ke top apps: ek card, baayein profit wale 2, daayein loss wale 2 (har naam tap = app detail). */
 @Composable
 private fun TopApps(st: UiState, m: HomeMoney?, open: (String) -> Unit, tab: (String) -> Unit) {
-    KSection(
-        if (isTodayView(st.data)) "Today's top apps".t() else "Top apps".t(),
-        trailing = { KSectionLink("View more".t()) { tab("apps") } },
-    )
+    TopAppsHead(topAppsTitle(st), "Top apps".t()) { KSectionLink("View more".t()) { tab("apps") } }
     if (m == null) {
         // data aa raha = do column ka dhaancha; fail = "Data nahi"
         if (st.loading || st.error == null) TopAppsSkel() else KCard { KEmpty("No data".t()) }
@@ -613,6 +743,33 @@ private fun TopCol(apps: List<PerApp>, m: HomeMoney, up: Boolean, target: Double
     }
 }
 
+/**
+ * KSection jaisa sir (18sp bold + daayein "View more"), par title poora na aaye to [short] ("Top apps"): "Yesterday's top a..."
+ * ya "Top apps · 28 Sep – 04 Oct" kat ke nahi dikhte (patla phone, bada font). short bhi na aaye to "...".
+ */
+@Composable
+private fun TopAppsHead(title: String, short: String, trailing: @Composable () -> Unit) {
+    val c = Mfc.c
+    Layout(
+        content = {
+            KT(title, 18.sp, c.ink, weight = FontWeight.Bold, lh = 24.sp, ls = (-0.01).em)
+            KT(short, 18.sp, c.ink, weight = FontWeight.Bold, lh = 24.sp, ls = (-0.01).em)
+            Box { trailing() }
+        },
+        modifier = Modifier.fillMaxWidth().heightIn(min = 30.dp).padding(start = 4.dp, end = 4.dp, top = 2.dp),
+    ) { ms, cs ->
+        val w = cs.maxWidth
+        val tr = ms[2].measure(Constraints(maxWidth = w))
+        val room = (w - tr.width - 12.dp.roundToPx()).coerceAtLeast(0)
+        val t = (if (ms[0].maxIntrinsicWidth(Constraints.Infinity) <= room) ms[0] else ms[1]).measure(Constraints(maxWidth = room))
+        val h = max(cs.minHeight, max(t.height, tr.height))
+        layout(w, h) {
+            t.place(0, (h - t.height) / 2)
+            tr.place(w - tr.width, (h - tr.height) / 2)
+        }
+    }
+}
+
 /** Top apps aane tak: wahi card, do column (profit | loss), har taraf sir + 2 naam ki jagah. */
 @Composable
 private fun TopAppsSkel() {
@@ -648,24 +805,37 @@ private fun TopAppsSkel() {
 private const val TOP_LEFT = .47f
 
 /**
- * Hero ke neeche ek card, do hisse: baayein aaj ka kul Google Ads kharcha + sabse zyada kharch wale 3 apps (kharcha | naam |
- * ROAS, neeche aaj ke budget ki patti), daayein abhi ke top 3 live apps (6 min | naam | 30 min + ROAS line).
- * Hisaab data/TopCards.kt se (Ads + Live widget ka "By app" bhi wahi). Ads kharcha hamesha data.php aaj se (Paisa par
- * doosra samay chuna ho tab bhi, [rememberTodayData]). Budget Google Ads overview (gOv, Home ka module wahi laata hai) ke
- * app_budgets se; overview nahi / monitor set nahi = budget pata nahi ("—").
+ * Hero ke neeche ek card, do hisse: baayein chune hue period ka kul Google Ads kharcha + sabse zyada kharch wale 3 apps,
+ * daayein abhi ke top 3 live apps (6 min | naam | 30 min + aaj ke ROAS ki line). Hisaab data/TopCards.kt se (Ads + Live
+ * widget ka "By app" bhi wahi; widget hamesha aaj ka, apna load). Kharcha hero wale data (DashVm, Home tabs / Paisa ka
+ * period) se. Aaj: line me kharcha | naam | ROAS, neeche aaj ke budget ki patti (Google Ads overview gOv ke app_budgets se;
+ * overview nahi / monitor set nahi = "—"). Doosra period: kharcha | naam, neeche us period ke ROAS ki line (budget aaj ka hi
+ * hota hai). Live users hamesha abhi + aaj ([rememberLiveData]). ROAS ke rang Settings ke target se (hero meter jaisa).
  */
 @Composable
 private fun TopCard(st: UiState, gOv: JSONObject?, open: (String) -> Unit) {
+    val dd = st.data
+    val today = homeToday(st)
+    val ld = rememberLiveData(st)
+    val live = remember(ld) { ld?.let { topLiveApps(it) }.orEmpty() }
+    val l30 = rememberLive30(live.map { it.pkg })
+    // live ka data na aaya: aaj wale view me DashVm ki galti, warna alag wale load ki
+    val liveFailed = if (today) !st.loading && st.error != null else HomeToday.failed
+    val bud = remember(gOv) { GAppBudget.list(gOv) }
+    val spend = remember(dd, bud, today) { dd?.let { if (today) withBudgets(topSpendApps(it), bud, it.r) else topSpendApps(it) } }
+    TopCardBody(st, today, spend, live, ld != null || liveFailed, l30, open)
+}
+
+/** liveDone = Live users ka data aa chuka ya fail (live khaali ho to "No data", warna dhaancha). */
+@Composable
+private fun TopCardBody(
+    st: UiState, today: Boolean, spend: List<TopSpendApp>?, live: List<TopLiveApp>, liveDone: Boolean, l30: Map<String, Double?>,
+    open: (String) -> Unit,
+) {
     val c = Mfc.c
     val dd = st.data
-    val live = remember(dd) { dd?.let { topLiveApps(it) }.orEmpty() }
-    val l30 = rememberLive30(live.map { it.pkg })
-    val today = isTodayView(dd)
-    val td = rememberTodayData(dd)
-    val bud = remember(gOv) { GAppBudget.list(gOv) }
-    val spend = remember(td, bud) { td?.let { withBudgets(topSpendApps(it), bud, it.r) } }
-    // aaj ka data na aaya: aaj wale view me DashVm ki galti, warna alag wale load ki
-    val failed = if (today) !st.loading && st.error != null else HomeToday.failed
+    val failed = !st.loading && st.error != null
+    val tg = st.roasTarget
     val line = c.line
     KCard(padding = PaddingValues(top = 14.dp, bottom = 12.dp)) {
         Row(
@@ -674,14 +844,14 @@ private fun TopCard(st: UiState, gOv: JSONObject?, open: (String) -> Unit) {
                 drawLine(line, Offset(x, 0f), Offset(x, size.height), strokeWidth = 1.dp.toPx())
             },
         ) {
-            // baayein: Ads kharcha (aaj): kul + top 3 apps (kharcha | naam | ROAS)
+            // baayein: Ads kharcha (chuna hua period): kul + top 3 apps
             Column(Modifier.fillMaxWidth(TOP_LEFT).padding(start = 14.dp, end = 10.dp)) {
                 TopHead("Ads spend".t()) { open("gads") }
                 when {
-                    td != null && spend != null -> {
-                        TopTotal(inr(td.kpi.gadsCostInr.takeIf { it.isFinite() }), label = spend.isNotEmpty())
-                        if (spend.isEmpty()) TopNote("No ad spend today".t(), lines = 2)
-                        else spend.forEach { a -> SpendRow(a) { open("app/${a.pkg}") } }
+                    dd != null && spend != null -> {
+                        TopTotal(inr(dd.kpi.gadsCostInr.takeIf { it.isFinite() }), if (spend.isEmpty()) emptyList() else spendLabels(st))
+                        if (spend.isEmpty()) TopNote(if (today) "No ad spend today".t() else "No ad spend".t(), lines = 2)
+                        else spend.forEach { a -> if (today) SpendRow(a, tg) { open("app/${a.pkg}") } else SpendRoasRow(a, tg) { open("app/${a.pkg}") } }
                     }
                     failed -> TopNote("No data".t())
                     else -> TopSkel(live = false)
@@ -693,9 +863,9 @@ private fun TopCard(st: UiState, gOv: JSONObject?, open: (String) -> Unit) {
                 when {
                     live.isNotEmpty() -> {
                         TopCols(tf("%s min", 6), tf("%s min", 30))
-                        live.forEach { a -> LiveRow(a, l30, a.pkg in l30) { open("app/${a.pkg}") } }
+                        live.forEach { a -> LiveRow(a, l30, a.pkg in l30, tg) { open("app/${a.pkg}") } }
                     }
-                    dd != null || (!st.loading && st.error != null) -> TopNote("No data".t())
+                    liveDone -> TopNote("No data".t())
                     else -> {
                         TopCols(tf("%s min", 6), tf("%s min", 30))
                         TopSkel(live = true)
@@ -760,19 +930,19 @@ private fun TopCols(left: String, right: String) {
 }
 
 /**
- * Kul kharcha (bada) + daayein "aaj · ROAS" (ROAS wale column ka label), baseline par. Widget ke plan jaisa: label ke
- * saath 19sp, na aaye to 17sp; phir bhi na aaye to label hatta (19sp, phir 17 / 15sp). Number kabhi nahi katta.
- * label = false: aaj kharcha hi nahi (ROAS ka column nahi), sirf number.
+ * Kul kharcha (bada) + daayein "aaj · ROAS" / "kal · ROAS" ... (ROAS wale column ka label), baseline par. Widget ke plan
+ * jaisa: label ke saath 19sp, na aaye to 17sp; phir agla (chhota) label; koi na aaye to label hatta (19sp, phir 17 / 15sp).
+ * Number kabhi nahi katta. labels khaali: period me kharcha hi nahi (ROAS ka column nahi), sirf number.
  */
 @Composable
-private fun TopTotal(total: String, label: Boolean) {
+private fun TopTotal(total: String, labels: List<String>) {
     val c = Mfc.c
     Layout(
         content = {
             for (size in listOf(19, 17, 15)) {
                 Text(total, color = c.ink, style = hs(size.sp, FontWeight.ExtraBold, 24.sp), maxLines = 1, softWrap = false)
             }
-            Text("today · ROAS".t(), color = c.ink3, style = hs(11.sp, FontWeight.SemiBold, 14.sp), maxLines = 1, softWrap = false)
+            labels.forEach { Text(it, color = c.ink3, style = hs(11.sp, FontWeight.SemiBold, 14.sp), maxLines = 1, softWrap = false) }
         },
         modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
     ) { ms, cs ->
@@ -780,17 +950,22 @@ private fun TopTotal(total: String, label: Boolean) {
         val gap = 6.dp.roundToPx()
         val big = ms[0].measure(Constraints())
         val mid = ms[1].measure(Constraints())
-        val lab = ms[3].measure(Constraints())
-        val (t, withLab) = when {
-            label && big.width + gap + lab.width <= w -> big to true
-            label && mid.width + gap + lab.width <= w -> mid to true
-            big.width <= w -> big to false
-            mid.width <= w -> mid to false
-            else -> ms[2].measure(Constraints(maxWidth = w)) to false
+        val labs = ms.drop(3).map { it.measure(Constraints()) }
+        val pick = labs.firstNotNullOfOrNull { lab ->
+            when {
+                big.width + gap + lab.width <= w -> big to lab
+                mid.width + gap + lab.width <= w -> mid to lab
+                else -> null
+            }
+        }
+        val (t, lab) = pick ?: when {
+            big.width <= w -> big to null
+            mid.width <= w -> mid to null
+            else -> ms[2].measure(Constraints(maxWidth = w)) to null
         }
         layout(w, t.height) {
             t.place(0, 0)
-            if (withLab) lab.place(w - lab.width, (t[FirstBaseline] - lab[FirstBaseline]).coerceAtLeast(0))
+            lab?.place(w - lab.width, (t[FirstBaseline] - lab[FirstBaseline]).coerceAtLeast(0))
         }
     }
 }
@@ -804,17 +979,29 @@ private fun TopNote(text: String, lines: Int = 1) {
 }
 
 /**
- * App: aaj ka Google Ads kharcha | naam (beech) | ROAS % (zone ke rang me); neeche aaj ke budget ki patti ([BudBar]).
- * Tap = app detail.
+ * App: aaj ka Google Ads kharcha | naam (beech) | ROAS % (zone ke rang me, target = Settings ka ROAS target); neeche aaj ke
+ * budget ki patti ([BudBar]). Tap = app detail.
  */
 @Composable
-private fun SpendRow(a: TopSpendApp, onClick: () -> Unit) {
+private fun SpendRow(a: TopSpendApp, target: Double, onClick: () -> Unit) {
     val c = Mfc.c
     val roas = a.roas
-    val z = roasZone(roas)
+    val z = roasZone(roas, target)
     TopRow(onClick) {
         SpendLine(inr(a.spendInr), a.name, roasPct(roas), zoneText(z, c))
         BudBar(a.budgetPct?.takeIf { a.budgetInr != null && it.isFinite() }, a.budgetInr)
+    }
+}
+
+/**
+ * Doosra period (kal / 7 din / 30 din / custom): kharcha | naam (daayein); neeche us period ke ROAS ki 3 zone line + % pill
+ * (Live users wali line jaisi). Budget % nahi (budget sirf aaj ka hota hai). Tap = app detail.
+ */
+@Composable
+private fun SpendRoasRow(a: TopSpendApp, target: Double, onClick: () -> Unit) {
+    TopRow(onClick) {
+        SpendLine(inr(a.spendInr), a.name, null, Mfc.c.ink3)
+        RoasBar(a.roas, target)
     }
 }
 
@@ -839,20 +1026,21 @@ private fun BudBar(pct: Double?, budget: Double?) {
 /**
  * SpendRow ki line, baseline par: kharcha | naam (beech) | ROAS %. Widget ke plan jaisa: naam ko ~40dp na mile to pehle
  * kharcha / ROAS chhote (15 / 13.5sp se 13 / 12sp); phir naam 24dp tak; phir bhi tang = ROAS % hatta (patti ka rang ROAS
- * batata hai). Kharcha kabhi nahi katta.
+ * batata hai). Kharcha kabhi nahi katta. roas = null (doosra period, ROAS neeche ki line par): kharcha | naam (daayein).
  */
 @Composable
-private fun SpendLine(amount: String, name: String, roas: String, roasColor: Color) {
+private fun SpendLine(amount: String, name: String, roas: String?, roasColor: Color) {
     val c = Mfc.c
     Layout(
         content = {
             Text(amount, color = c.ink, style = hs(15.sp, FontWeight.ExtraBold, 20.sp), maxLines = 1, softWrap = false)
             Text(amount, color = c.ink, style = hs(13.sp, FontWeight.ExtraBold, 20.sp), maxLines = 1, softWrap = false)
-            Text(roas, color = roasColor, style = hs(13.5.sp, FontWeight.ExtraBold, 20.sp), maxLines = 1, softWrap = false)
-            Text(roas, color = roasColor, style = hs(12.sp, FontWeight.ExtraBold, 20.sp), maxLines = 1, softWrap = false)
+            Text(roas.orEmpty(), color = roasColor, style = hs(13.5.sp, FontWeight.ExtraBold, 20.sp), maxLines = 1, softWrap = false)
+            Text(roas.orEmpty(), color = roasColor, style = hs(12.sp, FontWeight.ExtraBold, 20.sp), maxLines = 1, softWrap = false)
             Text(
                 name, color = c.ink2, style = hs(12.sp, FontWeight.SemiBold, 18.sp),
-                textAlign = TextAlign.Center, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis,
+                textAlign = if (roas == null) TextAlign.End else TextAlign.Center, maxLines = 1, softWrap = false,
+                overflow = TextOverflow.Ellipsis,
             )
         },
         modifier = Modifier.fillMaxWidth().heightIn(min = 20.dp),
@@ -868,6 +1056,7 @@ private fun SpendLine(amount: String, name: String, roas: String, roasColor: Col
         val want = min(nameW, 40.dp.roundToPx())
         val least = min(nameW, 24.dp.roundToPx())
         val (amt, ro) = when {
+            roas == null -> (if (room(big, null) >= want) big else small) to null
             room(big, rBig) >= want -> big to rBig
             room(small, rSmall) >= want -> small to rSmall
             room(small, rSmall) >= least -> small to rSmall
@@ -886,9 +1075,9 @@ private fun SpendLine(amount: String, name: String, roas: String, roasColor: Col
     }
 }
 
-/** Live app: 6 min ginti | naam (beech) | 30 min ginti; neeche ROAS ki 3 zone line + % pill. Tap = app detail. */
+/** Live app: 6 min ginti | naam (beech) | 30 min ginti; neeche aaj ke ROAS ki 3 zone line + % pill. Tap = app detail. */
 @Composable
-private fun LiveRow(a: TopLiveApp, l30: Map<String, Double?>, known: Boolean, onClick: () -> Unit) {
+private fun LiveRow(a: TopLiveApp, l30: Map<String, Double?>, known: Boolean, target: Double, onClick: () -> Unit) {
     val c = Mfc.c
     val roas = a.roas
     TopRow(onClick) {
@@ -907,9 +1096,25 @@ private fun LiveRow(a: TopLiveApp, l30: Map<String, Double?>, known: Boolean, on
                 Box(Modifier.height(20.dp), contentAlignment = Alignment.Center) { KSkelLine(26.dp, 12.dp) }
             }
         }
-        TBar(roas?.let { (it / 2.0).coerceIn(0.0, 1.0).toFloat() }, roas?.let { roasPct(it) }, roasZone(roas), zones = true)
+        RoasBar(roas, target)
     }
 }
+
+/**
+ * ROAS ki 3 zone line + % pill (Live users / doosre period ka Ads kharcha). Zone hero ke ROAS meter jaisa target se: laal
+ * min(target, 100%) tak, amber max(target, 100%) tak, phir hara. Line 0 se [roasTop] tak (target 150% tak = 200%).
+ */
+@Composable
+private fun RoasBar(roas: Double?, target: Double) {
+    val top = roasTop(target)
+    TBar(roas?.let { (it / top).coerceIn(0.0, 1.0).toFloat() }, roas?.let { roasPct(it) }, roasZone(roas, target), zones = true, target = target)
+}
+
+/** ROAS line ka sira: 200%, ya target bada ho to target + 50% (hara hissa kabhi gayab nahi). */
+private fun roasTop(target: Double): Double = max(2.0, max(roasT(target), 1.0) + .5)
+
+/** kRoasKind jaisa: galat target = 100%. */
+private fun roasT(target: Double): Double = if (target > 0 && target.isFinite()) target else 1.0
 
 /** Ek line ka dhaancha: upar number/naam, 5dp, neeche patti (7dp upar-neeche). */
 @Composable
@@ -948,11 +1153,12 @@ private fun TopSkel(live: Boolean) {
 }
 
 /**
- * Patli line (16dp) aur us par chhoti pill. zones = ROAS line: laal 0-80%, amber 80-100%, hara 100-200% (Paisa meter jaisa);
- * warna budget: track + bhari patti. pos = 0..1; null = sirf grey track, pill nahi.
+ * Patli line (16dp) aur us par chhoti pill. zones = ROAS line ([RoasBar]): laal 0 se min(target, 100%), amber max(target, 100%)
+ * tak, hara [roasTop] tak (target 80% = 0-80 / 80-100 / 100-200%, widget jaisa); warna budget: track + bhari patti.
+ * pos = 0..1; null = sirf grey track, pill nahi.
  */
 @Composable
-private fun TBar(pos: Float?, pill: String?, zone: TopZone, zones: Boolean) {
+private fun TBar(pos: Float?, pill: String?, zone: TopZone, zones: Boolean, target: Double = .8) {
     val c = Mfc.c
     val fill = zoneColor(zone, c)
     Layout(
@@ -962,11 +1168,17 @@ private fun TBar(pos: Float?, pill: String?, zone: TopZone, zones: Boolean) {
             val h = 4.dp.toPx()
             val r = CornerRadius(h / 2)
             if (zones && pos != null) {
+                val t = roasT(target)
+                val lo = min(t, 1.0)
+                val hi = max(t, 1.0)
+                val top = roasTop(target)
+                // target 100% = amber hissa nahi (khaali hissa aur uska gap nahi)
+                val parts = listOf(lo to c.zRed, (hi - lo) to c.zAmber, (top - hi) to c.zGreen).filter { it.first > .001 }
                 val gap = 2.dp.toPx()
-                val room = size.width - 2 * gap
+                val room = size.width - (parts.size - 1) * gap
                 var x = 0f
-                listOf(80f to c.zRed, 20f to c.zAmber, 100f to c.zGreen).forEach { (part, col) ->
-                    val pw = room * part / 200f
+                parts.forEach { (part, col) ->
+                    val pw = (room * part / top).toFloat()
                     drawRoundRect(col, Offset(x, y), Size(pw, h), r)
                     x += pw + gap
                 }

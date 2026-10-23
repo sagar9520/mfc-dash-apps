@@ -38,6 +38,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.navigation.NavHostController
 import com.myfuturecode.mfcdash.ui.GState
 import com.myfuturecode.mfcdash.ui.StudioVm
 import com.myfuturecode.mfcdash.ui.kit.KBarIcon
@@ -311,8 +312,10 @@ internal fun DiscDayPicker(g: GState, p: Map<String, String>, onPick: (String) -
  * Hero top me (Overview jaisa). Fold: hero + tabs baayein, list daayein (Research jaisa).
  */
 @Composable
-internal fun DiscoveryPage(g: GState, vm: StudioVm, reload: Int, bar: @Composable ColumnScope.() -> Unit, p: Map<String, String>) {
-    SPoll(600_000, p, reload) { vm.load("discovery", p) }
+internal fun DiscoveryPage(g: GState, vm: StudioVm, nav: NavHostController, reload: Int, bar: @Composable ColumnScope.() -> Unit, p: Map<String, String>) {
+    val live = sLive(vm)
+    // khoj khatam = naya din apne aap
+    SPoll(600_000, p, reload, live.finOf("discover")) { vm.load("discovery", p) }
     KLoadOnChange(p)   // calendar se din badla = upar ki line
     val o = g.view("discovery", p)
     val item = remember(o) { discItem(o) }
@@ -323,6 +326,7 @@ internal fun DiscoveryPage(g: GState, vm: StudioVm, reload: Int, bar: @Composabl
         if (!wide && item != null) DiscHero(item)
         else if (!wide && sSkelOn(g, o)) KSkelHero(KTint.Lav, split = 4)
     }) {
+        SLiveCards(live.forPage(setOf("discover")), live, g, vm, nav)   // aaj ki khoj chal rahi (mockup ui_live)
         SLoad(g, o, { vm.load("discovery", p) }, { DiscSkel(wide) }) { _ ->
             when {
                 item == null -> DiscEmpty()

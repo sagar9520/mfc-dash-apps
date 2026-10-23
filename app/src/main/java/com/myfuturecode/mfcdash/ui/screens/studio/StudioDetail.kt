@@ -32,7 +32,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
+import com.myfuturecode.mfcdash.ui.SLive
 import com.myfuturecode.mfcdash.ui.StudioVm
+import com.myfuturecode.mfcdash.ui.liveOn
 import com.myfuturecode.mfcdash.ui.kit.KAvatar
 import com.myfuturecode.mfcdash.ui.kit.KBarIcon
 import com.myfuturecode.mfcdash.ui.kit.KBigNum
@@ -49,7 +51,6 @@ import com.myfuturecode.mfcdash.ui.kit.KKind
 import com.myfuturecode.mfcdash.ui.kit.KKv
 import com.myfuturecode.mfcdash.ui.kit.KListDivider
 import com.myfuturecode.mfcdash.ui.kit.KPill
-import com.myfuturecode.mfcdash.ui.kit.KProgress
 import com.myfuturecode.mfcdash.ui.kit.KRow
 import com.myfuturecode.mfcdash.ui.kit.KScreen
 import com.myfuturecode.mfcdash.ui.kit.KSection
@@ -95,7 +96,11 @@ private fun RefreshIcon(onClick: () -> Unit) = KBarIcon(KIcons.Refresh, "Refresh
 fun StudioOppScreen(vm: StudioVm, nav: NavHostController, id: Long) {
     val g by vm.s.collectAsStateWithLifecycle()
     val p = mapOf("id" to id.toString())
-    SPoll(60_000, id) { vm.load("opp", p) }
+    SLiveUse(vm)
+    val live = sLive(vm)
+    // is idea ki jaanch / aur research (ref = idea id); khatam = idea dobara
+    val lr = live.forPage(setOf("evaluate_idea", "more_research"), id)
+    SPoll(60_000, id, live.finOf("evaluate_idea", "more_research")) { vm.load("opp", p) }
     var ask by remember { mutableStateOf<String?>(null) }
     val o = g.view("opp", p)
     val item = o?.obj("item")
@@ -109,13 +114,15 @@ fun StudioOppScreen(vm: StudioVm, nav: NavHostController, id: Long) {
         if (!wide && item != null) OppHero(item)
         else if (!wide && sSkelOn(g, o)) KSkelHero(KTint.Lav)
     }) {
+        SLiveCards(lr, live, g, vm, nav)
         SLoad(g, o, { vm.load("opp", p) }, { SDetailSkel(wide) }) { oo ->
             val it0 = oo.obj("item")
             val pid = oo.dn("project_id")?.toLong()
+            val liveCard = lr.isNotEmpty()
             if (wide) KTwoPane(
                 left = {
                     OppHero(it0)
-                    OppActions(it0, pid, nav) { ask = it }
+                    OppActions(it0, pid, nav, liveCard) { ask = it }
                     OppFacts(it0)
                     OppFit(it0)
                     OppTexts(it0)
@@ -127,7 +134,7 @@ fun StudioOppScreen(vm: StudioVm, nav: NavHostController, id: Long) {
                     OppMore(it0, oo)
                 },
             ) else {
-                OppActions(it0, pid, nav) { ask = it }
+                OppActions(it0, pid, nav, liveCard) { ask = it }
                 OppFacts(it0)
                 OppFit(it0)
                 OppTexts(it0)
@@ -196,7 +203,7 @@ private fun OppHero(it0: JSONObject) {
 
 /** Gate 1 ke faisle (sirf NEW / WATCH / REJECTED par). Har button pehle dialog kholta hai. */
 @Composable
-private fun OppActions(it0: JSONObject, pid: Long?, nav: NavHostController, onAsk: (String) -> Unit) {
+private fun OppActions(it0: JSONObject, pid: Long?, nav: NavHostController, liveCard: Boolean, onAsk: (String) -> Unit) {
     val st = it0.s("status")
     if (pid != null) KButton("Open project".t(), { nav.navigate("studio/project/$pid") }, Modifier.fillMaxWidth(), kind = KBtn.SOFT, icon = KIcons.Open)
     when (st) {
@@ -211,7 +218,8 @@ private fun OppActions(it0: JSONObject, pid: Long?, nav: NavHostController, onAs
             }
         }
         "REJECTED" -> KButton("Restore idea".t(), { onAsk("RESTORE") }, Modifier.fillMaxWidth(), kind = KBtn.SOFT, icon = KIcons.History)
-        "EVALUATING" -> KCard(list = true) {
+        // live card upar dikh raha = yeh line nahi
+        "EVALUATING" -> if (!liveCard) KCard(list = true) {
             KRow("Research running".t(), lead = { KIconTile(KIcons.Clock, KKind.ASK) })
         }
         else -> {}
@@ -526,7 +534,11 @@ private fun KListDividerPlain(w: Dp) {
 fun StudioProjectScreen(vm: StudioVm, nav: NavHostController, id: Long) {
     val g by vm.s.collectAsStateWithLifecycle()
     val p = mapOf("id" to id.toString())
-    SPoll(30_000, id) { vm.load("project", p) }
+    SLiveUse(vm)
+    val live = sLive(vm)
+    // competitor analysis / spec badlav (ref = project id); khatam = spec apne aap
+    val lr = live.forPage(setOf("competitors", "revise_features"), id)
+    SPoll(30_000, id, live.finOf("competitors", "revise_features")) { vm.load("project", p) }
     var ask by remember { mutableStateOf<String?>(null) }
     val o = g.view("project", p)
     val pr = o?.obj("item")
@@ -540,23 +552,25 @@ fun StudioProjectScreen(vm: StudioVm, nav: NavHostController, id: Long) {
         if (!wide && pr != null) ProjectHero(pr)
         else if (!wide && sSkelOn(g, o)) KSkelHero(KTint.Lav)
     }) {
+        SLiveCards(lr, live, g, vm, nav)
         SLoad(g, o, { vm.load("project", p) }, { SDetailSkel(wide) }) { oo ->
             val item = oo.obj("item")
             val ft = item.optJSONObject("features")
             val onAsk: (String) -> Unit = { ask = it }
+            val liveCard = lr.isNotEmpty()
             if (wide) KTwoPane(
                 left = {
                     ProjectHero(item)
                     ProjDecision(item, ft, onAsk)
                     ProjGates(item, nav)
-                    ProjLog(item, oo, nav, onAsk)
+                    ProjLog(item, oo, nav, onAsk, live)
                 },
-                right = { ProjSpec(item, ft) },
+                right = { ProjSpec(item, ft, liveCard) },
             ) else {
                 ProjDecision(item, ft, onAsk)
                 ProjGates(item, nav)
-                ProjSpec(item, ft)
-                ProjLog(item, oo, nav, onAsk)
+                ProjSpec(item, ft, liveCard)
+                ProjLog(item, oo, nav, onAsk, live)
             }
         }
     }
@@ -660,10 +674,11 @@ private fun ProjGates(pr: JSONObject, nav: NavHostController) {
 
 /** Gate 2 spec: decision card, strategy, top 3 competitors, tulna, features (priority), lists, saboot. */
 @Composable
-private fun ProjSpec(pr: JSONObject, ft: JSONObject?) {
+private fun ProjSpec(pr: JSONObject, ft: JSONObject?, liveCard: Boolean = false) {
     val c = Mfc.c
     if (ft == null) {
-        KCard(list = true) {
+        // live card upar dikh raha = "being prepared" line nahi
+        if (!liveCard) KCard(list = true) {
             KRow("Competitor analysis is being prepared".t(), lead = { KIconTile(KIcons.Clock, KKind.ASK) }, titleLines = 2)
         }
         return
@@ -741,7 +756,7 @@ private fun priKind(p: String): KKind = when (p) {
 
 /** Versions, approvals, runs, history + project cancel. */
 @Composable
-private fun ProjLog(pr: JSONObject, o: JSONObject, nav: NavHostController, onAsk: (String) -> Unit) {
+private fun ProjLog(pr: JSONObject, o: JSONObject, nav: NavHostController, onAsk: (String) -> Unit, live: SLive? = null) {
     val vers = pr.arr("versions").objs()
     if (vers.isNotEmpty()) {
         KSection("Versions".t())
@@ -776,7 +791,7 @@ private fun ProjLog(pr: JSONObject, o: JSONObject, nav: NavHostController, onAsk
         KCard(list = true) {
             runs.forEachIndexed { i, r ->
                 if (i > 0) KListDivider(true)
-                SRunRow(r, nav)
+                SRunRow(r, nav, live)
             }
         }
     }
@@ -863,9 +878,16 @@ private fun FeatureRow(f: JSONObject) {
 fun StudioRunScreen(vm: StudioVm, nav: NavHostController, id: Long) {
     val g by vm.s.collectAsStateWithLifecycle()
     val p = mapOf("id" to id.toString())
-    SPoll(5_000, id) { vm.load("run", p) }
+    SLiveUse(vm)
+    val live = sLive(vm)
+    val lr = live.run(id)
     val o = g.view("run", p)
-    val r = o?.obj("item")
+    // page ka jawab + live ke taaze fields (%, step, detail; har 4 s)
+    val r = o?.obj("item")?.let { remember(it, lr) { sMerge(it, lr) } }
+    // chalu: live har 4 s % deta hai, log ke liye 15 s kaafi (live nahi = pehle jaisa 5 s); khatam = 60 s. Khatam hote hi fin se reload.
+    val on = r == null || liveOn(r.s("status"))
+    val ms = if (!on) 60_000L else if (lr != null) 15_000L else 5_000L
+    SPoll(ms, id, live.fin.values.sum()) { vm.load("run", p) }
     val wide = isWide()
     KScreen(top = {
         KDetailBar(
@@ -873,18 +895,19 @@ fun StudioRunScreen(vm: StudioVm, nav: NavHostController, id: Long) {
             sub = r?.let { listOfNotNull(it.s("uid").ifBlank { null }, stText(it.s("trigger")), it.sn("by")).joinToString(" · ") } ?: sUpdated(g),
             actions = { RefreshIcon { vm.load("run", p) } },
         )
-        if (!wide && r != null) RunHero(r)
+        if (!wide && r != null) RunHero(r, live)
         else if (!wide && sSkelOn(g, o)) KSkelHero(KTint.Lav)
     }) {
         SLoad(g, o, { vm.load("run", p) }, { SDetailSkel(wide) }) { oo ->
-            val item = oo.obj("item")
+            val item = r ?: oo.obj("item")
             // Daily discovery ka run (DONE / PARTIAL): us run ki findings
             val findings = if (item.s("job") == "discover" && item.s("status").uppercase() in setOf("DONE", "PARTIAL")) {
                 { nav.navigate("studio/discovery/run/$id") }
             } else null
             if (wide) KTwoPane(
                 left = {
-                    RunHero(item)
+                    RunHero(item, live)
+                    SRunSteps(item, live.offset)
                     RunFacts(item, g.busy, { vm.act("cancel", mapOf("id" to id.toString()), "cancel", ok = "Cancel requested".t()) { vm.load("run", p) } }, findings)
                 },
                 right = {
@@ -892,6 +915,7 @@ fun StudioRunScreen(vm: StudioVm, nav: NavHostController, id: Long) {
                     RunLog(oo.arr("log").objs())
                 },
             ) else {
+                SRunSteps(item, live.offset)
                 RunFacts(item, g.busy, { vm.act("cancel", mapOf("id" to id.toString()), "cancel", ok = "Cancel requested".t()) { vm.load("run", p) } }, findings)
                 RunUsage(oo.arr("usage").objs())
                 RunLog(oo.arr("log").objs())
@@ -900,26 +924,14 @@ fun StudioRunScreen(vm: StudioVm, nav: NavHostController, id: Long) {
     }
 }
 
-/** Lavender hero: steps x/y + stage + patti, phir AI calls | searches | kharcha. */
+/** Lavender hero: kitna % (live), "Step 5 of 6 · stage", chalti patti + detail, phir AI calls | searches | kharcha. */
 @Composable
-private fun RunHero(r: JSONObject) {
+private fun RunHero(r: JSONObject, live: SLive) {
     KHero(KTint.Lav) {
-        val cc = Mfc.c
         val st = r.s("status")
-        val tot = r.d("steps_total")
-        val done = r.d("steps_done")
         KHeroHead("Run".t() + " #" + r.l("id"), icon = KIcons.Play, trailing = { SStatusPill(st) })
-        KBigNum(num(done), suffix = "/" + num(tot) + " " + "steps".t(), size = 48.sp)
-        r.s("stage").ifBlank { null }?.let { SText(it, 14.sp, cc.ink2, lh = 20.sp, maxLines = 2) }
-        if (tot > 0) KProgress(
-            (done / tot).toFloat(),
-            when (stKind(st)) {
-                KKind.OK -> cc.zGreen
-                KKind.BAD -> cc.zRed
-                KKind.WARN -> cc.zAmber
-                else -> cc.brand
-            },
-        )
+        KBigNum(num(lPct(r).toDouble()), suffix = "%", size = 48.sp)
+        SRunLive(r, live.offset, live.cronDead())
         KSplit(listOf("AI calls".t() to num(r.d("ai_calls")), "Searches".t() to num(r.d("searches")), "Cost".t() to usd(r.d("cost_usd"), 3)))
     }
 }

@@ -20,6 +20,9 @@
  *   (6 h), st_work wait_timeout;
  *   ranking salvage at max_tokens and on a stream cut after output (>= 3 complete ideas kept -> PARTIAL, fewer -> FAILED), rank_notes reuse (24 h, FAILED / PARTIAL / BLOCKED /
  *   CANCELLED or the same run's crash-requeued attempt, same categories + countries, evidence still there, the notes chain used once; only missing categories researched again).
+ * Live progress (view=live): labelled steps per job (done / on / wait / fail, notes like "9 sources", "reused"), frac only forward inside a step and reset by step(), throttled DB
+ *   writes + heartbeat, honest progress from the stream (searches, thinking, complete ideas) really written mid-stream (fake API probes the DB), view=live over HTTP
+ *   (15-min window, waiting_for, live cost, can_reuse after a failed ranking), schema upgrade 2 -> 3, old runs without steps.
  * CI: .github/workflows/server-tests.yml. Local: TEST_DB_HOST=127.0.0.1 TEST_DB_NAME=mfc_test TEST_DB_USER=root TEST_DB_PASS=... php server/tests/studio_test.php
  */
 declare(strict_types=1);
@@ -45,7 +48,7 @@ PHP, $stub, 1);
 // st_ai streams (SSE, curl) to ST_API_URL = local fake Claude API (php -S, same canned queue). Small timeouts keep the stream tests fast.
 $FP = 20000 + getmypid() % 1000;   // app views server below: 18000 + pid % 1000 + 7
 $stub = str_replace("const MFC_ROOT = __DIR__ . '/..';", "const MFC_ROOT = __DIR__ . '/..';\nconst ST_API_URL = 'http://127.0.0.1:$FP/fake_claude.php';\n"
-    . "const ST_STREAM_MAX_SEC = 30, ST_STREAM_IDLE_SEC = 2, ST_STREAM_CHECK_SEC = 1, ST_RETRY_WAIT = 0;", $stub);
+    . "const ST_STREAM_MAX_SEC = 30, ST_STREAM_IDLE_SEC = 2, ST_STREAM_CHECK_SEC = 1, ST_RETRY_WAIT = 0, ST_LIVE_SEC = 0.5;", $stub);
 file_put_contents("$M/lib/common.php", $stub);
 foreach (['lib/cost.php', 'lib/health.php', 'lib/studio.php', 'api/studio.php'] as $f) copy("$src/$f", "$M/$f");
 $Q = "$T/fake_q.json";
@@ -89,7 +92,8 @@ file_put_contents("$T/fake/fake_claude.php", <<<'PHP'
  * FAKE Claude Messages API (tests only, SIMULATED): pops [code, body, options] from the STUDIO_FAKE_Q queue and logs the request like the http_json stub.
  * 200 -> realistic SSE stream (each event written in 2 flushed pieces); other codes -> JSON error body with that status; empty queue -> 404.
  * options: error => k (overloaded_error event after k events), cut => k (connection closed after k events, no message_stop), stall => [k, sec] (no bytes for sec
- *   after k events; k = 0: not even headers), delay => sec (between events), cancel => k (after k events the RUNNING run is set to CANCELLING, like the app's Cancel)
+ *   after k events; k = 0: not even headers), delay => sec (between events), cancel => k (after k events the RUNNING run is set to CANCELLING, like the app's Cancel),
+ *   probe => [k, ...] (before event k: wait 1.6 s, then record the RUNNING run's live columns to "<queue>.probe", one JSON line each: what the app would see mid-stream)
  */
 declare(strict_types=1);
 require __DIR__ . '/sse_gen.php';
@@ -113,6 +117,12 @@ foreach ($ev as $k => $e) {
     if (isset($opt['cancel']) && $k === (int)$opt['cancel'])
         (new PDO('mysql:host=' . getenv('TEST_DB_HOST') . ';dbname=' . getenv('TEST_DB_NAME'), (string)getenv('TEST_DB_USER'), (string)getenv('TEST_DB_PASS')))->exec("UPDATE st_runs SET status = 'CANCELLING' WHERE status = 'RUNNING'");
     if ($stall && $k > 0 && $k === $stall[0]) sleep($stall[1]);
+    if (in_array($k, array_map('intval', (array)($opt['probe'] ?? [])), true)) {
+        usleep(1600000);   // client ticks meanwhile (idle limit 2 s): its throttled live write lands before the probe
+        $row = (new PDO('mysql:host=' . getenv('TEST_DB_HOST') . ';dbname=' . getenv('TEST_DB_NAME'), (string)getenv('TEST_DB_USER'), (string)getenv('TEST_DB_PASS')))
+            ->query("SELECT id, frac, detail, beat_at, steps_json, steps_done, steps_total, UTC_TIMESTAMP() db_now FROM st_runs WHERE status = 'RUNNING' ORDER BY id DESC LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+        file_put_contents("$q.probe", json_encode(['k' => $k, 'row' => $row]) . "\n", FILE_APPEND);
+    }
     $h = intdiv(strlen($e), 2);   // event in 2 pieces: the client sees lines (and sometimes UTF-8 chars) cut in the middle
     echo substr($e, 0, $h); flush();
     echo substr($e, $h); flush();
@@ -293,6 +303,50 @@ $bigCut = substr(json_encode(['opportunities' => $bigOpps]), 0, -500);
 $t0 = microtime(true); $bigN = count(st_json_salvage_list($bigCut, 'opportunities')); $bigT = microtime(true) - $t0;
 ok($bigN === 59 && $bigT < 1.0, sprintf('salvage: %d KB cut answer scanned in %.0f ms (59 of 60 ideas complete)', strlen($bigCut) / 1024, $bigT * 1000));
 
+// live progress (pure): honest frac / detail from the stream state, steps for the app, pct
+$blk = fn(string $t, array $x = []): array => ['type' => $t] + $x;
+$LI = st_live_new(['schema' => ['type' => 'object'], 'salvage' => 'opportunities', 'expect' => 10]);
+$LS = st_live_new(['search' => 5]);
+$LW = st_live_new(['schema' => ['type' => 'object']]);
+ok($LI['mode'] === 'items' && $LI['expect'] === 10 && $LS['mode'] === 'search' && $LS['max'] === 5 && $LW['mode'] === 'write' && $LW['span'] === [0.0, 1.0]
+    && st_live_new(['span' => [0.45, 1]])['span'] === [0.45, 1.0], 'live: kind of call from the options (salvage list -> items, web search -> search, else write) + span inside the step');
+$thinkSt = ['blocks' => [$blk('thinking', ['thinking' => 'hmm'])]];
+$th = array_map(fn($t) => st_live_calc($LI, $thinkSt, $t), [0, 30, 300, 3000]);
+ok($th[0] === [0.0, 'AI is thinking', ''] && $th[1][0] > 0.05 && $th[1][0] < $th[2][0] && $th[2][0] < $th[3][0] && $th[3][0] < 0.25,
+    'live: only thinking so far -> "AI is thinking", frac creeps with time (' . implode(', ', array_column($th, 0)) . '), always below 0.25');
+$txtSt = ['blocks' => [$blk('thinking', ['thinking' => 'x']), $blk('text', ['text' => '{"opportunities":[{"a":1},{"b":2}'])]];
+ok(st_live_calc(['items' => 4] + $LI, $txtSt, 500) === [0.53, '4 of ~10 ideas written', '4 of ~10'] && st_live_calc($LI, $txtSt, 5) === [0.25, '0 of ~10 ideas written', '0 of ~10']
+    && st_live_calc(['items' => 14] + $LI, $txtSt, 5)[0] === 0.95, 'live: writing ideas -> 0.25 + 0.7 x complete / expected ("4 of ~10 ideas written", note "4 of ~10"), more than expected stays 0.95');
+$sb = fn(string $id) => $blk('server_tool_use', ['id' => $id, 'name' => 'web_search', 'input' => []]);
+$sr = fn(string $id) => $blk('web_search_tool_result', ['tool_use_id' => $id, 'content' => []]);
+$s2 = ['blocks' => [$blk('text', ['text' => 'Let me search.']), $sb('a'), $sr('a'), $blk('text', ['text' => 'Now the next one.']), $sb('b'), $sr('b')]];
+$s2w = ['blocks' => [...$s2['blocks'], $blk('text', ['text' => str_repeat('n', 3000)])]];
+$cw = st_live_calc($LS, $s2w, 10);
+ok(st_live_calc($LS, $s2, 10) === [0.24, '2 web searches', '2 searches'] && $cw[1] === 'writing notes' && $cw[0] > 0.6 && $cw[0] < 0.97 && $cw[2] === '2 searches'
+    && st_live_calc(['base_n' => 3] + $LS, ['blocks' => [$sb('c')]], 10)[1] === '4 web searches' && st_live_calc($LS, ['blocks' => [$sb('c')]], 10) === [0.12, '1 web search', '1 search']
+    && st_live_calc($LS, ['blocks' => []], 10)[1] === 'AI is thinking' && st_live_calc($LS, ['blocks' => [$blk('text', ['text' => 'Searching'])]], 10)[1] === 'starting web search'
+    && st_live_calc(['base_n' => 9] + $LS, ['blocks' => []], 10)[0] === 0.6,
+    'live: web search call -> "N web searches" (0.6 x searches / max_uses, earlier pause_turn turns counted), then "writing notes" (text after the last search grows the bar)');
+$w1 = st_live_calc($LW, ['blocks' => [$blk('text', ['text' => str_repeat('x', 20000)])]], 60);
+ok(st_live_calc($LW, $thinkSt, 60)[1] === 'AI is thinking' && $w1 === [0.61, 'AI is writing', ''] && st_live_calc($LW, ['blocks' => [$blk('text', ['text' => str_repeat('x', 900000)])]], 60)[0] < 0.97,
+    'live: other structured calls -> "AI is thinking", then "AI is writing" (bar grows with the text, never 100%)');
+$sj = json_encode([['l' => 'Web research: Tools', 'n' => '9 sources', 's' => 'd'], ['l' => 'AI ranking', 'n' => '4 of ~10', 's' => 'w'], ['l' => 'Save + notify you', 'n' => '', 's' => 'w']]);
+$svs = fn(?string $j, string $st): array => array_column(st_steps_view($j, $st), 'state');
+$sje = str_replace('"n":"4 of ~10","s":"w"', '"n":"4 of ~10","s":"e"', $sj);
+ok($svs($sj, 'RUNNING') === ['done', 'on', 'wait'] && $svs($sj, 'CANCELLING') === ['done', 'on', 'wait'] && $svs($sj, 'FAILED') === ['done', 'fail', 'wait'] && $svs($sj, 'CANCELLED') === ['done', 'fail', 'wait']
+    && $svs($sj, 'DONE') === ['done', 'done', 'done'] && $svs($sj, 'QUEUED') === ['done', 'wait', 'wait'] && $svs($sje, 'QUEUED') === ['done', 'fail', 'wait'] && $svs($sje, 'RUNNING') === ['done', 'on', 'wait']
+    && st_steps_view($sj, 'RUNNING')[1] === ['label' => 'AI ranking', 'state' => 'on', 'note' => '4 of ~10'] && st_steps_view(null, 'DONE') === [] && st_steps_view('{"l":1}', 'DONE') === []
+    && st_steps_view('not json', 'RUNNING') === [] && st_steps_view('[1,2]', 'RUNNING') === [],
+    'steps for the app: first open step "on" while running, "fail" where a run stopped (also a crash-recovered one), all done when DONE; old / bad JSON -> []');
+$frow = fn(array $x): array => $x + ['id' => 1, 'run_uid' => 'ST-x', 'job' => 'rank', 'ref_id' => null, 'trigger_type' => 'manual', 'triggered_by' => '', 'status' => 'RUNNING', 'stage' => 'AI ranking (structured)',
+    'steps_done' => 4, 'steps_total' => 6, 'errors' => 0, 'error_text' => '', 'ai_calls' => 0, 'searches' => 0, 'cost_usd' => '0.0000', 'summary' => '', 'attempts' => 1, 'queued_at' => '2026-10-23 10:00:00',
+    'started_at' => null, 'finished_at' => null, 'frac' => '0.9800'];
+$old = st_run_row($frow([]));
+ok($old['pct'] === 83 && st_run_row($frow(['status' => 'DONE']))['pct'] === 100 && st_run_row($frow(['steps_done' => 6, 'frac' => '0.0000']))['pct'] === 99
+    && st_run_row($frow(['status' => 'QUEUED', 'steps_done' => 0, 'steps_total' => 0, 'frac' => '0']))['pct'] === 0 && st_run_row($frow(['steps_done' => 1, 'steps_total' => 3, 'frac' => '0']))['pct'] === 33
+    && $old['frac'] === 0.98 && $old['steps'] === [] && $old['detail'] === '' && $old['beat_at'] === null && $old['error_text'] === null && $old['summary'] === null && $old['waiting_for'] === null && $old['can_reuse'] === false,
+    'run row: pct = floor((steps done + frac) / total) (4 + 0.98 of 6 -> 83), max 99 until DONE (100); row without the new columns -> steps [], frac/beat defaults; empty error/summary -> null');
+
 if (!getenv('TEST_DB_HOST')) { echo "\nTEST_DB_HOST not set: DB part skipped\n$n checks, $fail failed\n"; exit($fail > 0 ? 1 : 0); }
 
 // ================================================================ Part 2: MySQL + simulated data
@@ -310,8 +364,12 @@ $left = function () use ($Q) { return count((array)json_decode((string)@file_get
 $pdo = db();
 foreach (['kv', 'app_alerts', 'health_events', 'health_emails', 'day_install', 'day_user', 'imps', 'devices', 'gads_campaign_day', 'events', 'ga_geo_day', 'ga_camp', 'ga_accounts',
     'zz_imps', 'zz_events', 'zz_day_install', 'zz_devices', 'zz_gads_campaign_day',
-    'st_runs', 'st_events', 'st_evidence', 'st_snapshots', 'st_econ', 'st_app_meta', 'st_opps', 'st_projects', 'st_artifacts', 'st_approvals', 'st_usage', 'st_sources', 'st_notified', 'st_port'] as $t) $pdo->exec("DROP TABLE IF EXISTS $t");
+    'st_runs', 'st_events', 'st_evidence', 'st_snapshots', 'st_econ', 'st_app_meta', 'st_opps', 'st_projects', 'st_artifacts', 'st_approvals', 'st_usage', 'st_sources', 'st_notified', 'st_port',
+    'cost_events', 'cost_billed', 'cost_paused'] as $t) $pdo->exec("DROP TABLE IF EXISTS $t");
 $pdo->exec("CREATE TABLE kv (k VARCHAR(64) NOT NULL PRIMARY KEY, v TEXT NOT NULL, updated_at DATETIME NOT NULL)");
+// AI Cost Manager (lib/cost.php): the suite makes more than the research module's default 60 AI calls a day -> daily cap off (0 = no cap); cost_events fresh every run
+kv_set('cost_settings', json_encode(['modules' => ['research' => ['cap' => 0]]]));
+if (function_exists('cost_settings')) cost_settings(true);
 $pdo->exec("CREATE TABLE app_alerts (id INT UNSIGNED NOT NULL AUTO_INCREMENT, akey VARCHAR(190) NOT NULL, level TINYINT NOT NULL, rule VARCHAR(40) NOT NULL, pkg VARCHAR(100) NOT NULL DEFAULT '',
   account VARCHAR(20) NOT NULL DEFAULT '', campaign VARCHAR(255) NOT NULL DEFAULT '', title VARCHAR(255) NOT NULL, body VARCHAR(2000) NOT NULL DEFAULT '', title_hi VARCHAR(255) NOT NULL DEFAULT '',
   body_hi VARCHAR(2000) NOT NULL DEFAULT '', ai VARCHAR(3000) NOT NULL DEFAULT '', metrics TEXT NULL, fired INT NOT NULL DEFAULT 1, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL,
@@ -507,6 +565,10 @@ st_work($pdo, 60);
 $er = $pdo->query("SELECT * FROM st_runs WHERE id = $rid")->fetch();
 $ec = []; foreach (q('SELECT * FROM st_econ') as $r) $ec[$r['category'] . '|' . $r['cc'] . '|' . $r['users_type']] = $r;
 ok($er['status'] === 'DONE' && (int)$er['steps_done'] === 4 && (int)$er['steps_total'] === 4, "economics with cohorts in cc '' / NULL / 'UNK' / 'in' + 'IN': run DONE, no duplicate key" . ($er['status'] !== 'DONE' ? ' · ' . $er['error_text'] : ''));
+$es = st_run_row($er)['steps'];
+ok(array_map(fn($x) => [$x['label'], $x['state']], $es) === [['Install cohorts', 'done'], ['Retention + D7 revenue', 'done'], ['Cost per install', 'done'], ['Save economics', 'done']]
+    && preg_match('/^[\d,]+ installs$/', $es[0]['note']) && $es[1]['note'] === '' && preg_match('/^\d+ apps?$/', $es[2]['note']) && preg_match('/^\d+ rows?$/', $es[3]['note']),
+    'economics steps for the app: 4 labels (cohort SQL fills 2 at once), notes ' . json_encode(array_column($es, 'note')));
 $bad = array_filter(array_keys($ec), fn($k) => !preg_match('/^[^|]*\|([A-Z]{2})?\|(organic|paid)$/', $k));
 $blank = array_count_values(array_map(fn($r) => mb_strtolower($r['category']) . '|' . $r['users_type'], array_filter($ec, fn($r) => $r['cc'] === '')));
 ok(!$bad && max($blank) === 1 && count($blank) === count(array_unique(array_map(fn($r) => mb_strtolower($r['category']) . '|' . $r['users_type'], $ec))),
@@ -625,6 +687,11 @@ ok((int)q1("SELECT COUNT(*) FROM st_evidence WHERE source = 'claude_web' AND lab
 ok((int)q1("SELECT COUNT(*) FROM st_artifacts WHERE kind = 'ranking' AND project_id IS NULL") === 1, 'ranking artifact v1 saved');
 ok((int)q1("SELECT COUNT(*) FROM app_alerts WHERE rule = 'studio_research'") === 1, 'notification: research ready (Gate 1)');
 ok((int)$A['rank_organic'] >= 1, 'organic rank assigned');
+$s1 = st_run_row($run)['steps'];
+ok(array_column($s1, 'label') === ['Your apps: earnings + installs', 'Google Ads spend', 'App, country, category totals', 'Save + insights', 'Web research: Tools', 'Your apps + daily discovery', 'AI ranking', 'Save + notify you']
+    && array_unique(array_column($s1, 'state')) === ['done'] && (int)$run['steps_total'] === 8 && (int)$run['steps_done'] === 8 && $s1[4]['note'] === '2 sources' && $s1[6]['note'] === '2 ideas'
+    && $s1[5]['note'] === st_n(st_port_apps($pdo), 'app') && st_port_apps($pdo) > 0 && preg_match('/^\d+ apps?$/', $s1[0]['note']) && st_run_row($run)['pct'] === 100,
+    'rank run steps: the portfolio that ran inline first keeps its own 4 steps in place, then web research per category ("2 sources" over a pause_turn), apps + discovery ("N apps"), AI ranking ("2 ideas"), save');
 
 // re-run with same idea -> upsert (idempotent), not duplicate
 $fake([$webResp(['https://example.com/b'], 'notes'), $jsonResp(['opportunities' => [$oppA]])]);
@@ -668,6 +735,7 @@ $dc1 = $d1 ? (array)json_decode($d1['content'], true) : [];
 $dEv = array_map('intval', (array)($dc1['sources'] ?? []));
 ok($dr['status'] === 'DONE' && $left() === 0 && (int)$dr['steps_done'] === 2 && (int)$dr['steps_total'] === 2 && (int)$dr['ai_calls'] === 2 && (int)$dr['searches'] === 2
     && $dr['summary'] === '4 findings · 3 sources', 'discover: web notes + structuring call, run DONE 2/2 steps, summary "' . $dr['summary'] . '"' . ($dr['status'] !== 'DONE' ? ' · ' . $dr['error_text'] : ''));
+ok(array_map(fn($x) => array_values($x), st_run_row($dr)['steps']) === [['Web scan', 'done', '3 sources'], ['Findings', 'done', '4 findings']], 'discover steps: Web scan "3 sources", Findings "4 findings"');
 $evUrl = fn(int $id) => (string)q1('SELECT url FROM st_evidence WHERE id = ?', [$id]);
 ok(($dc1['structured'] ?? null) === true && array_keys($dEv) === ['S1', 'S2', 'S3'] && $evUrl($dEv['S3']) === 'https://policy.example/calllog' && str_contains($dc1['notes'] ?? '', 'S3: T https://policy.example/calllog')
     && ($dc1['countries'] ?? null) === ['IN', 'US'] && array_column($dc1['findings'] ?? [], 'type') === ['NEW_APP', 'COMPETITOR', 'POLICY', 'ADS'],
@@ -696,6 +764,8 @@ ok($dr2['status'] === 'PARTIAL' && (int)$dr2['attempts'] === 1 && (int)$dr2['err
     && $dr2['summary'] === 'notes only · 1 source' && $left() === 0, 'structuring failure: error recorded, run PARTIAL (not retried), summary "' . $dr2['summary'] . '"');
 ok(($dc2['structured'] ?? null) === false && ($dc2['findings'] ?? null) === [] && str_contains($dc2['notes'] ?? '', 'Quiet day') && count($dc2['sources'] ?? []) === 1,
     'structuring failure: notes + sources still saved (structured false, no findings)');
+ok(array_map(fn($x) => array_values($x), st_run_row($dr2)['steps']) === [['Web scan', 'done', '1 source'], ['Findings', 'fail', 'notes only']] && st_run_row($dr2)['pct'] === 99,
+    'discover steps after a structuring failure: Findings "fail" ("notes only"), run PARTIAL at 99%');
 // budget runs out after the web call: run BLOCKED (as before), but the paid-for notes are kept
 kv_set('st_ai_budget_usd', (string)(st_month_spend($pdo) + 0.01));
 $fake([$webResp(['https://news.example/budget'], 'budget day notes')]);
@@ -769,6 +839,9 @@ ok($rr['status'] === 'DONE' && $left() === 0 && str_contains($rp, "=== Web resea
     . ($rr['status'] !== 'DONE' ? ' · ' . $rr['error_text'] : ''));
 ok(str_contains($rp, "S1: T https://example.com/t1 <") && str_contains($rp, "S2: T https://example.com/u1 <") && str_contains($rp, "S3: T https://example.com/u2 <") && str_contains($rp, "S4: T https://example.com/u3 <"),
     'rank prompt: second category renumbered S2..S4 in one pass (S1 -> S2 no longer collides with the old S2 line)');
+ok(array_map(fn($x) => array_values($x), st_run_row($rr)['steps']) === [['Web research: Tools', 'done', '1 source'], ['Web research: Utilities', 'done', '3 sources'],
+    ['Your apps + daily discovery', 'done', st_n(st_port_apps($pdo), 'app')], ['AI ranking', 'done', '1 idea'], ['Save + notify you', 'done', '']] && st_run_row($rr)['pct'] === 100 && st_run_row($rr)['frac'] === 0.0,
+    'weekly ranking steps (2 categories): one web step each with its source count, apps + discovery, AI ranking "1 idea", save; DONE = 100%, frac reset');
 $OD = $pdo->query("SELECT * FROM st_opps WHERE title = 'Call Log Explainer'")->fetch();
 $fd = $OD ? json_decode($OD['factors'], true) : [];
 $u1 = (int)q1("SELECT id FROM st_evidence WHERE url = 'https://example.com/u1' AND run_id = ?", [$rrid]);
@@ -1030,6 +1103,8 @@ ok($t1['status'] === 'PARTIAL' && str_contains($t1['error_text'], 'AI answer was
     && array_key_exists('reused_from', $t1Rank) && $t1Rank['reused_from'] === null && count($t1Rank['opportunity_ids'] ?? []) === 4
     && (int)q1('SELECT COUNT(*) FROM st_notified WHERE nkey = ?', ['rank|' . $t1['id']]) === 1 && str_starts_with((string)$t1['summary'], '4 opportunities · ranking artifact #'),
     'answer cut at max_tokens with 4 complete ideas: 4 stored, run PARTIAL ("kept 4 ideas"), ranking artifact (truncated) + Gate 1 notification' . $errOf($t1, 'PARTIAL'));
+ok(array_map(fn($x) => [$x['label'], $x['state'], $x['note']], st_run_row($t1)['steps']) === [['Web research: Tools', 'done', '1 source'], ['Your apps + daily discovery', 'done', st_n(st_port_apps($pdo), 'app')],
+    ['AI ranking', 'fail', '4 ideas'], ['Save + notify you', 'done', '']], 'cut-off ranking (PARTIAL): AI ranking step "fail" with "4 ideas", save still done');
 $rq = $reqs();
 ok(count($rq) === 2 && ($rq[0]['stream'] ?? null) === true && ($rq[1]['stream'] ?? null) === true && ($rq[1]['max_tokens'] ?? 0) === 64000 && ($rq[1]['output_config']['effort'] ?? '') === 'high'
     && str_contains($rq[1]['system'] ?? '', 'turn research notes into 8-12 app opportunities') && str_contains($rq[1]['system'], 'Be brief: concept at most 30 words; each factor note at most 15 words')
@@ -1048,6 +1123,14 @@ $e2 = (int)q1('SELECT id FROM st_evidence WHERE url = ? AND run_id = ?', ['https
 ok($t2['status'] === 'FAILED' && str_contains($t2['error_text'], "Claude's answer was cut off (max_tokens 64000): only 2 complete ideas") && (int)$t2['attempts'] === 1
     && (int)q1("SELECT COUNT(*) FROM st_opps WHERE title LIKE 'Cut two %'") === 0 && (int)q1("SELECT COUNT(*) FROM st_artifacts WHERE run_id = ? AND kind = 'ranking'", [(int)$t2['id']]) === 0 && $N2 > 0,
     'answer cut with only 2 complete ideas: run FAILED with a clear error, no ideas / ranking stored, research notes saved' . $errOf($t2, 'FAILED'));
+$t2n = q("SELECT level, title, body, metrics FROM app_alerts WHERE rule = 'studio_run' AND akey = ?", ['st|rankfail|' . (int)$t2['id']]);
+ok(count($t2n) === 1 && $t2n[0]['title'] === 'Weekly ranking stopped' && (int)$t2n[0]['level'] === 1 && (json_decode($t2n[0]['metrics'], true)['route'] ?? '') === 'studio/ranking'
+    && str_starts_with($t2n[0]['body'], "Claude's answer was cut off (max_tokens 64000): only 2 complete ideas. Research is saved: Run again within 24 h, no new web search cost."),
+    'failed weekly ranking (final, no retry) -> one notification: the reason + research saved (the live card promises a notification when it ends)');
+$t2r = st_run_row($t2);
+ok(array_map(fn($x) => [$x['label'], $x['state']], $t2r['steps']) === [['Web research: Tools', 'done'], ['Your apps + daily discovery', 'done'], ['AI ranking', 'fail'], ['Save + notify you', 'wait']]
+    && $t2r['steps'][0]['note'] === '1 source' && $t2r['pct'] >= 50 && $t2r['pct'] <= 74 && $t2r['steps_done'] === 2 && str_contains((string)$t2r['error_text'], 'only 2 complete ideas'),
+    "failed ranking: AI ranking step \"fail\", save waiting, {$t2r['pct']}% (stopped inside step 3 of 4), error text for the app");
 $re = st_rank_notes_reuse($pdo, 0, ['Tools'], ['US', 'IN']);
 ok(($re['id'] ?? 0) === $N2 && $re['uid'] === $t2['run_uid'] && $re['smap'] === ['S1' => $e2] && $re['n'] === 1 && str_contains($re['notes'], 'T2 web notes') && $re['ads'] === ''
     && $re['done'] === ['Tools'] && $re['ads_ok'] === false && $re['runs'] === [$t2['run_uid']],
@@ -1081,6 +1164,8 @@ ok($t3['status'] === 'DONE' && count($rq) === 1 && !isset($rq[0]['tools']) && st
     && $OR && (json_decode($OR['factors'], true)['demand']['evidence'] ?? null) === [$e2] && (int)q1("SELECT COUNT(*) FROM st_artifacts WHERE run_id = ? AND kind = 'rank_notes'", [(int)$t3['id']]) === 0
     && st_rank_notes_reuse($pdo, 0, ['Tools'], ['IN', 'US']) === null,
     'rank run after a failed one: notes reused (no web search, 1 AI call, 4/4 steps), reused_from + summary + stage log, S1 still cites the evidence, notes used up' . $errOf($t3));
+ok(array_map(fn($x) => [$x['label'], $x['state'], $x['note']], array_slice(st_run_row($t3)['steps'], 0, 1)) === [['Web research: Tools', 'done', 'reused']] && st_run_row($t3)['steps'][2]['note'] === '1 idea',
+    'reused research shows as a done step with note "reused"');
 // F1: overloaded error event AFTER output started -> no retry (would bill twice), FAILED; the partial call is still recorded (ok 0)
 $f1 = $rankRun([$webResp(['https://example.com/f1'], 'F1 web notes'), $slowMsg + [2 => ['error' => 4]], $jsonResp(['opportunities' => [$oppS('Never used')]])]);
 $u = $usageOf((int)$f1['id']); $ul = end($u);
@@ -1104,6 +1189,7 @@ $c1 = $rankRun([$slowMsg + [2 => ['delay' => 0.25, 'cancel' => 3]]]);
 $u = $usageOf((int)$c1['id']);
 ok($c1['status'] === 'CANCELLED' && $c1['secs'] < 6 && count($u) === 1 && (int)$u[0]['ok'] === 0 && (int)$u[0]['in_tokens'] === 7777,
     sprintf('cancel during a slow stream: run CANCELLED after %.1f s (stream needs ~10 s), usage ok 0 recorded', $c1['secs']) . $errOf($c1, 'CANCELLED'));
+ok(array_column(st_run_row($c1)['steps'], 'state') === ['done', 'done', 'fail', 'wait'] && st_run_row($c1)['steps'][0]['note'] === 'reused', 'cancelled run: the step where it stopped (AI ranking) "fail", the rest waiting');
 // D1: nothing received at all (not even headers) -> idle abort, retried once (no bill), then DONE
 $d1r = $rankRun([$slowMsg + [2 => ['stall' => [0, 5]]], $jsonResp(['opportunities' => [$oppS('Stall retry idea')]])]);
 ok($d1r['status'] === 'DONE' && count($reqs()) === 2 && (int)$d1r['ai_calls'] === 1 && $left() === 0 && (int)q1("SELECT COUNT(*) FROM st_opps WHERE title = 'Stall retry idea'") === 1
@@ -1148,6 +1234,8 @@ $bl = $rankRun([$webResp(['https://example.com/bl-tools'], 'BL tools notes'), $w
 $blN = (array)json_decode((string)q1("SELECT content FROM st_artifacts WHERE run_id = ? AND kind = 'rank_notes'", [(int)$bl['id']]), true);
 ok($bl['status'] === 'BLOCKED' && $left() === 1 && str_contains($blN['notes'] ?? '', "## Notes: Tools\nBL tools notes") && ($blN['done'] ?? null) === ['Tools'] && ($blN['categories'] ?? null) === ['Tools', 'Utilities'],
     'budget reached between categories: run BLOCKED, notes of the researched category saved (done = Tools only)' . $errOf($bl, 'BLOCKED'));
+ok(st_rank_notes_reuse($pdo, 0, ['Tools', 'Utilities'], ['IN', 'US']) !== null && st_run_rows($pdo, [$bl])[0]['can_reuse'] === false,
+    'only part of the research saved (Tools, not Utilities): Run again still reuses it, but can_reuse false (the app must not promise "no new web search cost")');
 kv_set('st_ai_budget_usd', '40');
 $bl2 = $rankRun([$webResp(['https://example.com/bl-util'], 'BL utilities notes'), $jsonResp(['opportunities' => [$oppS('Budget resume idea')]])]);
 $rq = $reqs();
@@ -1161,6 +1249,9 @@ ok($bl2['status'] === 'DONE' && count($rq) === 2 && isset($rq[0]['tools']) && st
     && (int)q1('SELECT COUNT(*) FROM st_events WHERE run_id = ? AND msg LIKE ?', [(int)$bl2['id'], '%reusing research notes from ' . $bl['run_uid'] . ' (new research only for: Utilities)%']) === 1
     && st_rank_notes_reuse($pdo, 0, ['Tools', 'Utilities'], ['IN', 'US']) === null,
     'after the budget block: notes reused, only the missing category researched (1 web call), S numbers continue, 5/5 steps, notes chain used up' . $errOf($bl2));
+ok(array_map(fn($x) => [$x['label'], $x['note']], array_slice(st_run_row($bl2)['steps'], 0, 2)) === [['Web research: Tools', 'reused'], ['Web research: Utilities', '1 source']]
+    && array_column(st_run_row($bl)['steps'], 'state') === ['done', 'fail', 'wait', 'wait', 'wait'],
+    'budget block: Utilities step "fail" (BLOCKED there); next run: Tools "reused", Utilities "1 source"');
 kv_set('st_categories', json_encode(['Tools']));
 // NS1: ST_NO_STREAM (or no curl) -> old non-streaming http_json path still works; network failure text
 putenv('ST_NO_STREAM=1');
@@ -1216,6 +1307,170 @@ h_x($pdo, "DELETE FROM st_artifacts WHERE kind = 'daily_notes' AND run_id IN (?,
 $pdo->exec('SET SESSION wait_timeout = 60'); st_work($pdo, 1); $wt1 = (int)q1('SELECT @@session.wait_timeout');
 $pdo->exec('SET SESSION wait_timeout = 30000'); st_work($pdo, 1); $wt2 = (int)q1('SELECT @@session.wait_timeout');
 ok($wt1 === 7200 && $wt2 === 30000, "st_work: session wait_timeout 60 -> $wt1, 30000 -> $wt2");
+// ---------------------------------------------------------------- live progress (view=live): what the app sees WHILE a run streams
+// LV: slow weekly ranking; the fake API waits 1.6 s before chosen events and reads the run's live columns from the DB (like the app polling view=live)
+$evAt = function (array $evs, callable $hit): int {   // probe index: the event right after the first one where $hit(text so far, thinking deltas so far, event) is true
+    $acc = ''; $th = 0;
+    foreach ($evs as $k => $e) {
+        $d = json_decode(substr($e, (int)strpos($e, 'data: ') + 6), true) ?: [];
+        if (($d['delta']['type'] ?? '') === 'text_delta') $acc .= $d['delta']['text'];
+        if (($d['delta']['type'] ?? '') === 'thinking_delta') $th++;
+        if ($hit($acc, $th, $d)) return $k + 1;
+    }
+    return -1;
+};
+$lvSrc = fn(string $id, string $u) => [['type' => 'server_tool_use', 'id' => $id, 'name' => 'web_search', 'input' => ['query' => "q $id"]],
+    ['type' => 'web_search_tool_result', 'tool_use_id' => $id, 'content' => [['type' => 'web_search_result', 'url' => $u, 'title' => "T $u", 'page_age' => '1 day ago']]]];
+$lvWeb = ['model' => 'claude-opus-5-5', 'stop_reason' => 'end_turn', 'usage' => $usage, 'content' => [...$lvSrc('lv1', 'https://lv.example/1'), ...$lvSrc('lv2', 'https://lv.example/2'),
+    ['type' => 'text', 'text' => str_repeat('Live notes line [SOURCE SAYS]. ', 40)]]];
+$lvRank = ['model' => 'claude-opus-5-5', 'stop_reason' => 'end_turn', 'usage' => ['input_tokens' => 5000, 'output_tokens' => 3000], 'content' => [
+    ['type' => 'thinking', 'thinking' => str_repeat('weighing the notes ', 30), 'signature' => 'sigLv'], ['type' => 'text', 'text' => json_encode(['opportunities' => array_map(fn($i) => $oppS("Live idea $i"), [1, 2, 3])])]]];
+$we = fake_sse_events($lvWeb); $re = fake_sse_events($lvRank);
+$pW = [$evAt($we, fn($a, $t, $d) => ($d['type'] ?? '') === 'content_block_stop' && ($d['index'] ?? -1) === 2), $evAt($we, fn($a) => strlen($a) > 700)];   // 2nd search sent (no result yet); notes text flowing
+$pR = [$evAt($re, fn($a, $t) => $t === 20), $evAt($re, fn($a) => count(st_json_salvage_list($a, 'opportunities')) === 1) + 3, $evAt($re, fn($a) => count(st_json_salvage_list($a, 'opportunities')) === 2) + 3];
+@unlink("$Q.probe");
+$lv = $rankRun([[200, $lvWeb, ['probe' => $pW]], [200, $lvRank, ['probe' => $pR]]]);
+$pr = array_map(fn($l) => json_decode($l, true), array_values(array_filter(explode("\n", (string)@file_get_contents("$Q.probe")))));
+$pv = function (int $i) use ($pr): array {
+    $r = (array)($pr[$i]['row'] ?? []);
+    return ['detail' => $r['detail'] ?? null, 'frac' => (float)($r['frac'] ?? -1), 'done' => (int)($r['steps_done'] ?? -1), 'id' => (int)($r['id'] ?? 0),
+        'beat' => isset($r['beat_at']) ? strtotime($r['db_now'] . ' UTC') - strtotime($r['beat_at'] . ' UTC') : 99,
+        'steps' => array_map(fn($x) => [$x['label'], $x['state'], $x['note']], st_steps_view($r['steps_json'] ?? null, 'RUNNING'))];
+};
+$P = array_map($pv, array_keys($pr));
+$lvSum = json_encode(array_map(fn($x) => [$x['detail'], $x['frac'], $x['beat']], $P));
+ok($lv['status'] === 'DONE' && count($P) === 5 && count(array_unique(array_column($P, 'id'))) === 1 && $P[0]['id'] === (int)$lv['id'] && max(array_column($P, 'beat')) <= 2,
+    "live: 5 mid-stream DB probes of the same RUNNING run, heartbeat (beat_at) never older than 2 s while streaming · $lvSum" . $errOf($lv));
+ok($P[0]['detail'] === '2 web searches' && $P[0]['frac'] === 0.24 && $P[0]['steps'][0] === ['Web research: Tools', 'on', '2 searches'] && $P[0]['steps'][2] === ['AI ranking', 'wait', '']
+    && $P[1]['detail'] === 'writing notes' && $P[1]['frac'] > 0.6 && $P[1]['frac'] < 0.97 && $P[1]['done'] === 0,
+    'live web research step: "2 web searches" (0.6 x 2 / 5 = 0.24, step note "2 searches"), then "writing notes" (bar past 0.6)');
+ok($P[2]['detail'] === 'AI is thinking' && $P[2]['frac'] > 0 && $P[2]['frac'] < 0.25 && $P[2]['done'] === 2
+    && array_slice($P[2]['steps'], 0, 3) === [['Web research: Tools', 'done', '2 sources'], ['Your apps + daily discovery', 'done', st_n(st_port_apps($pdo), 'app')], ['AI ranking', 'on', '']],
+    'live ranking step while Claude only thinks: "AI is thinking", bar creeping (> 0, < 0.25); web step done with "2 sources"');
+ok($P[3]['detail'] === '1 of ~10 ideas written' && $P[3]['frac'] === 0.32 && $P[3]['steps'][2] === ['AI ranking', 'on', '1 of ~10'] && $P[4]['detail'] === '2 of ~10 ideas written' && $P[4]['frac'] === 0.39
+    && $P[4]['steps'][2] === ['AI ranking', 'on', '2 of ~10'] && $P[1]['frac'] > $P[0]['frac'] && $P[3]['frac'] > $P[2]['frac'] && $P[4]['frac'] > $P[3]['frac'],
+    'live ranking step while ideas stream: complete ideas counted from the partial JSON ("1 of ~10 ideas written" -> 0.32, "2 of ~10" -> 0.39), frac only moves forward');
+$lvRow = st_run_row($pdo->query('SELECT * FROM st_runs WHERE id = ' . (int)$lv['id'])->fetch());
+ok($lvRow['pct'] === 100 && $lvRow['frac'] === 0.0 && $lvRow['detail'] === '3 ideas' && $lvRow['steps'][2] === ['label' => 'AI ranking', 'state' => 'done', 'note' => '3 ideas'] && $lvRow['beat_at'] !== null
+    && (int)q1("SELECT COUNT(*) FROM st_opps WHERE title LIKE 'Live idea %'") === 3, 'after the stream: run DONE 100%, live text replaced by the result "3 ideas" (finished card), AI ranking note "3 ideas"');
+@unlink("$Q.probe");
+
+// StRun by hand (as a job drives it): labels, notes, states, frac forward-only, reset on step, throttled writes, heartbeat, a failing live write never breaks the job
+$mk = function () use ($pdo): StRun {
+    $id = st_run_new($pdo, 'source_check', ['trigger' => 'manual', 'by' => 'test']);
+    h_x($pdo, "UPDATE st_runs SET status = 'RUNNING', attempts = 1, started_at = UTC_TIMESTAMP() WHERE id = ?", [$id]);
+    return new StRun($pdo, $pdo->query("SELECT * FROM st_runs WHERE id = $id")->fetch());
+};
+$rowOf = fn(StRun $R): array => st_run_row($pdo->query("SELECT * FROM st_runs WHERE id = {$R->id}")->fetch());
+$trip = fn(array $row): array => array_map(fn($x) => [$x['label'], $x['state'], $x['note']], $row['steps']);
+$R = $mk(); $hand = [$R->id];
+$b0 = $R->plan(['Web research: Tools', 'Web research: Maps', 'Your apps + daily discovery', 'AI ranking', 'Save + notify you']);
+$R->note('9 sources'); $R->step();
+$R->mark(1, 'reused');
+$R->note('23 apps'); $R->step();
+$R->progress(0.5, '4 of ~10 ideas written', '4 of ~10', true);
+$x1 = $rowOf($R);
+ok($b0 === 0 && $trip($x1) === [['Web research: Tools', 'done', '9 sources'], ['Web research: Maps', 'done', 'reused'], ['Your apps + daily discovery', 'done', '23 apps'], ['AI ranking', 'on', '4 of ~10'], ['Save + notify you', 'wait', '']]
+    && $x1['steps_done'] === 3 && $x1['steps_total'] === 5 && $x1['frac'] === 0.5 && $x1['pct'] === 70 && $x1['detail'] === '4 of ~10 ideas written',
+    'StRun: labelled plan, notes, reused step marked done, live note on the running step, pct 70 (3 + 0.5 of 5)');
+$R->progress(0.2, 'still'); $fa = $R->frac;
+$R->progress(1.7, 'over'); $fb = $R->frac;
+$R->error('AI ranking: boom');
+$x2 = $rowOf($R);
+$R->step();
+$x3 = $rowOf($R);
+h_x($pdo, "UPDATE st_runs SET status = 'FAILED' WHERE id = ?", [$R->id]);
+$x4 = $rowOf($R);
+ok($fa === 0.5 && $fb === 0.97 && $trip($x2)[3] === ['AI ranking', 'on', '4 of ~10'] && $x2['errors'] === 1 && $x2['error_text'] === 'AI ranking: boom' && $x2['frac'] === 0.97
+    && array_column($x3['steps'], 'state') === ['done', 'done', 'done', 'fail', 'on'] && $x3['steps'][3]['note'] === '' && $x3['frac'] === 0.0 && $x3['detail'] === '' && $x3['pct'] === 80
+    && array_column($x4['steps'], 'state') === ['done', 'done', 'done', 'fail', 'fail'],
+    'StRun: frac never goes back (0.5 stays after 0.2) and stops at 0.97; error marks the step, step() closes it as "fail" and resets frac / detail / live note; run FAILED -> its current step "fail"');
+$N = $mk(); $hand[] = $N->id;
+$N->plan(['Check your dashboard data']);
+$nAt = $N->plan(['Install cohorts', 'Retention + D7 revenue', 'Cost per install', 'Save economics']);   // a job run inside another one (source test -> economics)
+$N->step(2); $N->step(); $N->step(); $N->step();
+$C = $mk(); $hand[] = $C->id;
+$C->plan(['Your apps: earnings + installs', 'Google Ads spend']); $C->step(); $C->error('portfolio: x'); $C->closeOpen();
+$cAt = $C->plan(['Web research: Tools', 'AI ranking']); $C->note('5 sources'); $C->step();
+ok($nAt === 0 && array_column($rowOf($N)['steps'], 'label') === ['Install cohorts', 'Retention + D7 revenue', 'Cost per install', 'Save economics', 'Check your dashboard data']
+    && array_unique(array_column($rowOf($N)['steps'], 'state')) === ['done'] && $rowOf($N)['steps_done'] === 5 && $rowOf($N)['steps_total'] === 5
+    && $cAt === 2 && $trip($rowOf($C)) === [['Your apps: earnings + installs', 'done', ''], ['Google Ads spend', 'fail', ''], ['Web research: Tools', 'done', '5 sources'], ['AI ranking', 'on', '']],
+    'StRun: an inner job\'s steps go in before the outer step that is still waiting (economics inside the source test); a failed inner job closes its open steps ("fail") so the outer steps stay in line');
+ok($rowOf($C)['steps_done'] === 3 && $rowOf($C)['steps_total'] === 4,
+    'closeOpen counts the steps it closes (like step() counts a failed step): steps_done 3 of 4 matches the list (2 closed + 1 done), so "Step N of M" and pct agree with it');
+// rank plans first: economics + portfolio steps reserved up front (whole plan from the start, % never jumps back), the inner job adopts them; a failed inner job closes only its own range
+$V = $mk(); $hand[] = $V->id;
+$V->plan([...ST_ECON_STEPS, ...ST_PORT_STEPS, 'Web research: Tools', 'AI ranking'], 8);
+$v0 = $rowOf($V);
+$vAt = $V->plan(ST_ECON_STEPS);   // economics inside rank
+$V->step(2); $V->progress(0.5, 'x', null, true);
+$v1 = $rowOf($V);
+$V->error('economics: cpi boom'); $V->closeOpen(0, 4);
+$v2 = $rowOf($V);
+$pAt = $V->plan(ST_PORT_STEPS); $V->step(4);
+$vOther = $V->plan(['Something else']);   // not reserved: inserted as before
+ok($v0['steps_total'] === 10 && count($v0['steps']) === 10 && $v0['pct'] === 0 && $vAt === 0 && $v1['steps_total'] === 10 && $v1['steps_done'] === 2 && $v1['pct'] === 25
+    && array_column($v2['steps'], 'state') === ['done', 'done', 'fail', 'fail', 'on', 'wait', 'wait', 'wait', 'wait', 'wait'] && $v2['steps_done'] === 4 && $v2['steps_total'] === 10
+    && $pAt === 4 && $rowOf($V)['steps_done'] === 8 && $rowOf($V)['steps'][8] === ['label' => 'Something else', 'state' => 'on', 'note' => ''] && $vOther === 8 && $rowOf($V)['steps_total'] === 11,
+    'reserved steps: rank shows all 10 steps from the start; economics / portfolio adopt their reserved steps (total stays 10, 2 + 0.5 of 10 = 25%); economics fails -> only its 2 open steps "fail" and counted (4 of 10), rank steps still wait; a plan that matches no reserved steps is inserted as usual');
+$X = $mk(); $hand[] = $X->id;
+$X->plan(['A', 'B']);
+foreach (range(1, 6) as $i) $X->error("minor $i");
+$X->error('the fatal one');
+$xe = $rowOf($X)['error_text'];
+ok($xe === 'minor 1 | minor 2 | minor 3 | minor 4 | the fatal one' && $rowOf($X)['errors'] === 7,
+    'error_text with more than 5 errors: first 4 + the last one (the error the run stopped on, shown as the reason in the app) · ' . $xe);
+$alterOk = true;
+try { st_alter_add($pdo, 'st_runs', "ADD COLUMN detail VARCHAR(160) NOT NULL DEFAULT ''", fn() => false); st_alter_add($pdo, 'st_usage', 'ADD KEY k_run (run_id)', fn() => false); } catch (Throwable $e) { $alterOk = $e->getMessage(); }
+$alterBad = false;
+try { st_alter_add($pdo, 'st_runs', 'ADD COLUMN zz_bad NOT_A_TYPE', fn() => false); } catch (PDOException $e) { $alterBad = true; }
+ok($alterOk === true && $alterBad, 'schema upgrade race: another request already added the column / index (1060 / 1061) -> no error (no HTTP 500 right after the upload); any other ALTER error still throws');
+$sc = st_run_new($pdo, 'source_check', ['trigger' => 'manual', 'by' => 'test', 'params' => ['source' => 'claude_web']]); $hand[] = $sc;
+ok(st_run_row($pdo->query("SELECT * FROM st_runs WHERE id = $sc")->fetch())['source'] === 'claude_web' && $rowOf($V)['source'] === null
+    && st_run_row($pdo->query("SELECT * FROM st_runs WHERE job <> 'source_check' LIMIT 1")->fetch())['source'] === null,
+    'run row: source test carries its source (the app\'s "Run again" sends {job: source_check, source}); no source -> null; other jobs null');
+$T2 = $mk(); $hand[] = $T2->id;
+$T2->plan(['A']);
+$T2->wrote = microtime(true);
+$T2->progress(0.3, 'thr');
+$thr1 = q1('SELECT detail FROM st_runs WHERE id = ?', [$T2->id]);
+$T2->wrote -= ST_LIVE_SEC + 0.1;
+$T2->progress(0.3, 'thr');   // nothing new, but the pending change is due now
+$thr2 = $pdo->query("SELECT detail, frac FROM st_runs WHERE id = {$T2->id}")->fetch();
+h_x($pdo, 'UPDATE st_runs SET beat_at = DATE_SUB(UTC_TIMESTAMP(), INTERVAL 10 MINUTE) WHERE id = ?', [$T2->id]);
+$T2->wrote -= ST_LIVE_SEC + 0.1;
+$T2->progress(0.3, 'thr');   // unchanged + already written: no write
+$beatOld = (int)q1('SELECT TIMESTAMPDIFF(SECOND, beat_at, UTC_TIMESTAMP()) FROM st_runs WHERE id = ?', [$T2->id]);
+$T2->beat();
+$beatNew = (int)q1('SELECT TIMESTAMPDIFF(SECOND, beat_at, UTC_TIMESTAMP()) FROM st_runs WHERE id = ?', [$T2->id]);
+ok($thr1 === '' && $thr2['detail'] === 'thr' && (float)$thr2['frac'] === 0.3 && $beatOld >= 590 && $beatNew <= 1,
+    'StRun: live writes throttled (change within ' . ST_LIVE_SEC . ' s waits, then written), nothing new = no write; beat() writes the heartbeat now');
+final class StNoLivePdo extends PDO   // DB without the new columns (or a write that fails): progress must never break the job
+{
+    public function prepare(string $query, array $options = []): PDOStatement|false
+    {
+        if (str_contains($query, 'beat_at')) throw new PDOException("SQLSTATE[42S22]: Column not found: 1054 Unknown column 'beat_at' in 'field list'");
+        return parent::prepare($query, $options);
+    }
+}
+$E = $mk(); $hand[] = $E->id;
+$xp = new StNoLivePdo($dsn, (string)getenv('TEST_DB_USER'), (string)getenv('TEST_DB_PASS'), [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC, PDO::ATTR_EMULATE_PREPARES => true]);
+$xp->exec("SET time_zone = '+00:00'");
+$E2 = new StRun($xp, $pdo->query("SELECT * FROM st_runs WHERE id = {$E->id}")->fetch());
+$elog = ini_set('error_log', "$T/live_error.log");   // the expected "live progress" log lines stay out of the test output
+try { $E2->plan(['A', 'B']); $E2->stage('stage still saved'); $E2->progress(0.5, 'x', null, true); $E2->beat(); $E2->step(); $E2->error('later error'); $eOk = ''; } catch (Throwable $e) { $eOk = $e->getMessage(); }
+ini_set('error_log', (string)$elog);
+$er2 = $pdo->query("SELECT * FROM st_runs WHERE id = {$E->id}")->fetch();
+ok($eOk === '' && (int)$er2['steps_done'] === 1 && (int)$er2['steps_total'] === 2 && $er2['stage'] === 'stage still saved' && (int)$er2['errors'] === 1 && $er2['steps_json'] === null,
+    'live columns cannot be written: plan / stage / step / error still saved the old way, progress + heartbeat fail silently (job keeps running)' . ($eOk !== '' ? " · $eOk" : ''));
+putenv('ST_NO_STREAM=1'); @unlink("$Q.log"); $fake([]);
+$W = $mk(); $hand[] = $W->id;
+$W->plan(['Test web search']);
+try { st_ai($pdo, $W, ['system' => 's', 'user' => 'u', 'max_tokens' => 100]); } catch (Throwable $e) {}
+putenv('ST_NO_STREAM');
+$wr = $pdo->query("SELECT detail, beat_at FROM st_runs WHERE id = {$W->id}")->fetch();
+ok($wr['detail'] === 'waiting for Claude' && $wr['beat_at'] !== null, 'non-streaming fallback: detail "waiting for Claude" + heartbeat written before the blocking call');
+foreach ($hand as $hid) { h_x($pdo, 'DELETE FROM st_usage WHERE run_id = ?', [$hid]); h_x($pdo, 'DELETE FROM st_runs WHERE id = ?', [$hid]); }
 @unlink("$Q.log"); $fake([]);
 ok((int)q1("SELECT COUNT(*) FROM st_runs WHERE status IN ('QUEUED','RUNNING','CANCELLING')") === 0, 'streaming tests leave no queued / running runs');
 
@@ -1346,9 +1601,65 @@ ok(count($sent) === 1 && $unions($sent[0]['output_config']['format']['schema']) 
 $pdo->exec('DROP TABLE st_port');
 kv_set('st_schema_v', '1');
 [$c] = $http('GET', 'api/studio.php?view=mine');
-ok($c === 200 && (bool)$pdo->query("SHOW TABLES LIKE 'st_port'")->fetch() && kv_get('st_schema_v') === '2', 'schema upgrade: server already at v1 -> v2 creates st_port');
+ok($c === 200 && (bool)$pdo->query("SHOW TABLES LIKE 'st_port'")->fetch() && kv_get('st_schema_v') === ST_SCHEMA_V, 'schema upgrade: server already at v1 -> current (v' . ST_SCHEMA_V . ') creates st_port');
 [$c, $j, $raw] = $http('GET', 'api/studio.php?open=project/1');
 ok($c === 200 && str_contains($raw, 'intent://studio/project/1'), 'email deep link page opens the app');
+// view=live over HTTP (the app polls it every few seconds): QUEUED / RUNNING / CANCELLING + finished in the last 15 min, newest first, max 20
+$pdo->exec('UPDATE st_runs SET finished_at = DATE_SUB(UTC_TIMESTAMP(), INTERVAL 2 HOUR) WHERE finished_at IS NOT NULL');
+$lf = $rankRun([$webResp(['https://example.com/lv-tools'], 'LV tools notes'), $webResp(['https://example.com/lv-prank'], 'LV prank notes'), $cutResp('Live cut', 2)]);   // Tools + Prank apps, IN
+$old20 = (int)q1("SELECT id FROM st_runs WHERE job = 'economics' AND status = 'DONE' ORDER BY id LIMIT 1");
+$old5 = (int)q1("SELECT id FROM st_runs WHERE job = 'discover' AND status = 'DONE' ORDER BY id LIMIT 1");
+h_x($pdo, 'UPDATE st_runs SET finished_at = DATE_SUB(UTC_TIMESTAMP(), INTERVAL 20 MINUTE) WHERE id = ?', [$old20]);
+h_x($pdo, 'UPDATE st_runs SET finished_at = DATE_SUB(UTC_TIMESTAMP(), INTERVAL 5 MINUTE), steps_json = NULL WHERE id = ?', [$old5]);   // finished before the upgrade: no steps saved
+$lr = st_run_new($pdo, 'rank', ['trigger' => 'manual', 'by' => 'test']);
+$lrSteps = json_encode([['l' => 'Web research: Tools', 'n' => '9 sources', 's' => 'd'], ['l' => 'Web research: Communication', 'n' => '7 sources', 's' => 'd'], ['l' => 'Web research: Maps & Navigation', 'n' => '8 sources', 's' => 'd'],
+    ['l' => 'Your apps + daily discovery', 'n' => '23 apps', 's' => 'd'], ['l' => 'AI ranking', 'n' => '4 of ~10', 's' => 'w'], ['l' => 'Save + notify you', 'n' => '', 's' => 'w']]);   // the approved mockup, mid-run
+h_x($pdo, "UPDATE st_runs SET status = 'RUNNING', attempts = 1, started_at = UTC_TIMESTAMP(), beat_at = UTC_TIMESTAMP(), stage = 'AI ranking (structured)', steps_done = 4, steps_total = 6, frac = 0.5,
+    detail = '4 of ~10 ideas written', steps_json = ? WHERE id = ?", [$lrSteps, $lr]);
+foreach ([[0.25, 2], [0.5, 1]] as [$uc, $us]) h_x($pdo, "INSERT INTO st_usage (run_id, kind, model, in_tokens, out_tokens, searches, cost_usd, ok, created_at) VALUES (?, 'ai+search', 'claude-opus-5-5', 1, 1, ?, ?, 1, UTC_TIMESTAMP())", [$lr, $us, $uc]);
+$lq = st_run_new($pdo, 'discover', ['trigger' => 'manual', 'by' => 'test']);
+[$c, $j, $raw] = $http('GET', 'api/studio.php?view=live');
+$LR = array_column($j['runs'] ?? [], null, 'id');
+if (getenv('STUDIO_LIVE_SAMPLE')) file_put_contents((string)getenv('STUDIO_LIVE_SAMPLE'), json_encode($j, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
+$want = ['id', 'uid', 'job', 'status', 'ref_id', 'trigger', 'steps_done', 'steps_total', 'frac', 'pct', 'stage', 'detail', 'steps', 'queued_at', 'started_at', 'finished_at', 'beat_at', 'cost_usd', 'ai_calls',
+    'searches', 'error_text', 'summary', 'waiting_for', 'can_reuse'];
+ok($c === 200 && ($j['ok'] ?? false) && ($j['view'] ?? '') === 'live' && preg_match('/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$/', (string)($j['server_time'] ?? '')) && array_key_exists('cron_last', $j)
+    && array_column($j['runs'] ?? [], 'id') === [$lq, $lr, (int)$lf['id'], $old5] && !array_filter($j['runs'], fn($r) => array_diff($want, array_keys($r))),
+    'view=live: queued + running + finished in the last 15 min (5 min ago yes, 20 min ago no), newest first, every contract field' . ($c !== 200 ? ' -> ' . substr($raw, 0, 300) : ''));
+$q0 = $LR[$lq] ?? []; $r0 = $LR[$lr] ?? []; $f0 = $LR[(int)$lf['id']] ?? []; $o0 = $LR[$old5] ?? [];
+ok(($q0['status'] ?? '') === 'QUEUED' && $q0['waiting_for'] === 'rank' && $q0['pct'] === 0 && $q0['steps'] === [] && $q0['beat_at'] === null && $q0['can_reuse'] === false
+    && ($r0['status'] ?? '') === 'RUNNING' && $r0['waiting_for'] === null && $r0['pct'] === 75 && $r0['frac'] === 0.5 && $r0['detail'] === '4 of ~10 ideas written' && $r0['beat_at'] !== null
+    && $r0['cost_usd'] === 0.75 && $r0['ai_calls'] === 2 && $r0['searches'] === 3 && (float)q1('SELECT cost_usd FROM st_runs WHERE id = ?', [$lr]) === 0.0
+    && array_column($r0['steps'], 'state') === ['done', 'done', 'done', 'done', 'on', 'wait'] && $r0['steps'][4]['note'] === '4 of ~10',
+    'view=live: queued run waits behind the running "rank"; running run: pct 75 (4 + 0.5 of 6), detail, heartbeat, live cost $0.75 / 2 AI calls / 3 searches from st_usage (st_runs still 0)');
+ok(($f0['status'] ?? '') === 'FAILED' && $f0['can_reuse'] === true && $f0['waiting_for'] === null && str_contains((string)$f0['error_text'], 'only 2 complete ideas') && $f0['cost_usd'] > 0 && $f0['ai_calls'] === 3
+    && array_map(fn($x) => [$x['label'], $x['state']], $f0['steps']) === [['Web research: Tools', 'done'], ['Web research: Prank apps', 'done'], ['Your apps + daily discovery', 'done'], ['AI ranking', 'fail'], ['Save + notify you', 'wait']]
+    && $f0['pct'] >= 60 && $f0['pct'] <= 79 && ($o0['status'] ?? '') === 'DONE' && $o0['steps'] === [] && $o0['pct'] === 100 && (float)$o0['frac'] === 0.0,   // JSON: 0.0 arrives as 0
+    "view=live: failed ranking -> can_reuse true (its research is saved), AI ranking \"fail\", {$f0['pct']}%; old run without steps_json -> steps [] (100%)");
+[$c1r, $j1] = $http('GET', 'api/studio.php?view=run&id=' . (int)$lf['id']);
+[$c2r, $j2] = $http('GET', 'api/studio.php?view=runs');
+[$c3r, $j3] = $http('GET', 'api/studio.php?view=overview');
+$rs = array_column($j2['items'] ?? [], null, 'id');
+ok($c1r === 200 && ($j1['item']['steps'] ?? null) === $f0['steps'] && ($j1['item']['can_reuse'] ?? null) === true && ($rs[$lq]['waiting_for'] ?? '') === 'rank' && ($rs[$lr]['cost_usd'] ?? 0) === 0.75
+    && ($rs[(int)$lf['id']]['pct'] ?? -1) === $f0['pct'] && ($j3['runs'][0]['id'] ?? 0) === $lq && ($j3['runs'][0]['waiting_for'] ?? '') === 'rank' && is_array($j3['runs'][1]['steps'] ?? null),
+    'run detail, runs list and overview.runs carry the same live fields (steps, pct, waiting_for, live cost, can_reuse)');
+st_cancel($pdo, $lq, 'test');   // else the worker takes the queued (manual) discover first
+h_x($pdo, "UPDATE st_runs SET status = 'CANCELLED', finished_at = UTC_TIMESTAMP() WHERE id = ?", [$lr]);
+$lf2 = $rankRun([$jsonResp(['opportunities' => [$oppS('Live reuse idea')]])]);   // "Run again": the saved research is used, no web search
+[$c, $j] = $http('GET', 'api/studio.php?view=live');
+$LR = array_column($j['runs'] ?? [], null, 'id');
+ok($lf2['status'] === 'DONE' && count($reqs()) === 1 && ($LR[(int)$lf['id']]['can_reuse'] ?? null) === false && ($LR[(int)$lf2['id']]['can_reuse'] ?? null) === false
+    && array_column($LR[(int)$lf2['id']]['steps'] ?? [], 'note') === ['reused', 'reused', '', '1 idea', ''],
+    'after "Run again" used the research: can_reuse false; new run shows both web steps "reused"' . $errOf($lf2));
+// server still on schema v2 (no live columns): the first request adds them, old runs render without steps
+$pdo->exec('ALTER TABLE st_runs DROP COLUMN frac, DROP COLUMN detail, DROP COLUMN beat_at, DROP COLUMN steps_json, DROP KEY k_fin');
+$pdo->exec('ALTER TABLE st_usage DROP KEY k_run');
+kv_set('st_schema_v', '2');
+[$c, $j, $raw] = $http('GET', 'api/studio.php?view=live');
+$cols = array_column(q('SHOW COLUMNS FROM st_runs'), 'Field');
+ok($c === 200 && kv_get('st_schema_v') === '3' && !array_diff(['frac', 'detail', 'beat_at', 'steps_json'], $cols) && st_has_key($pdo, 'st_runs', 'k_fin') && st_has_key($pdo, 'st_usage', 'k_run')
+    && count($j['runs'] ?? []) >= 3 && !array_filter($j['runs'], fn($r) => $r['steps'] !== [] || (float)$r['frac'] !== 0.0 || $r['detail'] !== ''),
+    'schema upgrade 2 -> 3: live columns + indexes added on the first request; runs from before render with steps [] and frac 0' . ($c !== 200 ? ' -> ' . substr($raw, 0, 300) : ''));
 proc_terminate($srv);
 $log = (string)@file_get_contents("$T/server.log");
 ok(!preg_match('/PHP (Warning|Fatal|Deprecated|Notice)/', $log), 'no PHP warnings / errors in server log' . (preg_match('/PHP (Warning|Fatal|Deprecated|Notice)[^\n]*/', $log, $mm) ? ': ' . $mm[0] : ''));

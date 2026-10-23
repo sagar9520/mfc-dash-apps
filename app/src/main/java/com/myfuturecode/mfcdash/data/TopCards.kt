@@ -10,15 +10,21 @@ import java.math.RoundingMode
 // "Top 3" cards ka hisaab (home-screen widgets; aage Home bhi yahi use kare). Sirf data, koi UI nahi:
 // sab functions pehle se parse kiye API models lete hain, isliye widget aur app dono ek jaisa dikhayenge.
 
-/** Rang ka zone: ROAS (red < 80%, amber 80-100%, green >= 100%) ya budget (green 80% tak, amber 80-90%, red 90% se upar). */
+/** Rang ka zone: ROAS ([roasZone], target ke hisaab se) ya budget (green 80% tak, amber 80-90%, red 90% se upar). */
 enum class TopZone { RED, AMBER, GREEN, NONE }
 
-/** ROAS ratio (1.0 = 100%) ka zone; kharcha nahi (null) = NONE. Paisa meter aur Live users ki line dono me yahi. */
-fun roasZone(roas: Double?): TopZone = when {
-    roas == null || !roas.isFinite() -> TopZone.NONE
-    roas < 0.8 -> TopZone.RED
-    roas < 1.0 -> TopZone.AMBER
-    else -> TopZone.GREEN
+/**
+ * ROAS ratio (1.0 = 100%) ka zone; kharcha nahi (null) = NONE. kRoasKind (Paisa / Home ka ROAS meter) jaisa: red < min(target,
+ * 100%), amber max(target, 100%) tak, green upar. target = Settings ka ROAS target; default 0.8 = widget wala (80% / 100%).
+ */
+fun roasZone(roas: Double?, target: Double = 0.8): TopZone {
+    if (roas == null || !roas.isFinite()) return TopZone.NONE
+    val t = if (target > 0 && target.isFinite()) target else 1.0
+    return when {
+        roas < minOf(t, 1.0) -> TopZone.RED
+        roas < maxOf(t, 1.0) -> TopZone.AMBER
+        else -> TopZone.GREEN
+    }
 }
 
 /**

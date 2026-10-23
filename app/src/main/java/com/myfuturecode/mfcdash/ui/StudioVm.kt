@@ -4,14 +4,56 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.myfuturecode.mfcdash.App
+import com.myfuturecode.mfcdash.util.arr
+import com.myfuturecode.mfcdash.util.l
+import com.myfuturecode.mfcdash.util.mapObj
+import com.myfuturecode.mfcdash.util.s
+import com.myfuturecode.mfcdash.util.sn
 import com.myfuturecode.mfcdash.util.t
+import com.myfuturecode.mfcdash.util.tsMs
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
+
+/** Run abhi chal raha / line me (view=live ke runs). */
+internal val LIVE_ON = setOf("QUEUED", "RUNNING", "CANCELLING")
+
+internal fun liveOn(status: String) = status.uppercase() in LIVE_ON
+
+/**
+ * view=live ka haal. runs = chalu + pichhle 15 min me khatam (naye pehle). offset = server - phone (ms), taaki
+ * heartbeat / "2 min pehle khatam" phone ki galat ghadi se na bigde. fin = job -> kitne runs chalte-chalte khatam hue
+ * (pages isse apna data dobara laate hain). ok = kam se kam ek baar sahi jawab aaya (purana server = false, pages purana indicator dikhate).
+ * cron = server cron aakhri baar kab chala (server ki ghadi, ms; null = kabhi nahi).
+ */
+data class SLive(
+    val runs: List<JSONObject> = emptyList(),
+    val offset: Long = 0L,
+    val ok: Boolean = false,
+    val at: Long = 0L,
+    val fin: Map<String, Int> = emptyMap(),
+    val cron: Long? = null,
+) {
+    fun run(id: Long): JSONObject? = runs.firstOrNull { it.l("id") == id }
+    fun finOf(vararg jobs: String): Int = jobs.sumOf { fin[it] ?: 0 }
+    val active: Boolean get() = runs.any { liveOn(it.s("status")) }
+    /** Server ki ghadi ka "abhi" (ms). */
+    fun now(): Long = System.currentTimeMillis() + offset
+    /** Cron (har 5 min) 12 min se nahi chala: line wala run kabhi shuru nahi hoga (card "Server cron is not running"). */
+    fun cronDead(): Boolean = ok && (cron == null || now() - cron > CRON_DEAD_MS)
+
+    companion object {
+        const val CRON_DEAD_MS = 12 * 60_000L
+    }
+}
 
 /** AI App Research Studio: har view ka aakhri jawab (GState hi reuse). Actions = approvals / settings; app kabhi khud publish nahi karta. */
 class StudioVm(app: App) : ViewModel() {
@@ -51,6 +93,7 @@ class StudioVm(app: App) : ViewModel() {
                 val j = api.sAction(action, fields)
                 ok?.let { say(it) }
                 then(j)
+                liveNow()   // run queue hua / cancel hua ho sakta hai: live card turant
             } catch (e: Exception) {
                 say(e.message ?: "Failed".t())
             }
@@ -58,7 +101,80 @@ class StudioVm(app: App) : ViewModel() {
         }
     }
 
+    // ---------------------------------------------------------------- live: chal rahe runs (view=live)
+    // Ek hi poller: har Studio screen STARTED par liveStart / STOPPED par liveStop (ginti). App peeche = sab screens
+    // STOPPED = poller band. Koi run chalu = har 4 s, warna 30 s (scheduled run pakadne ke liye). Requests kabhi ek ke upar ek nahi.
+
+    private val _live = MutableStateFlow(SLive())
+    val live: StateFlow<SLive> = _live
+    private var liveUsers = 0
+    private var liveJob: Job? = null
+    private val liveWake = Channel<Unit>(Channel.CONFLATED)
+    private var liveLast = 0L
+    /** Pichhle jawab ke chalu runs (id -> job): agle jawab me khatam / gayab = fin event. */
+    private var liveBusy: Map<Long, String> = emptyMap()
+
+    fun liveStart() {
+        liveUsers++
+        if (liveJob?.isActive != true) liveJob = viewModelScope.launch { liveLoop() }
+    }
+
+    fun liveStop() {
+        liveUsers = (liveUsers - 1).coerceAtLeast(0)
+        if (liveUsers == 0) {
+            liveJob?.cancel()
+            liveJob = null
+        }
+    }
+
+    /** Abhi ek baar dekho (Run again / action ke baad). Poller band ho to agli shuruaat par. */
+    fun liveNow() { liveWake.trySend(Unit) }
+
+    private suspend fun liveLoop() {
+        // screen badli (ek band, doosri khuli): abhi-abhi dekha tha to turant dobara nahi
+        val gap = System.currentTimeMillis() - liveLast
+        if (gap in 0 until LIVE_FAST) withTimeoutOrNull(LIVE_FAST - gap) { liveWake.receive() }
+        while (true) {
+            val next = livePoll()
+            withTimeoutOrNull(next) { liveWake.receive() }
+        }
+    }
+
+    /** Ek poll; jawab = agla poll kitni der baad (ms). */
+    private suspend fun livePoll(): Long {
+        liveLast = System.currentTimeMillis()
+        val wasBusy = liveBusy.isNotEmpty()
+        return try {
+            val j = api.sGet("live")
+            val runs = j.arr("runs").mapObj { it }
+            val st = tsMs(j.sn("server_time"))
+            val off = if (st != null) st - System.currentTimeMillis() else 0L
+            val cron = tsMs(j.sn("cron_last"))
+            val byId = runs.associateBy { it.l("id") }
+            // pichhli baar chalu the, ab khatam (ya list se nikal gaye, jaise app der tak peeche rahi)
+            val ended = liveBusy.filter { (id, _) -> byId[id]?.let { !liveOn(it.s("status")) } ?: true }
+            liveBusy = runs.filter { liveOn(it.s("status")) }.associate { it.l("id") to it.s("job") }
+            _live.update { cur ->
+                val fin = if (ended.isEmpty()) cur.fin else cur.fin.toMutableMap().also { m -> ended.values.forEach { job -> m[job] = (m[job] ?: 0) + 1 } }
+                cur.copy(runs = runs, offset = off, ok = true, at = System.currentTimeMillis(), fin = fin, cron = cron)
+            }
+            // sirf line wale runs aur cron ruka: kuch badlega nahi, tez poll bekaar
+            val stuck = liveBusy.isNotEmpty() && runs.none { it.s("status").uppercase() in setOf("RUNNING", "CANCELLING") } && _live.value.cronDead()
+            if (liveBusy.isNotEmpty() && !stuck) LIVE_FAST else LIVE_SLOW
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // purana server (view=live nahi = 400): bahut kam poll; net ki galti: thodi der baad
+            if ((e.message ?: "").contains("400")) LIVE_OLD else if (wasBusy) LIVE_ERR else LIVE_SLOW
+        }
+    }
+
     companion object {
+        private const val LIVE_FAST = 4_000L
+        private const val LIVE_SLOW = 30_000L
+        private const val LIVE_ERR = 15_000L
+        private const val LIVE_OLD = 300_000L
+
         fun factory(app: App) = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T = StudioVm(app) as T

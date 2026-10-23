@@ -55,7 +55,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import com.myfuturecode.mfcdash.data.PageLoad
 import com.myfuturecode.mfcdash.ui.GState
+import com.myfuturecode.mfcdash.ui.SLive
 import com.myfuturecode.mfcdash.ui.StudioVm
+import com.myfuturecode.mfcdash.ui.liveOn
 import com.myfuturecode.mfcdash.ui.kit.KAvatar
 import com.myfuturecode.mfcdash.ui.kit.KBadge
 import com.myfuturecode.mfcdash.ui.kit.KBarIcon
@@ -168,6 +170,8 @@ private fun sSortOpts(tab: String): List<Pair<String, String>> = when (tab) {
 @Composable
 fun StudioScreen(vm: StudioVm, nav: NavHostController, startTab: String, run: Long = 0L) {
     val g by vm.s.collectAsStateWithLifecycle()
+    SLiveUse(vm)   // chal rahe runs (view=live): ek hi poller, screen dikhe tab tak
+    val live = sLive(vm)
     val start = if (startTab == "ranking") "research" else startTab
     val first = if (STABS.any { it.first == start }) start else "overview"
     var tab by rememberSaveable { mutableStateOf(first) }
@@ -202,7 +206,7 @@ fun StudioScreen(vm: StudioVm, nav: NavHostController, startTab: String, run: Lo
     var mineSeg by rememberSaveable { mutableIntStateOf(0) }
     val bar: @Composable ColumnScope.() -> Unit = {
         val barSort = if (tab == "mine" && !mineSortOn(mineSeg, isWide())) null else sort
-        StudioBar(tab, g, back, go, { idea = true }, { reload.intValue++ }, barSort, discP) { discSel = it }
+        StudioBar(tab, g, back, go, { idea = true }, { reload.intValue++ }, barSort, discP, live) { discSel = it }
     }
     if (tab == "overview") OverviewPage(g, vm, nav, r, bar, go)
     else key(tab) { TabBody(tab, g, vm, nav, r, go, sort, bar, mineSeg, discP) { mineSeg = it } }
@@ -213,14 +217,18 @@ fun StudioScreen(vm: StudioVm, nav: NavHostController, startTab: String, run: Lo
 @Composable
 private fun StudioBar(
     tab: String, g: GState, back: () -> Unit, go: (String) -> Unit, onIdea: () -> Unit, onRefresh: () -> Unit, sort: KSortState? = null,
-    discP: Map<String, String> = emptyMap(), onDiscPick: (String) -> Unit = {},
+    discP: Map<String, String> = emptyMap(), live: SLive = SLive(), onDiscPick: (String) -> Unit = {},
 ) {
     KPullAction(onRefresh)   // refresh sirf ⋮ menu me: upar se kheencho = yahi
     val o = g.view("overview")
     var menu by remember { mutableStateOf(false) }
     val pend = o?.arr("pending")?.length() ?: 0
+    val jobsOn = live.activeCount()
     val sub = when (tab) {
-        "overview" -> o?.let { tf("%s ideas", num(ideaTotal(it).toDouble())) } ?: sUpdated(g)
+        // job chal rahe = "2 jobs running" (mockup ui_live 2)
+        "overview" -> if (jobsOn > 0) (if (jobsOn == 1) "1 job running".t() else tf("%s jobs running", jobsOn))
+            else o?.let { tf("%s ideas", num(ideaTotal(it).toDouble())) } ?: sUpdated(g)
+        "research" -> rankSub(live) ?: "Research Studio".t()
         "mine" -> mineSub(g) ?: "Research Studio".t()
         "discovery" -> discSub(g, discP) ?: "Research Studio".t()
         else -> "Research Studio".t()
@@ -265,6 +273,16 @@ private fun StudioBar(
     )
 }
 
+/** Research bar ki sub line: "Ranking running" / "11 new ideas" (ya "Ranking ready") / "Ranking stopped" (sirf jab card dikh raha). */
+private fun rankSub(live: SLive): String? {
+    val r = live.forPage(setOf("rank")).firstOrNull() ?: return null
+    return when (lState(r, live.now())) {
+        LState.DONE -> lNewIdeas(r) ?: tf("%s ready", jobShort("rank"))   // mockup ui_live 3: "11 new ideas"
+        LState.STOPPED, LState.PARTIAL -> tf("%s stopped", jobShort("rank"))
+        else -> "Ranking running".t()
+    }
+}
+
 /** Tab ka page. "mine" / "discovery" ka hero top me (Overview jaisa), isliye woh apna KScreen khud banate hain. */
 @Composable
 private fun TabBody(
@@ -273,7 +291,7 @@ private fun TabBody(
 ) {
     when (tab) {
         "mine" -> MinePage(g, vm, nav, reload, bar, sort, mineSeg, onMineSeg)
-        "discovery" -> DiscoveryPage(g, vm, reload, bar, discP)
+        "discovery" -> DiscoveryPage(g, vm, nav, reload, bar, discP)
         else -> KScreen(top = bar) { TabList(tab, g, vm, nav, reload, go, sort) }
     }
 }
@@ -286,7 +304,7 @@ private fun TabList(tab: String, g: GState, vm: StudioVm, nav: NavHostController
         "approvals" -> ApprovalsTab(g, vm, nav, reload, go, sort)
         "history" -> HistoryTab(g, vm, nav, reload)
         "runs" -> RunsTab(g, vm, nav, reload, sort)
-        "sources" -> SourcesTab(g, vm, reload)
+        "sources" -> SourcesTab(g, vm, nav, reload)
         "settings" -> SettingsTab(g, vm, reload)
         else -> {}
     }
@@ -324,7 +342,9 @@ private fun studioState(o: JSONObject): Pair<KKind, String> {
 
 @Composable
 private fun OverviewPage(g: GState, vm: StudioVm, nav: NavHostController, reload: Int, bar: @Composable ColumnScope.() -> Unit, go: (String) -> Unit) {
-    SPoll(60_000, reload) { vm.load("overview") }
+    val live = sLive(vm)
+    // koi bhi job khatam = overview dobara (naye ideas / khoj / runs)
+    SPoll(60_000, reload, live.fin.values.sum()) { vm.load("overview") }
     val o = g.view("overview")
     if (isWide()) {
         // Fold: baayein mockup wala kram (hero, OK chahiye, top ideas, budget, schedule), daayein Aur + haal ke runs / activity
@@ -333,6 +353,7 @@ private fun OverviewPage(g: GState, vm: StudioVm, nav: NavHostController, reload
                 KTwoPane(
                     left = {
                         StudioHero(ov)
+                        RunningNowSection(live, nav, go)
                         OkSection(ov, nav, go)
                         DiscoverySection(ov, go)
                         MineSection(ov, g, vm, go)
@@ -342,7 +363,7 @@ private fun OverviewPage(g: GState, vm: StudioVm, nav: NavHostController, reload
                     },
                     right = {
                         MoreCard(ov, go)
-                        RecentCards(ov, nav, go)
+                        RecentCards(ov, nav, go, live)
                         NeverPublishNote()
                     },
                 )
@@ -350,6 +371,8 @@ private fun OverviewPage(g: GState, vm: StudioVm, nav: NavHostController, reload
         }
     } else {
         KScreen(top = { bar(); if (o != null) StudioHero(o) else if (sSkelOn(g, o)) KSkelHero(KTint.Lav) }) {
+            // chal rahe runs sabse upar (mockup ui_live 2); overview aane se pehle bhi
+            RunningNowSection(live, nav, go)
             SLoad(g, o, { vm.load("overview") }, { OverviewSkel(false) }) { ov ->
                 OkSection(ov, nav, go)
                 DiscoverySection(ov, go)
@@ -358,7 +381,7 @@ private fun OverviewPage(g: GState, vm: StudioVm, nav: NavHostController, reload
                 BudgetCard(ov, go)
                 MoreCard(ov, go)
                 ScheduleCard(ov, go)
-                RecentCards(ov, nav, go)
+                RecentCards(ov, nav, go, live)
                 NeverPublishNote()
             }
         }
@@ -633,14 +656,14 @@ private fun ScheduleCard(o: JSONObject, go: (String) -> Unit) {
 
 /** Haal ke runs (3) aur activity (5); "Sab dekho" = poora tab. */
 @Composable
-private fun RecentCards(o: JSONObject, nav: NavHostController, go: (String) -> Unit) {
+private fun RecentCards(o: JSONObject, nav: NavHostController, go: (String) -> Unit, live: SLive) {
     val runs = o.arr("runs").objs()
     if (runs.isNotEmpty()) {
         KSection("Recent runs".t(), trailing = { KSectionLink("See all".t()) { go("runs") } })
         KCard(list = true) {
             runs.take(3).forEachIndexed { i, x ->
                 if (i > 0) KListDivider(true)
-                SRunRow(x, nav)
+                SRunRow(x, nav, live)
             }
         }
     }
@@ -668,13 +691,19 @@ private fun ResearchTab(g: GState, vm: StudioVm, nav: NavHostController, reload:
     var sel by remember { mutableStateOf(setOf<Long>()) }
     var approve by remember { mutableStateOf(false) }
     val f = mapOf("engine" to engine, "tier" to tier, "cc" to cc, "category" to cat, "status" to status)
-    SPoll(90_000, f, reload) { vm.load("research", f) }
+    val live = sLive(vm)
+    // ranking / deep research khatam = list apne aap bharti (refresh nahi)
+    SPoll(90_000, f, reload, live.finOf("rank", "deep")) { vm.load("research", f) }
+    val lr = live.forPage(setOf("rank", "deep"))
+    val rankOn = lr.any { liveOn(it.s("status")) }
+    val rankStop = lr.any { !liveOn(it.s("status")) && it.s("status").uppercase() != "DONE" }
     KLoadOnChange(f)   // engine / filter = upar ki line
     val last = g.view("research", f)
     // filter ke options pichhle kisi bhi research jawab se (load ke beech gayab na hon)
     val opts = last ?: g.views.entries.firstOrNull { it.key.startsWith("research?") }?.value
     val engines = listOf("organic", "paid", "combined")
     val controls: @Composable () -> Unit = {
+        SLiveCards(lr, live, g, vm, nav)   // chalti ranking sabse upar (mockup ui_live 1 / 3 / 4)
         KSegTabs(listOf("Organic".t(), "Paid".t(), "Combined".t()), engines.indexOf(engine).coerceAtLeast(0), { engine = engines[it] })
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             SDrop(
@@ -693,7 +722,8 @@ private fun ResearchTab(g: GState, vm: StudioVm, nav: NavHostController, reload:
             ) { cc = it }
             SDrop("Category".t(), listOf("" to "All".t()) + opts?.arr("categories")?.strings().orEmpty().map { it to it }, cat) { cat = it }
         }
-        RankingCard(last, g, vm)
+        // ranking ka live card dikh raha = "Run now" wala card nahi (dobara queue na ho)
+        if (lr.none { it.s("job") == "rank" }) RankingCard(last, g, vm)
         if (sel.isNotEmpty()) SelectionCard(sel.size, { approve = true }, { nav.navigate("studio/compare/" + sel.joinToString(",")) }, { sel = emptySet() })
     }
     val list: @Composable () -> Unit = {
@@ -708,7 +738,11 @@ private fun ResearchTab(g: GState, vm: StudioVm, nav: NavHostController, reload:
                 }
             }
             if (sort != null) KSortPill(sort, sSortOpts("research"), S_SORT_KINDS)
-            if (items.isEmpty()) KCard { KEmpty("No ideas".t(), KIcons.Bulb) }
+            if (items.isEmpty()) when {
+                rankOn -> SLiveEmpty("Ideas appear here".t(), "When the ranking ends, the list fills by itself. No need to refresh.".t())
+                rankStop -> SLiveEmpty("No ideas yet".t(), "Tap Run again. Ideas appear here when it ends.".t())
+                else -> KCard { KEmpty("No ideas".t(), KIcons.Bulb) }
+            }
             else KCard(list = true) {
                 items.forEachIndexed { i, x ->
                     if (i > 0) KListDivider(true)
@@ -959,7 +993,8 @@ private fun jobIcon(j: String): ImageVector = when (j) {
 
 @Composable
 private fun RunsTab(g: GState, vm: StudioVm, nav: NavHostController, reload: Int, sort: KSortState?) {
-    SPoll(20_000, reload) { vm.load("runs") }
+    val live = sLive(vm)
+    SPoll(20_000, reload, live.fin.values.sum()) { vm.load("runs") }
     val start: @Composable () -> Unit = {
         KSection("Start a run now".t())
         KCard(list = true) {
@@ -993,7 +1028,7 @@ private fun RunsTab(g: GState, vm: StudioVm, nav: NavHostController, reload: Int
             else KCard(list = true) {
                 items.forEachIndexed { i, x ->
                     if (i > 0) KListDivider(true)
-                    SRunRow(x, nav)
+                    SRunRow(x, nav, live)
                 }
             }
         }
@@ -1008,8 +1043,10 @@ private fun RunsTab(g: GState, vm: StudioVm, nav: NavHostController, reload: Int
 // ---------------------------------------------------------------- Sources
 
 @Composable
-private fun SourcesTab(g: GState, vm: StudioVm, reload: Int) {
-    LaunchedEffect(reload) { vm.load("sources") }
+private fun SourcesTab(g: GState, vm: StudioVm, nav: NavHostController, reload: Int) {
+    val live = sLive(vm)
+    LaunchedEffect(reload, live.finOf("source_check")) { vm.load("sources") }
+    SLiveCards(live.forPage(setOf("source_check")), live, g, vm, nav)
     SLoad(g, g.view("sources"), { vm.load("sources") }) { o ->
         val items = o.arr("items").objs()
         val okN = items.count { it.s("status") == "OK" }

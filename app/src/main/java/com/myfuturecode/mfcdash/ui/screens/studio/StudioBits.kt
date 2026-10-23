@@ -65,6 +65,8 @@ import androidx.lifecycle.repeatOnLifecycle
 import androidx.navigation.NavHostController
 import com.myfuturecode.mfcdash.data.PageLoad
 import com.myfuturecode.mfcdash.ui.GState
+import com.myfuturecode.mfcdash.ui.SLive
+import com.myfuturecode.mfcdash.ui.liveOn
 import com.myfuturecode.mfcdash.ui.kit.KAvatar
 import com.myfuturecode.mfcdash.ui.kit.KBtn
 import com.myfuturecode.mfcdash.ui.kit.KButton
@@ -253,13 +255,14 @@ internal fun rememberOpenUrl(): (String) -> Unit {
     }
 }
 
-/** Screen khuli rahe tab tak har [ms] par [tick] (pehli baar turant). App peeche ho to ruk jata hai. */
+/** Screen khuli rahe tab tak har [ms] par [tick] (pehli baar turant). App peeche ho to ruk jata hai. [ms] badle to agla intezaar naye se (restart nahi). */
 @Composable
 internal fun SPoll(ms: Long, vararg keys: Any?, tick: () -> Unit) {
     val t by rememberUpdatedState(tick)
+    val gap by rememberUpdatedState(ms)
     val life = LocalLifecycleOwner.current.lifecycle
     // har tick = dikh rahi screen ka sync: upar ki line, par 15 s me ek hi baar (PageLoad.startAuto; tez job poll chup)
-    LaunchedEffect(life, *keys) { life.repeatOnLifecycle(Lifecycle.State.STARTED) { while (true) { PageLoad.startAuto(); t(); delay(ms) } } }
+    LaunchedEffect(life, *keys) { life.repeatOnLifecycle(Lifecycle.State.STARTED) { while (true) { PageLoad.startAuto(); t(); delay(gap) } } }
 }
 
 // ---------------------------------------------------------------- text
@@ -669,24 +672,35 @@ fun EvidenceRow(e: JSONObject) {
     }
 }
 
-/** Run row: job, status · steps · stage, kharcha, kab. Tap = run detail. Divider caller lagata hai. */
+/**
+ * Run row: job, status · steps · stage, kharcha, kab. Tap = run detail. Divider caller lagata hai.
+ * live = view=live ka taaza haal: chalu run par daayein % (line me = "Waiting") + kharcha, neeche patli patti.
+ */
 @Composable
-fun SRunRow(r: JSONObject, nav: NavHostController) {
+fun SRunRow(r0: JSONObject, nav: NavHostController, live: SLive? = null) {
+    val lr = live?.run(r0.l("id"))
+    val r = remember(r0, lr) { sMerge(r0, lr) }
     val st = r.s("status")
     val k = stKind(st)
+    val on = liveOn(st)
+    val off = live?.offset ?: 0L
     val steps = if (r.d("steps_total") > 0) "${r.d("steps_done").toInt()}/${r.d("steps_total").toInt()}" else null
-    val extra = if (st == "RUNNING") r.s("stage").ifBlank { null } else r.s("uid").ifBlank { null }
+    // chalu: step list ka chalu step ("AI ranking"), server ka andar wala stage text nahi
+    val extra = if (st == "RUNNING") (lOnLabel(r) ?: r.s("stage").ifBlank { null }) else r.s("uid").ifBlank { null }
+    val pct = if (on) sRunRowPct(r, off) else null
     KRow(
         jobName(r.s("job")),
         sub = listOfNotNull(stText(st), steps, extra).joinToString(" · "),
         subKind = k,
         lead = { KIconTile(if (stBusy(st)) KIcons.Clock else (k.icon() ?: KIcons.Play), k) },
-        value = usd(r.d("cost_usd"), 2),
-        valuePlain = true,
-        valueSub = sAgo(r.sn("finished_at") ?: r.sn("started_at") ?: r.s("queued_at")),
+        value = pct?.first ?: usd(r.d("cost_usd"), 2),
+        valueColor = pct?.second ?: Color.Unspecified,
+        valuePlain = pct == null,
+        valueSub = if (on) usd(r.d("cost_usd"), 2) else sAgo(r.sn("finished_at") ?: r.sn("started_at") ?: r.s("queued_at")),
         chevron = true,
         onClick = { nav.navigate("studio/run/${r.l("id")}") },
     )
+    SRunRowBar(r, off)
     r.sn("summary")?.let { SNote(it, lead = true, maxLines = 2) }
 }
 
