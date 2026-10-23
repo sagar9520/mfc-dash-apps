@@ -289,8 +289,12 @@ final class StNoTmpPdo extends PDO
 $np = new StNoTmpPdo('mysql:host=' . getenv('TEST_DB_HOST') . ';dbname=' . getenv('TEST_DB_NAME') . ';charset=utf8mb4', (string)getenv('TEST_DB_USER'), (string)getenv('TEST_DB_PASS'),
     [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC, PDO::ATTR_EMULATE_PREPARES => true]);
 $np->exec("SET time_zone = '+00:00'");
-ok(st_econ_cohorts($np, $eFrom, $eTo) === $old && (int)q1("SELECT COUNT(*) FROM st_events WHERE level = 'warn' AND msg LIKE '%fast cohort SQL failed%Access denied%'") === 1,
-    'no CREATE TEMPORARY TABLES privilege: warning logged, old query used, same result');
+// result group-wise (row order / summation order MySQL 8 par alag ho sakta hai), float tolerance ke saath
+$kp = $byKey(st_econ_cohorts($np, $eFrom, $eTo));
+$sameP = array_keys($kp) === array_keys($ko);
+foreach ($ko as $gk => $v) $sameP = $sameP && $v['i'] === $kp[$gk]['i'] && $v['r1'] === $kp[$gk]['r1'] && $v['r7'] === $kp[$gk]['r7'] && abs($v['rev'] - $kp[$gk]['rev']) < 1e-9;
+$wp = (int)q1("SELECT COUNT(*) FROM st_events WHERE level = 'warn' AND msg LIKE '%fast cohort SQL failed%Access denied%'");
+ok($sameP && $wp === 1, "no CREATE TEMPORARY TABLES privilege: warning logged, old query used, same result (same: " . ($sameP ? 'yes' : 'no') . ", warns: $wp)");
 $np = null;
 $rid = st_run_new($pdo, 'economics', ['trigger' => 'manual', 'by' => 'test']);
 st_work($pdo, 60);
