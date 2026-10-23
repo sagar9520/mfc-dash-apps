@@ -582,11 +582,12 @@ internal fun wSpendRowH(sp: Float, scale: Float): Float = wLine(sp, scale) + 3f 
  */
 internal fun wSpendPlan(tv: WTopV, room: Float, ih: Float, scale: Float, cap: Int = 3, pair: Boolean = false): WSpendPlan {
     val hdr = wHdr(scale)
-    val labW = 6f + wTextW(wSpendLabel(), 10.5f, scale)
+    // label ki jagah: 6dp gap + chhoti text ka andaza thoda bada (font ka farq), taaki kul ko kabhi kam jagah na mile
+    val labW = 10f + wTextW(wSpendLabel(), 10.5f, scale) * 1.15f
     // bada number kabhi "…" na ho: font ki chaudai me 4% chhoot (Paisa jaisa)
-    fun fits(sp: Float, r: Float) = wTextW(tv.total, sp, scale, true) * 1.04f <= r
     var tot = wFitSp(tv.total, (room - labW) / 1.04f, 19f, 17f, scale)
-    val label = !tv.noSpend && fits(tot, room - labW)
+    // label tabhi jab kul poora aaye aur thodi aur chhoot bache (font ka farq: kul kabhi "…" na ho, label chhod do)
+    val label = !tv.noSpend && wTextW(tv.total, tot, scale, true) * 1.12f <= room - labW
     if (!label) tot = wFitSp(tv.total, room / 1.04f, 19f, 12f, scale)
     // line: kharcha + 6 + naam (pehle ~40dp, phir 32 / 24dp; chhota naam poora) + 6 + ROAS %
     fun rowFits(sp: Float, roas: Boolean, name: Float) = tv.spends.all { a ->

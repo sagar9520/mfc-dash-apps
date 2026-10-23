@@ -387,7 +387,7 @@ private fun ColumnScope.WpTopSpend(tv: WTopV, room: Float, ih: Float, pair: Bool
     WpTopHead("Ads spend".t(), more, p, scale)
     Row(Modifier.fillMaxWidth().padding(top = 1.dp), verticalAlignment = Alignment.Bottom) {
         WpT(tv.total, plan.totSp, p.ink, Modifier.weight(1f), FontWeight.Bold)
-        if (plan.label) WpT(wSpendLabel(), 10.5f, p.ink3, Modifier.padding(bottom = 2.dp), FontWeight.Medium)
+        if (plan.label) WpT(wSpendLabel(), 10.5f, p.ink3, Modifier.padding(start = 6.dp, bottom = 2.dp), FontWeight.Medium)
     }
     if (tv.noSpend) {
         Spacer(Modifier.height(8.dp))

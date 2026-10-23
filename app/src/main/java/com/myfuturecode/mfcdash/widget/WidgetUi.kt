@@ -440,7 +440,7 @@ private fun ColumnScope.WTopSpend(tv: WTopV, room: Float, ih: Float, pair: Boole
     Row(modifier = GlanceModifier.fillMaxWidth().padding(top = 1.dp), verticalAlignment = Alignment.Bottom) {
         Text(tv.total, modifier = GlanceModifier.defaultWeight(), style = wts(p.ink, plan.totSp, FontWeight.Bold), maxLines = 1)
         if (plan.label) {
-            Text(wSpendLabel(), modifier = GlanceModifier.padding(bottom = 2.dp), style = wts(p.ink3, 10.5f, FontWeight.Medium), maxLines = 1)
+            Text(wSpendLabel(), modifier = GlanceModifier.padding(start = 6.dp, bottom = 2.dp), style = wts(p.ink3, 10.5f, FontWeight.Medium), maxLines = 1)
         }
     }
     if (tv.noSpend) {
