@@ -68,6 +68,7 @@ import com.myfuturecode.mfcdash.ui.kit.KPageTokens
 import com.myfuturecode.mfcdash.ui.kit.KPill
 import com.myfuturecode.mfcdash.ui.kit.KScreen
 import com.myfuturecode.mfcdash.ui.kit.KSection
+import com.myfuturecode.mfcdash.ui.kit.KSegTabs
 import com.myfuturecode.mfcdash.ui.kit.KSkelCircle
 import com.myfuturecode.mfcdash.ui.kit.KSkelLine
 import com.myfuturecode.mfcdash.ui.kit.KSkeleton
@@ -95,6 +96,7 @@ import com.myfuturecode.mfcdash.widget.WidgetData
 import com.myfuturecode.mfcdash.widget.WidgetPins
 import com.myfuturecode.mfcdash.widget.WidgetStore
 import com.myfuturecode.mfcdash.widget.WidgetSync
+import com.myfuturecode.mfcdash.widget.wByName
 import com.myfuturecode.mfcdash.widget.wEveryName
 import com.myfuturecode.mfcdash.widget.wPal
 import com.myfuturecode.mfcdash.widget.wRangeName
@@ -200,7 +202,7 @@ private fun WListItem(kind: WKind, snap: JSONObject?, count: Int, canPin: Boolea
     // data pehli baar aa raha = widget jaisa skeleton (fail / bina data = asli preview "—" ke saath)
     val skel = wait && snap == null && !v.login
     var failed by remember { mutableStateOf(false) }
-    val desc = wDesc(kind)
+    val desc = wDesc(kind, o)
     val pin: () -> Unit = { failed = !WidgetPins.pin(ctx, kind) }
     val status: @Composable () -> Unit = {
         if (count > 0) KPill(tf("%s placed", count), KKind.OK)
@@ -254,11 +256,27 @@ private fun WSkelPreview(v: WView, modifier: Modifier, onClick: (() -> Unit)?) {
     CompositionLocalProvider(LocalMfc provides mfcColors(v.style, top = p.brand)) {
         KSkeleton(m.padding(horizontal = if (v.kind == WKind.ADS) 14.dp else 16.dp, vertical = 14.dp)) {
             if (v.kind == WKind.ADS) {
-                // do column: Ads kharcha | Live users, har ek me 3 lines + patli patti
+                // do column: Ads kharcha | Live users, har ek me 3 lines + patli patti ("By app": kul kharcha, line me naam beech + ROAS)
+                val byApp = v.top?.byApp == true
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
                     repeat(2) { side ->
                         Column(Modifier.weight(1f)) {
                             KSkelLine(if (side == 0) .7f else .6f, 13.dp)
+                            if (side == 0 && byApp) {
+                                Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    KSkelLine(.45f, 16.dp)
+                                    Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) { KSkelLine(.6f, 9.dp) }
+                                }
+                                repeat(3) { i ->
+                                    Row(Modifier.fillMaxWidth().padding(top = 9.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        KSkelLine(listOf(44.dp, 36.dp, 40.dp)[i], 13.dp)
+                                        Box(Modifier.weight(1f), contentAlignment = Alignment.Center) { KSkelLine(listOf(.6f, .5f, .7f)[i], 9.dp) }
+                                        KSkelLine(28.dp, 13.dp)
+                                    }
+                                    KSkelLine(1f, 4.dp, Modifier.padding(top = 5.dp))
+                                }
+                                return@Column
+                            }
                             KSkelLine(.85f, 9.dp, Modifier.padding(top = 10.dp))
                             repeat(3) { i ->
                                 Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -331,10 +349,11 @@ private fun WSkelPreview(v: WView, modifier: Modifier, onClick: (() -> Unit)?) {
 private const val W_SMALL = 172f
 private const val W_WIDE_MAX = 460f
 
-/** Widget me kya dikhta hai (ek line). */
-private fun wDesc(kind: WKind): String = when (kind) {
+/** Widget me kya dikhta hai (ek line). Ads + Live: "By app" / "By account" ke hisaab se. */
+private fun wDesc(kind: WKind, o: WOpts): String = when (kind) {
     WKind.PAISA -> "Profit, ROAS, earnings, ads spend and live users".t()
-    WKind.ADS -> "Top 3 ad accounts with budget, top 3 live apps".t()
+    WKind.ADS -> if (o.byApp) "Total ads spend, top 3 apps with ROAS, top 3 live apps".t()
+    else "Top 3 ad accounts with budget, top 3 live apps".t()
     WKind.HEALTH -> "Apps with issues, top 3 by open issues".t()
     WKind.ALERTS -> "3 newest open alerts, most urgent first".t()
 }
@@ -409,7 +428,7 @@ private suspend fun wPreviewSnap(
 ): JSONObject? = withContext(Dispatchers.IO) {
     val key = o.dataKey(kind)
     val have = WidgetStore.snap(app, key)
-    val noList = lists && kind.picks && wChoices(kind, have).isNullOrEmpty()
+    val noList = lists && o.usesPick(kind) && wChoices(kind, have).isNullOrEmpty()
     val fresh = have != null && WidgetStore.age(app, key) < 5 * 60_000L && !noList
     if ((!force && fresh) || !app.prefs.hasLogin) return@withContext have
     try {
@@ -489,7 +508,8 @@ private fun WConfig(kind: WKind, onClose: () -> Unit) {
         else -> "Pick consoles".t()
     }
 
-    // kya data: samay (Paisa) + kaun se apps / accounts / consoles. Alerts me kuch chunna nahi.
+    // kya data: samay (Paisa), Ads spend list (Ads + Live) + kaun se apps / accounts / consoles. Alerts me kuch chunna nahi.
+    // Ads + Live "By app" me accounts ka chunav kaam ka nahi: chhupa (By account par wapas, pichhla chunav yaad)
     val data: @Composable ColumnScope.() -> Unit = {
         if (kind == WKind.PAISA || kind.picks) {
             KCard {
@@ -500,8 +520,16 @@ private fun WConfig(kind: WKind, onClose: () -> Unit) {
                             WOpts.RANGES.forEach { r -> WChip(wRangeName(r), o.range == r) { o = o.copy(range = r) } }
                         }
                     }
-                    if (kind.picks) {
-                        WLabel(pickTitle, top = kind == WKind.PAISA)
+                    if (kind == WKind.ADS) {
+                        WLabel("Ads spend list".t(), top = false)
+                        KSegTabs(WOpts.BY.map { wByName(it) }, WOpts.BY.indexOf(if (o.byApp) "app" else "account"), { o = o.copy(by = WOpts.BY[it]) })
+                        KT(
+                            "By app: each app's spend and ROAS today. By account: the earlier view, with the budget % line.".t(),
+                            13.sp, Mfc.c.ink3, maxLines = 3, lh = 18.sp,
+                        )
+                    }
+                    if (o.usesPick(kind)) {
+                        WLabel(pickTitle, top = kind != WKind.HEALTH)
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             WChip(allText, o.pick.isEmpty()) { o = o.copy(pick = emptyList()) }
                             WChip(if (o.pick.isEmpty()) pickOne else pickText, o.pick.isNotEmpty(), chev = true) { picker = true }

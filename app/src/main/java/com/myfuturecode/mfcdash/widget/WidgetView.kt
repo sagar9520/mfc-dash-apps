@@ -52,8 +52,21 @@ internal class WAcctV(val amount: String, val name: String, val fill: Float?, va
 /** Live ki ek line: 6 min, app, 30 min; ROAS line par jagah (0..1 = 0..200%; null = kharcha nahi, sirf track). */
 internal class WAppV(val n6: String, val name: String, val n30: String, val pos: Float?, val roas: String, val zone: TopZone)
 
-/** Ads + Live: 3-3 line (null = "—" wali line). set = false: Google Ads set nahi. */
-internal class WTopV(val set: Boolean, val accs: List<WAcctV?>, val apps: List<WAppV?>)
+/**
+ * "By app" ki ek line: aaj ka kharcha (₹) | app | ROAS % (zone ke rang me); patti ROAS tak bhari (100% par poori).
+ * fill null = ROAS pata nahi (sirf track). pkg = tap par us app ki screen.
+ */
+internal class WSpendV(val pkg: String, val amount: String, val name: String, val roas: String, val zone: TopZone, val fill: Float?)
+
+/**
+ * Ads + Live: 3-3 line (null = "—" wali line). set = false: Google Ads set nahi.
+ * byApp = baayan aadha "By app": total = aaj ka kul kharcha, spends = top kharch wale apps (3 se kam ho to baaki jagah khaali;
+ * data hi nahi to 3 "—" lines), noSpend = aaj kisi app par kharcha nahi.
+ */
+internal class WTopV(
+    val set: Boolean, val accs: List<WAcctV?>, val apps: List<WAppV?>,
+    val byApp: Boolean = false, val total: String = W_DASH, val spends: List<WSpendV?> = emptyList(), val noSpend: Boolean = false,
+)
 
 /** Health ki ek line: badge (khule issue) + app. ok = "Sab theek" wali hari line. */
 internal class WIssueV(val count: String, val name: String, val ok: Boolean = false)
@@ -108,7 +121,7 @@ internal fun wView(
     }
     return when (kind) {
         WKind.PAISA -> WView(kind, style, title, time, stale, false, paisa = paisaV(PaisaSnap.of(snap)))
-        WKind.ADS -> WView(kind, style, title, time, stale, false, top = topV(AdsSnap.of(snap)))
+        WKind.ADS -> WView(kind, style, title, time, stale, false, top = topV(AdsSnap.of(snap), o.byApp))
         WKind.HEALTH -> WView(kind, style, title, time, stale, false, health = healthV(HealthSnap.of(snap)))
         WKind.ALERTS -> WView(kind, style, title, time, stale, false, alerts = alertsV(AlertsSnap.of(snap)))
     }
@@ -180,7 +193,18 @@ private fun paisaV(s: PaisaSnap?): WPaisaV {
 
 private fun <T> pad3(l: List<T>): List<T?> = List(3) { l.getOrNull(it) }
 
-private fun topV(s: AdsSnap?): WTopV {
+private fun topV(s: AdsSnap?, byApp: Boolean): WTopV {
+    val apps = s?.apps.orEmpty().map { a ->
+        WAppV(wNum(a.live6), a.name, wNum(a.live30), wRoasPos(a.roas), if (a.roas == null) "" else wPct(a.roas), roasZone(a.roas))
+    }
+    if (byApp) {
+        // apps wala data abhi nahi (pehli baar / purana snap) = 3 "—" lines, agle refresh tak
+        val sp = s?.spend ?: return WTopV(true, pad3(emptyList()), pad3(apps), byApp = true, spends = pad3(emptyList()))
+        val rows = sp.take(3).map { a ->
+            WSpendV(a.pkg, wInr(a.spendInr), a.name, wPct(a.roas), roasZone(a.roas), a.roas?.let { it.coerceIn(0.0, 1.0).toFloat() })
+        }
+        return WTopV(true, pad3(emptyList()), pad3(apps), byApp = true, total = wInr(s.total), spends = rows, noSpend = rows.isEmpty())
+    }
     if (s == null) return WTopV(true, pad3(emptyList()), pad3(emptyList()))
     val accs = s.accs.map { a ->
         val pct = a.budgetPct
@@ -188,9 +212,6 @@ private fun topV(s: AdsSnap?): WTopV {
             wCash(a.spend, a.currency), a.name, pct?.let { (it / 100.0).coerceIn(0.0, 1.0).toFloat() },
             pct?.let { num(it, 0) + "%" } ?: "", budgetZone(pct),
         )
-    }
-    val apps = s.apps.map { a ->
-        WAppV(wNum(a.live6), a.name, wNum(a.live30), wRoasPos(a.roas), if (a.roas == null) "" else wPct(a.roas), roasZone(a.roas))
     }
     return WTopV(s.set, pad3(accs), pad3(apps))
 }
@@ -533,6 +554,72 @@ internal fun wTopPlan(w: Float, h: Float, scale: Float, set: Boolean = true): WT
         }
     }
     return WTopPlan(two, liveOnly, leftW, rightW, false, 1, moreL, moreR)
+}
+
+/**
+ * Ads + Live "By app" ka baayan aadha: header ke neeche kul kharcha (totSp) + daayein "aaj · ROAS" (label; jagah na ho to
+ * pehle kul 17sp tak chhota, phir label hatta; kul kabhi "…" nahi; kharcha nahi = label nahi), phir rows tak apps ki lines.
+ * Line: kharcha | naam (beech) | ROAS % (rowSp, 14sp se 12sp tak, naam ko pehle ~40dp, phir 32 / 24dp); tab bhi tang ho to
+ * ROAS % hatta (roas = false, patti ka rang phir bhi ROAS batata hai). note = "Kharcha nahi" wale note ki lines (1-2, taaki
+ * "nahi" na kate).
+ */
+internal class WSpendPlan(val totSp: Float, val label: Boolean, val rows: Int, val rowSp: Float, val roas: Boolean, val note: Int)
+
+/** "By app" ki patti (4dp), text se 3dp neeche. */
+internal const val W_SPEND_BAR = 4f
+
+internal fun wSpendLabel(): String = "today · ROAS".t()
+
+internal fun wSpendNote(): String = "No ad spend today".t()
+
+/** Ek line bina gap ke (text + 3dp + patti); lines ke beech ka gap plan alag jodta hai. */
+internal fun wSpendRowH(sp: Float, scale: Float): Float = wLine(sp, scale) + 3f + W_SPEND_BAR
+
+/**
+ * room = aadhe ki chaudai, ih = andar ki oonchai, cap = zyada se zyada lines; pair = do column (cap = Live wale aadhe ki
+ * lines, taaki dono taraf barabar lines; barabari ke liye lines ke beech 1dp tak chalega). "Kharcha nahi" wala note (13sp,
+ * 8dp upar, 1-2 line) bhi isi hisaab me.
+ */
+internal fun wSpendPlan(tv: WTopV, room: Float, ih: Float, scale: Float, cap: Int = 3, pair: Boolean = false): WSpendPlan {
+    val hdr = wHdr(scale)
+    val labW = 6f + wTextW(wSpendLabel(), 10.5f, scale)
+    // bada number kabhi "…" na ho: font ki chaudai me 4% chhoot (Paisa jaisa)
+    fun fits(sp: Float, r: Float) = wTextW(tv.total, sp, scale, true) * 1.04f <= r
+    var tot = wFitSp(tv.total, (room - labW) / 1.04f, 19f, 17f, scale)
+    val label = !tv.noSpend && fits(tot, room - labW)
+    if (!label) tot = wFitSp(tv.total, room / 1.04f, 19f, 12f, scale)
+    // line: kharcha + 6 + naam (pehle ~40dp, phir 32 / 24dp; chhota naam poora) + 6 + ROAS %
+    fun rowFits(sp: Float, roas: Boolean, name: Float) = tv.spends.all { a ->
+        a == null || wTextW(a.amount, sp, scale, true) + 6f + min(name, wTextW(a.name, 11.5f, scale)) +
+            (if (roas) 6f + wTextW(a.roas, sp, scale, true) else 0f) <= room
+    }
+    val sizes = listOf(14f, 13f, 12f)
+    val withRoas = listOf(40f, 32f, 24f).firstNotNullOfOrNull { nm -> sizes.firstOrNull { rowFits(it, true, nm) } }
+    val rowSp = withRoas ?: sizes.firstOrNull { rowFits(it, false, 24f) } ?: 12f
+    val roas = withRoas != null
+    val rowH = wSpendRowH(rowSp, scale)
+    val noteN = if (wTextW(wSpendNote(), 13f, scale) <= room) 1 else 2
+    val note = if (tv.noSpend) 8f + noteN * wLine(13f, scale) else 0f
+    fun need(t: Float, n: Int, gap: Float) = hdr + 1f + wLine(t, scale) + n * (rowH + gap) + note
+    fun plan(t: Float, n: Int) = WSpendPlan(t, label, n, rowSp, roas, noteN)
+    // pehle zyada lines (beech me 6dp, phir 3dp; Live ke barabar ho to 1dp tak) aur kul 17sp tak; na aayein to ek line kam
+    for (n in min(cap, if (tv.noSpend) 0 else 3) downTo 1) {
+        for (gap in if (pair && n == cap) listOf(6f, 3f, 1f) else listOf(6f, 3f)) {
+            var t = tot
+            while (t > 17f && need(t, n, gap) > ih) t -= 1f
+            if (need(t, n, gap) <= ih) return plan(t, n)
+        }
+    }
+    // bahut neecha: ek line (kul 15sp tak), phir sirf kul
+    val n = if (tv.noSpend || cap < 1) 0 else 1
+    var t = tot
+    while (t > 15f && need(t, n, 0f) > ih) t -= 1f
+    if (n == 1 && need(t, 1, 0f) > ih) {
+        t = tot
+        while (t > 15f && need(t, 0, 0f) > ih) t -= 1f
+        return plan(t, 0)
+    }
+    return plan(t, n)
 }
 
 /** App Health: 3 number (labels ke saath ya bina) + kitni issue lines. icon = header me dhadkan ka nishaan (jagah ho to). */

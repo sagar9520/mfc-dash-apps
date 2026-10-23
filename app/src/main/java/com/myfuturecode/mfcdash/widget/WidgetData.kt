@@ -8,12 +8,14 @@ import com.myfuturecode.mfcdash.data.GAccount
 import com.myfuturecode.mfcdash.data.IssueApp
 import com.myfuturecode.mfcdash.data.TopAccount
 import com.myfuturecode.mfcdash.data.TopLiveApp
+import com.myfuturecode.mfcdash.data.TopSpendApp
 import com.myfuturecode.mfcdash.data.alertsTop
 import com.myfuturecode.mfcdash.data.healthTop
 import com.myfuturecode.mfcdash.data.monitoredAccounts
 import com.myfuturecode.mfcdash.data.topAccountName
 import com.myfuturecode.mfcdash.data.topAccounts
 import com.myfuturecode.mfcdash.data.topLiveApps
+import com.myfuturecode.mfcdash.data.topSpendApps
 import com.myfuturecode.mfcdash.data.withLive30
 import com.myfuturecode.mfcdash.ui.kit.KKind
 import com.myfuturecode.mfcdash.util.arr
@@ -60,11 +62,14 @@ internal class PaisaSnap(
 }
 
 /**
- * Ads + Live widget: aaj ke top 3 Google Ads accounts (budget %), top 3 live apps (30 min + ROAS).
+ * Ads + Live widget: baayein "By account" = aaj ke top 3 Google Ads accounts (budget %), "By app" = aaj ka kul Google Ads
+ * kharcha (total, ₹) + sabse zyada kharch wale 3 apps (spend: kharcha + ROAS); daayein top 3 live apps (30 min + ROAS).
  * set = false: Google Ads monitor server par set nahi. all = picker ke accounts.
+ * by nahi (purana snap) = "account"; spend null = apps wala data nahi (purana / accounts wala snap).
  */
 internal class AdsSnap(
     val at: Long, val set: Boolean, val accs: List<TopAccount>, val apps: List<TopLiveApp>, val all: List<Pair<String, String>>,
+    val by: String = "account", val total: Double? = null, val spend: List<TopSpendApp>? = null,
 ) {
     fun toJson(): JSONObject {
         val a = JSONArray()
@@ -76,7 +81,14 @@ internal class AdsSnap(
         apps.forEach { x ->
             p.put(JSONObject().put("pkg", x.pkg).put("name", x.name).putD("l6", x.live6).putD("l30", x.live30).putD("roas", x.roas))
         }
-        return JSONObject().put("at", at).put("set", set).put("accs", a).put("apps", p).put("all", pairs(all))
+        val j = JSONObject().put("at", at).put("set", set).put("accs", a).put("apps", p).put("all", pairs(all)).put("by", by).putD("total", total)
+        val sp = spend
+        if (sp != null) {
+            val q = JSONArray()
+            sp.forEach { x -> q.put(JSONObject().put("pkg", x.pkg).put("name", x.name).putD("inr", x.spendInr).putD("roas", x.roas)) }
+            j.put("spend", q)
+        }
+        return j
     }
 
     companion object {
@@ -86,7 +98,13 @@ internal class AdsSnap(
                 TopAccount(x.s("cid"), x.s("name"), x.s("cur"), x.d("spend"), x.fin("inr"), x.fin("budget"), x.fin("pct"))
             }
             val apps = j.arr("apps").mapObj { x -> TopLiveApp(x.s("pkg"), x.s("name"), x.d("l6"), x.fin("l30"), x.fin("roas")) }
-            return AdsSnap(j.optLong("at"), !j.has("set") || j.b("set"), accs, apps, unpairs(j.optJSONArray("all")))
+            val spend = j.optJSONArray("spend")?.let { a ->
+                a.mapObj { x -> TopSpendApp(x.s("pkg"), x.s("name"), x.d("inr"), x.fin("roas")) }
+            }
+            return AdsSnap(
+                j.optLong("at"), !j.has("set") || j.b("set"), accs, apps, unpairs(j.optJSONArray("all")),
+                j.optString("by").takeIf { it in WOpts.BY } ?: "account", j.fin("total"), spend,
+            )
         }
     }
 }
@@ -237,9 +255,37 @@ internal object WidgetData {
         else -> Triple("today", null, null)
     }
 
-    // ---- Ads + Live (gads_health.php?view=overview + data.php aaj + har top app ka app.php)
+    // ---- Ads + Live (By account: gads_health.php?view=overview; dono me data.php aaj + har top app ka app.php)
 
-    private suspend fun ads(app: App, o: WOpts, f: WFetch): AdsSnap = coroutineScope {
+    private suspend fun ads(app: App, o: WOpts, f: WFetch): AdsSnap {
+        if (!o.byApp) return adsByAccount(app, o, f)
+        // By app: baayan aadha bhi data.php (aaj) se: kul Google Ads kharcha (Paisa widget wala) + top 3 kharch wale apps.
+        // Google Ads monitor ki zaroorat nahi; net / login ki dikkat = exception (purana snap rahe)
+        val d = f.data("today")
+        val top = topLiveApps(d)
+        val l30 = live30(app, top)
+        return AdsSnap(
+            System.currentTimeMillis(), true, emptyList(), withLive30(top, l30), emptyList(),
+            by = "app", total = d.kpi.gadsCostInr.takeIf { it.isFinite() }, spend = topSpendApps(d),
+        )
+    }
+
+    /** 30 min ke active: sirf in apps ka app.php, saath me; koi fail = "—". */
+    private suspend fun live30(app: App, top: List<TopLiveApp>): Map<String, Double?> = coroutineScope {
+        top.map { a ->
+            async {
+                a.pkg to try {
+                    app.api.extra(a.pkg, "today")?.active?.live30m
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    null
+                }
+            }
+        }.awaitAll().toMap()
+    }
+
+    private suspend fun adsByAccount(app: App, o: WOpts, f: WFetch): AdsSnap {
         // Google Ads monitor server par nahi (404, GadsVm jaisa) = "Set nahi"; net / login ki dikkat = exception (purana snap rahe).
         // Server ki baaki galti (500 jaisi): pichhle snap ke accounts rakho, Live wala hissa phir bhi naya ("Set nahi" cache na ho)
         var set = true
@@ -257,20 +303,9 @@ internal object WidgetData {
         if (old == null && accs.isEmpty()) set = false
         val d = f.data("today")
         val top = topLiveApps(d)
-        // 30 min ke active: sirf in 3 apps ka app.php, saath me; koi fail = "—"
-        val l30 = top.map { a ->
-            async {
-                a.pkg to try {
-                    app.api.extra(a.pkg, "today")?.active?.live30m
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    null
-                }
-            }
-        }.awaitAll().toMap()
+        val l30 = live30(app, top)
         val prev = old
-        if (prev != null) {
+        return if (prev != null) {
             AdsSnap(System.currentTimeMillis(), prev.set, prev.accs, withLive30(top, l30), prev.all)
         } else {
             AdsSnap(

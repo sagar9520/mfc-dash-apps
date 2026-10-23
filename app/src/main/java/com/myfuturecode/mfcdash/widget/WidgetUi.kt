@@ -376,7 +376,10 @@ private fun WTop(v: WView, p: WPal, w: Float, h: Float, scale: Float, root: Glan
             // baayan aadha: Google Ads (tap = Google Ads screen)
             var left = GlanceModifier.fillMaxHeight().clickable(actionStartActivity(wOpenIntent(ctx, WKind.ADS.route)))
             left = if (plan.two) left.width(plan.leftW.dp) else left.defaultWeight()
-            Column(modifier = left) { WTopAds(tv, plan, p, scale) }
+            Column(modifier = left) {
+                if (tv.byApp) WTopSpend(tv, plan.leftW, h - 2 * W_PV, plan.two, plan.rows, plan.moreL, p, scale)
+                else WTopAds(tv, plan, p, scale)
+            }
         }
         if (plan.two) {
             Spacer(GlanceModifier.width(W_SEP.dp))
@@ -419,6 +422,68 @@ private fun ColumnScope.WTopAds(tv: WTopV, plan: WTopPlan, p: WPal, scale: Float
         Spacer(GlanceModifier.height(2.dp))
         WSegRow(wBudgetSegs(plan.leftW, a, p, scale), barH, 4f, 2f) { mw ->
             if (a != null) WBarPill(a.pct, a.zone, p, mw)
+        }
+    }
+}
+
+/**
+ * Ads kharcha "By app": kul kharcha (+ "aaj · ROAS"), phir top 3 kharch wale apps (kharcha | naam | ROAS %) + ROAS tak
+ * bhari patti. pair = do column: lines Live wale aadhe jitni (liveRows, dono barabar). Line tap (line ka poora hissa) =
+ * us app ki screen; baaki aadha = Google Ads (bahar wala Column).
+ */
+@Composable
+private fun ColumnScope.WTopSpend(tv: WTopV, room: Float, ih: Float, pair: Boolean, liveRows: Int, more: Boolean, p: WPal, scale: Float) {
+    val ctx = LocalContext.current
+    val plan = wSpendPlan(tv, room, ih, scale, if (pair) liveRows else 3, pair)
+    WTopHead("Ads spend".t(), more, p, scale)
+    // kul + label: neeche tike (label 2dp upar, taaki dono ki line lagbhag ek)
+    Row(modifier = GlanceModifier.fillMaxWidth().padding(top = 1.dp), verticalAlignment = Alignment.Bottom) {
+        Text(tv.total, modifier = GlanceModifier.defaultWeight(), style = wts(p.ink, plan.totSp, FontWeight.Bold), maxLines = 1)
+        if (plan.label) {
+            Text(wSpendLabel(), modifier = GlanceModifier.padding(bottom = 2.dp), style = wts(p.ink3, 10.5f, FontWeight.Medium), maxLines = 1)
+        }
+    }
+    if (tv.noSpend) {
+        Spacer(GlanceModifier.height(8.dp))
+        Text(wSpendNote(), style = wts(p.ink3, 13f, FontWeight.Medium), maxLines = plan.note)
+        return
+    }
+    // tap line ke (weight wale) Column par hi: ek Column kam (RemoteViews ki gehrai), tap ki jagah badi
+    val tap: (Int) -> GlanceModifier = { i ->
+        val a = tv.spends.getOrNull(i)
+        if (a == null) GlanceModifier else GlanceModifier.clickable(actionStartActivity(wOpenIntent(ctx, "app/" + a.pkg)))
+    }
+    WTopRows(plan.rows, tap) { i ->
+        // 3 se kam apps: baaki jagah khaali (lines Live wale aadhe ki seedh me rahein)
+        if (i >= tv.spends.size) return@WTopRows
+        val a = tv.spends[i]
+        val amount = a?.amount ?: W_DASH
+        val roas = if (plan.roas) a?.roas.orEmpty() else ""
+        Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(amount, style = wts(p.ink, plan.rowSp, FontWeight.Bold), maxLines = 1)
+            Spacer(GlanceModifier.width(6.dp))
+            val room2 = room - wTextW(amount, plan.rowSp, scale, true) - (if (roas.isEmpty()) 6f else 12f + wTextW(roas, plan.rowSp, scale, true))
+            Text(
+                wFit(a?.name.orEmpty(), room2, 11.5f, scale), modifier = GlanceModifier.defaultWeight(),
+                style = wts(p.ink2, 11.5f, FontWeight.Medium, TextAlign.Center), maxLines = 1,
+            )
+            if (roas.isNotEmpty() && a != null) {
+                Spacer(GlanceModifier.width(6.dp))
+                Text(roas, style = wts(p.zoneText(a.zone), plan.rowSp, FontWeight.Bold), maxLines = 1)
+            }
+        }
+        Spacer(GlanceModifier.height(3.dp))
+        WSpendBar(a, room, p)
+    }
+}
+
+/** ROAS tak bhari patli patti (4dp, zone ka rang) track ke upar; ROAS pata nahi / "—" line = sirf track. */
+@Composable
+private fun WSpendBar(a: WSpendV?, width: Float, p: WPal) {
+    Box(modifier = GlanceModifier.fillMaxWidth().height(W_SPEND_BAR.dp).wRound(p.track, W_SPEND_BAR / 2f)) {
+        val f = a?.fill
+        if (a != null && f != null && f > 0f) {
+            Spacer(GlanceModifier.width((width * f).dp).height(W_SPEND_BAR.dp).wRound(p.zone(a.zone), W_SPEND_BAR / 2f))
         }
     }
 }
@@ -475,12 +540,13 @@ private fun WTopLabels(a: String, b: String, p: WPal) {
 /**
  * n lines barabar jagah me (CSS flex:1 jaisa: upar aadha gap, beech poora, neeche aadha).
  * Har line apne Column me (beech me tiki): Glance ek Row / Column me 10 se zyada bachche kaat deta hai.
+ * tap = line wale Column ka modifier (jaise clickable; na ho = kuch nahi).
  */
 @Composable
-private fun ColumnScope.WTopRows(n: Int, row: @Composable (Int) -> Unit) {
+private fun ColumnScope.WTopRows(n: Int, tap: (Int) -> GlanceModifier = { GlanceModifier }, row: @Composable (Int) -> Unit) {
     for (i in 0 until n) {
         Column(
-            modifier = GlanceModifier.fillMaxWidth().defaultWeight(),
+            modifier = tap(i).fillMaxWidth().defaultWeight(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             row(i)

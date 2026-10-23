@@ -39,29 +39,43 @@ enum class WKind(val key: String, val route: String) {
 
 /**
  * Ek widget ke options. pick = chune apps (Paisa) / accounts (Ads + Live) / consoles (Health); khaali = sab.
- * Purane JSON ka "items" (pehle kya dikhana hai ki list) ab nahi chahiye: padhte waqt chhod dete hain.
+ * by = Ads + Live ka baayan aadha: "app" (kul kharcha + har app ka kharcha / ROAS) ya "account" (accounts + budget %).
+ * Purane JSON ka "items" (pehle kya dikhana hai ki list) ab nahi chahiye: padhte waqt chhod dete hain; "by" nahi = "app".
  */
 data class WOpts(
     val range: String = "today",      // Paisa: today | yesterday | 7d | month
     val pick: List<String> = emptyList(),
     val theme: String = "app",        // app | light | dark | brand
     val every: Int = 60,              // minute: 15 | 30 | 60 | 180
+    val by: String = "app",           // Ads + Live: app | account
 ) {
-    /** Ek jaise options wale widgets ek hi data share karte hain. "2|" = naye layout ka snap (purana format alag rahe). */
+    /** Ads + Live ka baayan aadha apps wala (accounts wala nahi)? */
+    val byApp: Boolean get() = by != "account"
+
+    /** pick (apps / accounts / consoles) is widget me kaam ka hai? Ads + Live "By app" me accounts ka chunav nahi lagta. */
+    fun usesPick(kind: WKind): Boolean = kind.picks && !(kind == WKind.ADS && byApp)
+
+    /**
+     * Ek jaise options wale widgets ek hi data share karte hain. "2|" = naye layout ka snap (purana format alag rahe).
+     * Ads + Live: "By account" ki key pehle jaisi (purana snap chalta rahe), "By app" ki alag ("|app" pe khatam).
+     */
     fun dataKey(kind: WKind): String =
-        kind.key + "2|" + (if (kind == WKind.PAISA) range else "") + "|" + (if (kind.picks) pick.sorted().joinToString(",") else "")
+        kind.key + "2|" + (if (kind == WKind.PAISA) range else "") + "|" + (if (usesPick(kind)) pick.sorted().joinToString(",") else "") +
+            (if (kind == WKind.ADS && byApp) "|app" else "")
 
     fun toJson(): String = JSONObject()
         .put("range", range)
         .put("pick", JSONArray(pick))
         .put("theme", theme)
         .put("every", every)
+        .put("by", by)
         .toString()
 
     companion object {
         val RANGES = listOf("today", "yesterday", "7d", "month")
         val THEMES = listOf("app", "light", "dark", "brand")
         val EVERY = listOf(15, 30, 60, 180)
+        val BY = listOf("app", "account")
 
         fun defaults(kind: WKind) = WOpts()
 
@@ -74,6 +88,7 @@ data class WOpts(
                 pick = if (kind.picks) strs(j.optJSONArray("pick")).filter { it.isNotBlank() }.distinct() else emptyList(),
                 theme = j.optString("theme").takeIf { it in THEMES } ?: "app",
                 every = j.optInt("every", 60).takeIf { it in EVERY } ?: 60,
+                by = j.optString("by").takeIf { it in BY } ?: "app",
             )
         }
 
@@ -103,6 +118,9 @@ internal fun wThemeName(theme: String): String = when (theme) {
     "brand" -> "MFC brand".t()
     else -> "Same as app".t()
 }
+
+/** Ads + Live ki "Ads spend list": "By app" / "By account". */
+internal fun wByName(by: String): String = if (by == "account") "By account".t() else "By app".t()
 
 internal fun wEveryName(min: Int): String = when (min) {
     60 -> "1 hour".t()

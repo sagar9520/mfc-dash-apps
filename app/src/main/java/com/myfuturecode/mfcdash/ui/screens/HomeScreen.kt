@@ -37,7 +37,9 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.FirstBaseline
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.Placeable
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.SpanStyle
@@ -62,22 +64,20 @@ import com.myfuturecode.mfcdash.data.AlertsData
 import com.myfuturecode.mfcdash.data.AlertsTop
 import com.myfuturecode.mfcdash.data.Api
 import com.myfuturecode.mfcdash.data.DashData
-import com.myfuturecode.mfcdash.data.GAccount
 import com.myfuturecode.mfcdash.data.HConsolesData
 import com.myfuturecode.mfcdash.data.HOverview
 import com.myfuturecode.mfcdash.data.IssueApp
 import com.myfuturecode.mfcdash.data.PageLoad
 import com.myfuturecode.mfcdash.data.PerApp
-import com.myfuturecode.mfcdash.data.TopAccount
 import com.myfuturecode.mfcdash.data.TopLiveApp
+import com.myfuturecode.mfcdash.data.TopSpendApp
 import com.myfuturecode.mfcdash.data.TopZone
 import com.myfuturecode.mfcdash.data.alertsTop
-import com.myfuturecode.mfcdash.data.budgetZone
 import com.myfuturecode.mfcdash.data.healthTop
 import com.myfuturecode.mfcdash.data.issueReason
 import com.myfuturecode.mfcdash.data.roasZone
-import com.myfuturecode.mfcdash.data.topAccounts
 import com.myfuturecode.mfcdash.data.topLiveApps
+import com.myfuturecode.mfcdash.data.topSpendApps
 import com.myfuturecode.mfcdash.ui.DashVm
 import com.myfuturecode.mfcdash.ui.GState
 import com.myfuturecode.mfcdash.ui.GadsVm
@@ -85,6 +85,7 @@ import com.myfuturecode.mfcdash.ui.HState
 import com.myfuturecode.mfcdash.ui.HealthVm
 import com.myfuturecode.mfcdash.ui.StudioVm
 import com.myfuturecode.mfcdash.ui.UiState
+import com.myfuturecode.mfcdash.ui.cacheSameDay
 import com.myfuturecode.mfcdash.ui.kit.KBigNum
 import com.myfuturecode.mfcdash.ui.kit.KBtn
 import com.myfuturecode.mfcdash.ui.kit.KButton
@@ -152,7 +153,6 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import org.json.JSONObject
-import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -201,7 +201,7 @@ fun HomeScreen(vm: DashVm, st: UiState, nav: NavHostController, hvm: HealthVm, g
 
     PullToRefreshBox(
         isRefreshing = pulling,
-        onRefresh = { PageLoad.start(); pulling = true; vm.refresh(); loadModules(hvm, gvm, svm, force = true); HomeLive30.stale() },
+        onRefresh = { PageLoad.start(); pulling = true; vm.refresh(); loadModules(hvm, gvm, svm, force = true); HomeLive30.stale(); HomeToday.stale() },
         modifier = Modifier.fillMaxSize(),
     ) {
         KScreen(pullRefresh = false, top = {
@@ -217,7 +217,7 @@ fun HomeScreen(vm: DashVm, st: UiState, nav: NavHostController, hvm: HealthVm, g
                 KTwoPane(
                     left = {
                         HomeHero(st, money, vm, open, tab)
-                        TopCard(st, g, open)
+                        TopCard(st, open)
                         TopApps(st, money, open, tab)
                         MoreLinks(open)
                     },
@@ -229,7 +229,7 @@ fun HomeScreen(vm: DashVm, st: UiState, nav: NavHostController, hvm: HealthVm, g
                     },
                 )
             } else {
-                TopCard(st, g, open)
+                TopCard(st, open)
                 KSection("Today's status".t(), trailing = { HaalPill(todo, known) })
                 HealthModule(h, hk, open)
                 AlertsModule(st, tab)
@@ -333,6 +333,58 @@ private fun rememberLive30(pkgs: List<String>): Map<String, Double?> {
         }
     }
     return m
+}
+
+/**
+ * Card ka Ads kharcha hamesha aaj ka: Paisa screen par doosra samay (kal / 7 din / 30 din) chuna ho tab data.php aaj alag se.
+ * Pehle disk wala (aaj ka hi), phir network; 60 sec cache (process bhar). Fail = pichhla rahe (kabhi aaya hi nahi = failed).
+ */
+private object HomeToday {
+    var d by mutableStateOf<DashData?>(null)
+        private set
+    var failed by mutableStateOf(false)
+        private set
+    private var at = 0L
+    private var who = ""
+    /** Pull-down par badhta hai: cache chhod ke turant dobara. */
+    var rev by mutableIntStateOf(0)
+        private set
+
+    fun stale() { at = 0L; rev++ }
+
+    suspend fun load(api: Api, user: String) {
+        // doosra login = pichhle user ka data nahi
+        if (user != who) { who = user; d = null; failed = false; at = 0L }
+        if (d == null) api.dataCached("all", "today")?.takeIf { cacheSameDay(it.at) }?.let { d = it.value }
+        if (System.currentTimeMillis() - at < LOAD_GAP_MS) return
+        try {
+            d = api.data("all", "today")
+            failed = false
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            failed = true
+        }
+        at = System.currentTimeMillis()
+    }
+}
+
+/** Card ke Ads kharche ka data: Paisa par aaj chuna = wahi (DashVm), warna [HomeToday] (null = abhi aaya nahi). */
+@Composable
+private fun rememberTodayData(dd: DashData?): DashData? {
+    if (isTodayView(dd)) return dd
+    val app = LocalContext.current.applicationContext as App
+    val rev = HomeToday.rev
+    val life = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(rev, life) {
+        life.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                HomeToday.load(app.api, app.prefs.username)
+                delay(TICK_MS)
+            }
+        }
+    }
+    return HomeToday.d
 }
 
 /** Screen khuli rahe tab har minute [tick] (pehli baar turant). App peeche ho to ruk jata hai. */
@@ -592,17 +644,22 @@ private fun TopAppsSkel() {
 private const val TOP_LEFT = .47f
 
 /**
- * Hero ke neeche ek card, do hisse: baayein aaj ke top 3 Google Ads accounts (kharcha + budget %), daayein abhi ke
- * top 3 live apps (6 min | naam | 30 min + ROAS line). Hisaab data/TopCards.kt se (Ads + Live widget bhi wahi).
+ * Hero ke neeche ek card, do hisse: baayein aaj ka kul Google Ads kharcha + sabse zyada kharch wale 3 apps (kharcha | naam |
+ * ROAS, ROAS tak bhari patti), daayein abhi ke top 3 live apps (6 min | naam | 30 min + ROAS line).
+ * Hisaab data/TopCards.kt se (Ads + Live widget ka "By app" bhi wahi). Ads kharcha hamesha data.php aaj se (Paisa par
+ * doosra samay chuna ho tab bhi, [rememberTodayData]).
  */
 @Composable
-private fun TopCard(st: UiState, g: GState, open: (String) -> Unit) {
+private fun TopCard(st: UiState, open: (String) -> Unit) {
     val c = Mfc.c
     val dd = st.data
     val live = remember(dd) { dd?.let { topLiveApps(it) }.orEmpty() }
     val l30 = rememberLive30(live.map { it.pkg })
-    val o = g.view("overview", GADS_P)
-    val accs = remember(o, dd?.r) { o?.let { topAccounts(it.arr("accounts").mapObj(GAccount::of), dd?.r) } }
+    val today = isTodayView(dd)
+    val td = rememberTodayData(dd)
+    val spend = remember(td) { td?.let { topSpendApps(it) } }
+    // aaj ka data na aaya: aaj wale view me DashVm ki galti, warna alag wale load ki
+    val failed = if (today) !st.loading && st.error != null else HomeToday.failed
     val line = c.line
     KCard(padding = PaddingValues(top = 14.dp, bottom = 12.dp)) {
         Row(
@@ -611,20 +668,17 @@ private fun TopCard(st: UiState, g: GState, open: (String) -> Unit) {
                 drawLine(line, Offset(x, 0f), Offset(x, size.height), strokeWidth = 1.dp.toPx())
             },
         ) {
-            // baayein: Ads kharcha (aaj) + budget %
+            // baayein: Ads kharcha (aaj): kul + top 3 apps (kharcha | naam | ROAS)
             Column(Modifier.fillMaxWidth(TOP_LEFT).padding(start = 14.dp, end = 10.dp)) {
                 TopHead("Ads spend".t()) { open("gads") }
                 when {
-                    accs != null && accs.isNotEmpty() -> {
-                        TopCols("today".t(), "budget %".t())
-                        accs.forEach { a -> AcctRow(a) { open(if (a.cid.isBlank()) "gads" else "gads/account/${a.cid}") } }
+                    td != null && spend != null -> {
+                        TopTotal(inr(td.kpi.gadsCostInr.takeIf { it.isFinite() }), label = spend.isNotEmpty())
+                        if (spend.isEmpty()) TopNote("No ad spend today".t(), lines = 2)
+                        else spend.forEach { a -> SpendRow(a) { open("app/${a.pkg}") } }
                     }
-                    accs != null || g.missing -> TopNote("Not set up".t())
-                    g.error != null -> TopNote("No data".t())
-                    else -> {
-                        TopCols("today".t(), "budget %".t())
-                        TopSkel(live = false)
-                    }
+                    failed -> TopNote("No data".t())
+                    else -> TopSkel(live = false)
                 }
             }
             // daayein: Live users (6 min | 30 min) + ROAS
@@ -699,26 +753,112 @@ private fun TopCols(left: String, right: String) {
     }
 }
 
-/** Ek chhoti grey line (Setup nahi / Data nahi). */
+/**
+ * Kul kharcha (bada) + daayein "aaj · ROAS" (ROAS wale column ka label), baseline par. Widget ke plan jaisa: label ke
+ * saath 19sp, na aaye to 17sp; phir bhi na aaye to label hatta (19sp, phir 17 / 15sp). Number kabhi nahi katta.
+ * label = false: aaj kharcha hi nahi (ROAS ka column nahi), sirf number.
+ */
 @Composable
-private fun TopNote(text: String) {
-    HT(text, 13.sp, Mfc.c.ink3, Modifier.padding(top = 8.dp, bottom = 4.dp), weight = FontWeight.Medium, lh = 18.sp)
+private fun TopTotal(total: String, label: Boolean) {
+    val c = Mfc.c
+    Layout(
+        content = {
+            for (size in listOf(19, 17, 15)) {
+                Text(total, color = c.ink, style = hs(size.sp, FontWeight.ExtraBold, 24.sp), maxLines = 1, softWrap = false)
+            }
+            Text("today · ROAS".t(), color = c.ink3, style = hs(11.sp, FontWeight.SemiBold, 14.sp), maxLines = 1, softWrap = false)
+        },
+        modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+    ) { ms, cs ->
+        val w = cs.maxWidth
+        val gap = 6.dp.roundToPx()
+        val big = ms[0].measure(Constraints())
+        val mid = ms[1].measure(Constraints())
+        val lab = ms[3].measure(Constraints())
+        val (t, withLab) = when {
+            label && big.width + gap + lab.width <= w -> big to true
+            label && mid.width + gap + lab.width <= w -> mid to true
+            big.width <= w -> big to false
+            mid.width <= w -> mid to false
+            else -> ms[2].measure(Constraints(maxWidth = w)) to false
+        }
+        layout(w, t.height) {
+            t.place(0, 0)
+            if (withLab) lab.place(w - lab.width, (t[FirstBaseline] - lab[FirstBaseline]).coerceAtLeast(0))
+        }
+    }
 }
 
-/** Account: aaj ka kharcha (apni currency) + naam; neeche budget ki patti + % pill. Tap = us account ki screen. */
+/** Ek chhoti grey line (Setup nahi / Data nahi). lines = 2: lamba note ("Aaj ad kharcha nahi") kate to "nahi" na gire. */
 @Composable
-private fun AcctRow(a: TopAccount, onClick: () -> Unit) {
+private fun TopNote(text: String, lines: Int = 1) {
+    val m = Modifier.padding(top = 8.dp, bottom = 4.dp)
+    if (lines <= 1) HT(text, 13.sp, Mfc.c.ink3, m, weight = FontWeight.Medium, lh = 18.sp)
+    else Text(text, m, color = Mfc.c.ink3, style = hs(13.sp, FontWeight.Medium, 18.sp), maxLines = lines, overflow = TextOverflow.Ellipsis)
+}
+
+/**
+ * App: aaj ka Google Ads kharcha | naam (beech) | ROAS % (zone ke rang me); neeche ROAS tak bhari patti (100% par poori,
+ * pill nahi). Tap = app detail.
+ */
+@Composable
+private fun SpendRow(a: TopSpendApp, onClick: () -> Unit) {
     val c = Mfc.c
-    val pct = a.budgetPct
+    val roas = a.roas
+    val z = roasZone(roas)
     TopRow(onClick) {
-        Row(Modifier.fillMaxWidth().heightIn(min = 20.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(cash(a.spend, a.currency), Modifier.alignByBaseline(), color = c.ink, style = hs(15.sp, FontWeight.ExtraBold, 20.sp), maxLines = 1, softWrap = false)
+        SpendLine(inr(a.spendInr), a.name, roasPct(roas), zoneText(z, c))
+        TBar(roas?.let { it.coerceIn(0.0, 1.0).toFloat() }, null, z, zones = false)
+    }
+}
+
+/**
+ * SpendRow ki line, baseline par: kharcha | naam (beech) | ROAS %. Widget ke plan jaisa: naam ko ~40dp na mile to pehle
+ * kharcha / ROAS chhote (15 / 13.5sp se 13 / 12sp); phir naam 24dp tak; phir bhi tang = ROAS % hatta (patti ka rang ROAS
+ * batata hai). Kharcha kabhi nahi katta.
+ */
+@Composable
+private fun SpendLine(amount: String, name: String, roas: String, roasColor: Color) {
+    val c = Mfc.c
+    Layout(
+        content = {
+            Text(amount, color = c.ink, style = hs(15.sp, FontWeight.ExtraBold, 20.sp), maxLines = 1, softWrap = false)
+            Text(amount, color = c.ink, style = hs(13.sp, FontWeight.ExtraBold, 20.sp), maxLines = 1, softWrap = false)
+            Text(roas, color = roasColor, style = hs(13.5.sp, FontWeight.ExtraBold, 20.sp), maxLines = 1, softWrap = false)
+            Text(roas, color = roasColor, style = hs(12.sp, FontWeight.ExtraBold, 20.sp), maxLines = 1, softWrap = false)
             Text(
-                a.name, Modifier.weight(1f).alignByBaseline(), color = c.ink2, style = hs(12.sp, FontWeight.SemiBold, 18.sp),
-                textAlign = TextAlign.End, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis,
+                name, color = c.ink2, style = hs(12.sp, FontWeight.SemiBold, 18.sp),
+                textAlign = TextAlign.Center, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis,
             )
+        },
+        modifier = Modifier.fillMaxWidth().heightIn(min = 20.dp),
+    ) { ms, cs ->
+        val w = cs.maxWidth
+        val gap = 6.dp.roundToPx()
+        val big = ms[0].measure(Constraints())
+        val small = ms[1].measure(Constraints())
+        val rBig = ms[2].measure(Constraints())
+        val rSmall = ms[3].measure(Constraints())
+        val nameW = ms[4].maxIntrinsicWidth(20.dp.roundToPx())
+        fun room(a: Placeable, r: Placeable?) = w - a.width - gap - (if (r != null) gap + r.width else 0)
+        val want = min(nameW, 40.dp.roundToPx())
+        val least = min(nameW, 24.dp.roundToPx())
+        val (amt, ro) = when {
+            room(big, rBig) >= want -> big to rBig
+            room(small, rSmall) >= want -> small to rSmall
+            room(small, rSmall) >= least -> small to rSmall
+            else -> small to null
         }
-        TBar(pct?.let { (it / 100.0).coerceIn(0.0, 1.0).toFloat() }, pct?.let { num(it, 0) + "%" }, budgetZone(pct), zones = false)
+        val nw = room(amt, ro).coerceAtLeast(0)
+        val nm = ms[4].measure(Constraints(minWidth = nw, maxWidth = nw))
+        val parts = listOfNotNull(amt, nm, ro)
+        val base = parts.maxOf { it[FirstBaseline] }
+        val h = max(cs.minHeight, parts.maxOf { base - it[FirstBaseline] + it.height })
+        layout(w, h) {
+            amt.place(0, base - amt[FirstBaseline])
+            nm.place(amt.width + gap, base - nm[FirstBaseline])
+            ro?.place(w - ro.width, base - ro[FirstBaseline])
+        }
     }
 }
 
@@ -756,19 +896,25 @@ private fun TopRow(onClick: () -> Unit, content: @Composable () -> Unit) {
     ) { content() }
 }
 
-/** Data aane tak 3 lines ki jagah (asli line jitni oonchi, taaki card na uchhle). */
+/**
+ * Data aane tak 3 lines ki jagah (asli line jitni oonchi, taaki card na uchhle). live = false: Ads kharcha wala aadha
+ * (upar kul kharcha, line me kharcha | naam | ROAS).
+ */
 @Composable
 private fun TopSkel(live: Boolean) {
     KSkeleton {
         Column(Modifier.fillMaxWidth()) {
+            if (!live) {
+                Box(Modifier.fillMaxWidth().padding(top = 2.dp).height(24.dp), contentAlignment = Alignment.CenterStart) { KSkelLine(72.dp, 18.dp) }
+            }
             repeat(3) { i ->
                 Column(Modifier.fillMaxWidth().padding(vertical = 7.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                     Row(Modifier.fillMaxWidth().height(20.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        KSkelLine(if (live) 28.dp else 56.dp, 14.dp)
-                        Box(Modifier.weight(1f), contentAlignment = if (live) Alignment.Center else Alignment.CenterEnd) {
+                        KSkelLine(if (live) 28.dp else 48.dp, 14.dp)
+                        Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
                             KSkelLine(listOf(48.dp, 40.dp, 52.dp)[i], 10.dp)
                         }
-                        if (live) KSkelLine(28.dp, 14.dp)
+                        KSkelLine(if (live) 28.dp else 32.dp, 14.dp)
                     }
                     Box(Modifier.fillMaxWidth().height(16.dp), contentAlignment = Alignment.Center) { KSkelLine(1f, 4.dp) }
                 }
@@ -841,15 +987,12 @@ private fun zoneColor(z: TopZone, c: MfcColors): Color = when (z) {
     TopZone.NONE -> c.zTrack
 }
 
-/** Account ki apni currency: ₹ INR, $ USD, baaki code ("EUR 120"). */
-private fun cash(v: Double, cur: String): String {
-    val sym = when (cur) {
-        "INR" -> "₹"
-        "USD" -> "\$"
-        "" -> ""
-        else -> "$cur "
-    }
-    return (if (v < 0) "−" else "") + sym + num(abs(v), 0)
+/** Number (ROAS %) ka rang: laal / amber / hara; pata nahi = halka. */
+private fun zoneText(z: TopZone, c: MfcColors): Color = when (z) {
+    TopZone.RED -> c.red
+    TopZone.AMBER -> c.amber
+    TopZone.GREEN -> c.green
+    TopZone.NONE -> c.ink3
 }
 
 // ---------------------------------------------------------------- aaj ka haal

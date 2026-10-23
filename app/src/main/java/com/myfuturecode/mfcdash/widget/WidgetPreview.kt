@@ -88,14 +88,14 @@ internal fun WPreview(v: WView, modifier: Modifier, onClick: (() -> Unit)? = nul
     }
 }
 
-/** Ek line text, widget wale size / weight par (pehle se kata hua; phir bhi lamba ho to "…"). */
+/** Ek line text, widget wale size / weight par (pehle se kata hua; phir bhi lamba ho to "…"). lines > 1 = itni lines tak toote. */
 @Composable
 private fun WpT(
     text: String, sp: Float, c: Color, modifier: Modifier = Modifier, weight: FontWeight = FontWeight.Normal,
-    align: TextAlign = TextAlign.Start, under: Boolean = false,
+    align: TextAlign = TextAlign.Start, under: Boolean = false, lines: Int = 1,
 ) {
     Text(
-        text, modifier, color = c, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis,
+        text, modifier, color = c, maxLines = lines, softWrap = lines > 1, overflow = TextOverflow.Ellipsis,
         style = TextStyle(
             fontSize = sp.sp, fontWeight = weight, lineHeight = (sp * 1.32f).sp, fontFeatureSettings = "tnum", textAlign = align,
             textDecoration = if (under) TextDecoration.Underline else null,
@@ -322,6 +322,10 @@ private fun WpTop(v: WView, p: WPal, w: Float, h: Float, scale: Float) {
         if (!plan.liveOnly) {
             val left = if (plan.two) Modifier.width(plan.leftW.dp) else Modifier.weight(1f)
             Column(left.fillMaxHeight()) {
+                if (tv.byApp) {
+                    WpTopSpend(tv, plan.leftW, h - 2 * W_PV, plan.two, plan.rows, plan.moreL, p, scale)
+                    return@Column
+                }
                 WpTopHead("Ads spend".t(), plan.moreL, p, scale)
                 if (plan.labels && tv.set) WpTopLabels("today".t(), "budget %".t(), p)
                 if (!tv.set) {
@@ -372,6 +376,49 @@ private fun WpTop(v: WView, p: WPal, w: Float, h: Float, scale: Float) {
                     }
                 }
             }
+        }
+    }
+}
+
+/** "By app" wala baayan aadha (WidgetUi ka WTopSpend): kul kharcha + "aaj · ROAS", apps ki lines + ROAS tak bhari patti. */
+@Composable
+private fun ColumnScope.WpTopSpend(tv: WTopV, room: Float, ih: Float, pair: Boolean, liveRows: Int, more: Boolean, p: WPal, scale: Float) {
+    val plan = wSpendPlan(tv, room, ih, scale, if (pair) liveRows else 3, pair)
+    WpTopHead("Ads spend".t(), more, p, scale)
+    Row(Modifier.fillMaxWidth().padding(top = 1.dp), verticalAlignment = Alignment.Bottom) {
+        WpT(tv.total, plan.totSp, p.ink, Modifier.weight(1f), FontWeight.Bold)
+        if (plan.label) WpT(wSpendLabel(), 10.5f, p.ink3, Modifier.padding(bottom = 2.dp), FontWeight.Medium)
+    }
+    if (tv.noSpend) {
+        Spacer(Modifier.height(8.dp))
+        WpT(wSpendNote(), 13f, p.ink3, weight = FontWeight.Medium, lines = plan.note)
+        return
+    }
+    WpTopRows(plan.rows) { i ->
+        // 3 se kam apps: baaki jagah khaali (Glance jaisa)
+        if (i < tv.spends.size) {
+            val a = tv.spends[i]
+            val amount = a?.amount ?: W_DASH
+            val roas = if (plan.roas) a?.roas.orEmpty() else ""
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                WpT(amount, plan.rowSp, p.ink, weight = FontWeight.Bold)
+                Spacer(Modifier.width(6.dp))
+                val room2 = room - wTextW(amount, plan.rowSp, scale, true) - (if (roas.isEmpty()) 6f else 12f + wTextW(roas, plan.rowSp, scale, true))
+                WpT(wFit(a?.name.orEmpty(), room2, 11.5f, scale), 11.5f, p.ink2, Modifier.weight(1f), FontWeight.Medium, TextAlign.Center)
+                if (roas.isNotEmpty() && a != null) {
+                    Spacer(Modifier.width(6.dp))
+                    WpT(roas, plan.rowSp, p.zoneText(a.zone), weight = FontWeight.Bold)
+                }
+            }
+            Spacer(Modifier.height(3.dp))
+            Box(Modifier.fillMaxWidth().height(W_SPEND_BAR.dp).wpRound(p.track, W_SPEND_BAR / 2f)) {
+                val f = a?.fill
+                if (a != null && f != null && f > 0f) {
+                    Spacer(Modifier.width((room * f).dp).height(W_SPEND_BAR.dp).wpRound(p.zone(a.zone), W_SPEND_BAR / 2f))
+                }
+            }
+        } else {
+            Spacer(Modifier.height(wSpendRowH(plan.rowSp, scale).dp))
         }
     }
 }

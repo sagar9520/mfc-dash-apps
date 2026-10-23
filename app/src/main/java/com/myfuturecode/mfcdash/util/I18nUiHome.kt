@@ -20,4 +20,6 @@ val HI_UI_HOME: Map<String, String> = mapOf(
     "new" to "naye", "watching" to "dekh rahe", "needs OK" to "OK chahiye", "Gate %s" to "Gate %s", "since %s days" to "%s din se",
     // top apps
     "Today's top apps" to "Aaj ke top apps", "Top apps" to "Top apps", "No apps" to "Koi app nahi",
+    // Ads kharcha (By app): Home card + Ads + Live widget
+    "today · ROAS" to "aaj · ROAS", "No ad spend today" to "Aaj ad kharcha nahi",
 )

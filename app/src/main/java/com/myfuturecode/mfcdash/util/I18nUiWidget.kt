@@ -57,6 +57,7 @@ val HI_UI_WIDGET: Map<String, String> = mapOf(
     // Widgets screen
     "Profit, ROAS, earnings, ads spend and live users" to "Munafa, ROAS, kamai, ads kharcha aur live users",
     "Top 3 ad accounts with budget, top 3 live apps" to "Top 3 ad account budget ke saath, top 3 live apps",
+    "Total ads spend, top 3 apps with ROAS, top 3 live apps" to "Kul ads kharcha, top 3 apps ROAS ke saath, top 3 live apps",
     "Apps with issues, top 3 by open issues" to "Issue wale apps, sabse zyada khule issue wale 3",
     "3 newest open alerts, most urgent first" to "3 naye khule alerts, sabse zaroori pehle",
     "Add to home screen" to "Home par lagao",
@@ -66,6 +67,11 @@ val HI_UI_WIDGET: Map<String, String> = mapOf(
     "Long-press home → Widgets → MFC" to "Home dabake rakho → Widgets → MFC",
     "Set up %s widget" to "%s widget set karo",
     "Time range" to "Samay",
+    "Ads spend list" to "Ads kharcha list",
+    "By app" to "By app",
+    "By account" to "By account",
+    "By app: each app's spend and ROAS today. By account: the earlier view, with the budget % line." to
+        "By app: har app ka aaj ka spend aur ROAS. By account: purana roop, budget % line ke saath.",
     "Which apps" to "Kaunse apps",
     "Which accounts" to "Kaunse accounts",
     "Which consoles" to "Kaunse consoles",

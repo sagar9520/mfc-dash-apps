@@ -62,6 +62,21 @@ fun topAccounts(accounts: List<GAccount>, rate: Double?, pick: Set<String> = emp
         )
     }.sortedByDescending { it.spendInr ?: it.spend }.take(n)
 
+// ---------------------------------------------------------------- Google Ads: aaj ke top kharch wale apps
+
+/** Ek app ka aaj ka Google Ads kharcha (₹) aur ROAS (ad revenue + payments / kharcha; pata nahi = null). */
+data class TopSpendApp(val pkg: String, val name: String, val spendInr: Double, val roas: Double?)
+
+/** App ka naam: data.php ki apps list, warna per_app ka, warna package ka aakhri hissa. */
+private fun topAppName(d: DashData, pkg: String, per: PerApp?): String =
+    d.apps.firstOrNull { it.pkg == pkg }?.name?.ifBlank { null } ?: per?.name?.ifBlank { null } ?: pkg.substringAfterLast('.')
+
+/** Aaj sabse zyada Google Ads kharch wale n apps (data.php per_app; kharcha 0 wale nahi). Kul kharcha = kpi.gadsCostInr. */
+fun topSpendApps(d: DashData, n: Int = 3): List<TopSpendApp> =
+    d.perApp.filter { it.pkg.isNotBlank() && it.gadsCostInr.isFinite() && it.gadsCostInr > 0 }
+        .sortedByDescending { it.gadsCostInr }.take(n)
+        .map { a -> TopSpendApp(a.pkg, topAppName(d, a.pkg, a), a.gadsCostInr, a.roas(d.r)?.takeIf { it.isFinite() }) }
+
 // ---------------------------------------------------------------- Live users: top apps
 
 /** Ek app: pichhle 6 min ke live users, 30 min ke active (app.php se, na mile to null), aaj ka ROAS (kharcha nahi = null). */
@@ -72,8 +87,7 @@ fun topLiveApps(d: DashData, n: Int = 3): List<TopLiveApp> {
     val per = d.perApp.associateBy { it.pkg }
     val pkgs = (d.apps.map { it.pkg } + d.liveByApp.keys + d.perApp.map { it.pkg }).filter { it.isNotBlank() }.distinct()
     return pkgs.map { p ->
-        val name = d.apps.firstOrNull { it.pkg == p }?.name?.ifBlank { null } ?: per[p]?.name?.ifBlank { null } ?: p.substringAfterLast('.')
-        TopLiveApp(p, name, d.liveByApp[p] ?: per[p]?.live ?: 0.0, null, per[p]?.roas(d.r)?.takeIf { it.isFinite() })
+        TopLiveApp(p, topAppName(d, p, per[p]), d.liveByApp[p] ?: per[p]?.live ?: 0.0, null, per[p]?.roas(d.r)?.takeIf { it.isFinite() })
     }.sortedWith(compareByDescending<TopLiveApp> { it.live6 }.thenByDescending { per[it.pkg]?.dau ?: 0.0 }).take(n)
 }
 
