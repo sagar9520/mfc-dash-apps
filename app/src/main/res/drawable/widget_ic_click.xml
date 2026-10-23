@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Cross promo: clicks (teer + chamak), tint hota hai -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M9,9l5,12 1.8,-5.2L21,14z" />
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:pathData="M7.2,2.2L8,5.1M5.1,8L2.2,7.2M14,4.1L12,6M6,12l-1.9,2" />
+</vector>

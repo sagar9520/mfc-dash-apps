@@ -3,6 +3,7 @@ package com.myfuturecode.mfcdash.ui.screens.health
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
@@ -816,6 +817,7 @@ private fun IssuesTab(h: HState, vm: HealthVm, nav: NavHostController, reload: I
     var type by rememberSaveable { mutableStateOf("") }
     var period by rememberSaveable { mutableStateOf("") }
     var q by rememberSaveable { mutableStateOf("") }
+    var claude by remember { mutableStateOf(false) }   // "Export for Claude" sheet
     LaunchedEffect(Unit) { if (h.consoles == null) vm.loadConsoles() }
     val f = mapOf(
         "status" to status, "console" to console, "pkg" to pkg, "severity" to sev, "type" to type, "q" to q.trim(),
@@ -848,25 +850,49 @@ private fun IssuesTab(h: HState, vm: HealthVm, nav: NavHostController, reload: I
     }
     KSearch(q, { q = it }, "Search title, cause, ISS-id".t())
     if (d == null) {
-        // "N issues" + CSV ki line, phir issue lines
+        // "N issues" + CSV + For Claude ki line, phir issue lines
         if (h.error != null) HProblem(h) { vm.loadIssues(f) }
         else KSkeleton {
-            Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 KSkelLine(84.dp, 14.dp, Modifier.padding(start = 4.dp))
                 Box(Modifier.weight(1f))
                 KSkelBlock(48.dp, RoundedCornerShape(24.dp), Modifier.width(88.dp))
+                KSkelBlock(48.dp, RoundedCornerShape(24.dp), Modifier.width(136.dp))
             }
             KSkelRows(5)
         }
         return
     }
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(
-            tf("%s issues", d.issues.size), Modifier.weight(1f).padding(start = 4.dp), color = c.ink2,
-            style = hStyle(15.sp, FontWeight.SemiBold, 20.sp), maxLines = 1,
-        )
-        KButton("CSV", { vm.export(f + ("what" to "issues")) { openUrl(ctx, it) } }, kind = KBtn.SOFT, icon = KIcons.Download, busy = "export" in h.busy)
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val count = tf("%s issues", d.issues.size)
+        val countStyle = hStyle(15.sp, FontWeight.SemiBold, 20.sp)
+        val csv = @Composable { m: Modifier ->
+            KButton("CSV", { vm.export(f + ("what" to "issues")) { openUrl(ctx, it) } }, m, kind = KBtn.SOFT, icon = KIcons.Download, busy = "export" in h.busy)
+        }
+        // crash / ANR + poore stack trace ek .md file me: Claude app ke code me fix kare
+        val forClaude = @Composable { m: Modifier -> KButton("For Claude".t(), { claude = true }, m, icon = KIcons.Spark) }
+        // "N issues" + dono buttons ek line me aate hain? Nahi (chhota phone / Fold cover / Hinglish / bada font) = ginti upar, buttons neeche
+        // (dono ek line me bhi na aayein = ek ke neeche ek, poori chaudai)
+        val btns = hBtnW("CSV") + 8.dp + hBtnW("For Claude".t())
+        val twoFit = btns <= maxWidth
+        if (hTextW(count, countStyle) + 4.dp + 8.dp + btns <= maxWidth) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(count, Modifier.weight(1f).padding(start = 4.dp), color = c.ink2, style = countStyle, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
+                csv(Modifier)
+                forClaude(Modifier)
+            }
+        } else Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(count, Modifier.padding(start = 4.dp), color = c.ink2, style = countStyle, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (twoFit) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                csv(Modifier)
+                forClaude(Modifier.weight(1f))
+            } else {
+                forClaude(Modifier.fillMaxWidth())
+                csv(Modifier.fillMaxWidth())
+            }
+        }
     }
+    if (claude) ClaudeSheet(h, vm, prePkg = pkg) { claude = false }
     if (d.issues.isEmpty()) {
         KCard { KEmpty(if (status == "open") "No open issue".t() else "No match".t(), KIcons.Ok) }
         return

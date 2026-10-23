@@ -23,6 +23,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -34,6 +35,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import com.myfuturecode.mfcdash.data.HFix
 import com.myfuturecode.mfcdash.data.HIssueDetail
+import com.myfuturecode.mfcdash.data.claudeMd
 import com.myfuturecode.mfcdash.ui.HState
 import com.myfuturecode.mfcdash.ui.HealthVm
 import com.myfuturecode.mfcdash.ui.components.AppIcon
@@ -273,7 +275,7 @@ private fun IssueMore(d: HIssueDetail, h: HState, vm: HealthVm) {
             }
         }
     }
-    if (d.stack.isNotBlank()) StackBlock(d.stack)
+    if (d.stack.isNotBlank()) StackBlock(d, vm)
     if (d.fixes.isNotEmpty()) {
         KSection("AI fix attempts".t(), trailing = { HSecNote(tf("%s attempts", d.fixes.size)) })
         d.fixes.forEach { FixCard(it) }
@@ -288,12 +290,18 @@ private fun IssueMore(d: HIssueDetail, h: HState, vm: HealthVm) {
     }
 }
 
-/** Stack trace: 8 line, tap = poora. */
+/** Stack trace: 8 line, tap = poora. Copy = is issue ka chhota Markdown (app, package, version, type, title, stack) Claude ke liye. */
 @Composable
-private fun StackBlock(stack: String) {
+private fun StackBlock(d: HIssueDetail, vm: HealthVm) {
     var full by remember { mutableStateOf(false) }
-    KSection("Stack trace".t(), trailing = { KSectionLink(if (full) "Fold".t() else "Expand".t()) { full = !full } })
-    Box(Modifier.clickable { full = !full }) { Mono(stack, if (full) Int.MAX_VALUE else 8) }
+    val clip = LocalClipboardManager.current
+    KSection("Stack trace".t(), trailing = {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            HCopyLink { hCopy(clip, d.claudeMd(), vm) }
+            KSectionLink(if (full) "Fold".t() else "Expand".t()) { full = !full }
+        }
+    })
+    Box(Modifier.clickable { full = !full }) { Mono(d.stack, if (full) Int.MAX_VALUE else 8) }
 }
 
 /** Ek AI fix koshish: tests, steps, files, diff, GitHub run. */

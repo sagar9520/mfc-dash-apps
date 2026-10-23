@@ -7,12 +7,19 @@ import com.myfuturecode.mfcdash.data.DashData
 import com.myfuturecode.mfcdash.data.GAccount
 import com.myfuturecode.mfcdash.data.GAppBudget
 import com.myfuturecode.mfcdash.data.IssueApp
+import com.myfuturecode.mfcdash.data.PayItem
+import com.myfuturecode.mfcdash.data.PayLast
 import com.myfuturecode.mfcdash.data.TopAccount
 import com.myfuturecode.mfcdash.data.TopLiveApp
+import com.myfuturecode.mfcdash.data.TopPromoApp
 import com.myfuturecode.mfcdash.data.TopSpendApp
 import com.myfuturecode.mfcdash.data.alertsTop
+import com.myfuturecode.mfcdash.data.dashAppName
 import com.myfuturecode.mfcdash.data.healthTop
 import com.myfuturecode.mfcdash.data.monitoredAccounts
+import com.myfuturecode.mfcdash.data.payItemApps
+import com.myfuturecode.mfcdash.data.payLast
+import com.myfuturecode.mfcdash.data.promoTop
 import com.myfuturecode.mfcdash.data.topAccountName
 import com.myfuturecode.mfcdash.data.topAccounts
 import com.myfuturecode.mfcdash.data.topLiveApps
@@ -167,6 +174,54 @@ internal class AlertsSnap(val at: Long, val unread: Int, val open: Int, val item
     }
 }
 
+/** Cross promo widget: aaj ke promo installs / views / clicks + sabse zyada installs wale 3 promote hue apps. */
+internal class PromoSnap(val at: Long, val installs: Double, val views: Double, val clicks: Double, val top: List<TopPromoApp>) {
+    fun toJson(): JSONObject {
+        val a = JSONArray()
+        top.forEach { x ->
+            a.put(JSONObject().put("pkg", x.pkg).put("name", x.name).putD("inst", x.installs).putD("views", x.views).putD("clicks", x.clicks))
+        }
+        return JSONObject().put("at", at).putD("inst", installs).putD("views", views).putD("clicks", clicks).put("top", a)
+    }
+
+    companion object {
+        fun of(j: JSONObject?): PromoSnap? {
+            if (j == null || !j.has("at")) return null
+            return PromoSnap(
+                j.optLong("at"), j.d("inst"), j.d("views"), j.d("clicks"),
+                j.arr("top").mapObj { x -> TopPromoApp(x.s("pkg"), x.s("name"), x.d("inst"), x.d("views"), x.d("clicks")) },
+            )
+        }
+    }
+}
+
+/**
+ * Payments widget: aaj ka ₹ (paid orders ka jod), paid / failed ginti, aakhri 2 payments (paid / failed).
+ * missing = server par api/payments.php nahi (404): widget "Update server" dikhata hai.
+ */
+internal class PaySnap(
+    val at: Long, val amount: Double, val paid: Int, val failed: Int, val last: List<PayLast>, val missing: Boolean,
+) {
+    fun toJson(): JSONObject {
+        val a = JSONArray()
+        last.forEach { x ->
+            a.put(
+                JSONObject().put("pkg", x.pkg).put("name", x.name).put("ts", x.ts).put("plan", x.plan).putD("amt", x.amount)
+                    .put("paid", x.paid).put("reason", x.reason),
+            )
+        }
+        return JSONObject().put("at", at).putD("amt", amount).put("paid", paid).put("failed", failed).put("last", a).put("missing", missing)
+    }
+
+    companion object {
+        fun of(j: JSONObject?): PaySnap? {
+            if (j == null || !j.has("at")) return null
+            val last = j.arr("last").mapObj { x -> PayLast(x.s("pkg"), x.s("name"), x.s("ts"), x.s("plan"), x.d("amt"), x.b("paid"), x.s("reason")) }
+            return PaySnap(j.optLong("at"), j.d("amt"), j.d("paid").toInt(), j.d("failed").toInt(), last, j.b("missing"))
+        }
+    }
+}
+
 // JSONObject.put(Double) NaN / Infinity par exception deta hai: aise number chhod do
 private fun JSONObject.putD(k: String, v: Double?): JSONObject = if (v != null && v.isFinite()) put(k, v) else this
 private fun JSONObject.putS(k: String, v: String?): JSONObject = if (v != null) put(k, v) else this
@@ -189,6 +244,8 @@ private fun unpairs(a: JSONArray?): List<Pair<String, String>> =
 internal class WFetch(private val app: App) {
     private val dash = HashMap<String, DashData>()
     private var gads: JSONObject? = null
+    private var names: DashData? = null
+    private var namesTried = false
 
     /** gads_health.php?view=overview; sirf sahi jawab yaad (galti har baar phir se). */
     suspend fun gads(): JSONObject = gads ?: app.api.gGet("overview").also { gads = it }
@@ -201,6 +258,24 @@ internal class WFetch(private val app: App) {
         dash[k] = d
         return d
     }
+
+    /**
+     * Apps ke naam (Cross promo / Payments): is sync ka data.php ho to wahi, warna disk wala data.php (network nahi; naam
+     * roz nahi badalte), woh bhi na ho to ek baar data.php (aaj). Kuch na mile = package ka aakhri hissa; galti widget na roke.
+     */
+    suspend fun name(pkg: String): String {
+        if (!namesTried) {
+            namesTried = true
+            names = dash.values.firstOrNull() ?: try {
+                app.api.dataCached("all", "today")?.value ?: data("today")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                null
+            }
+        }
+        return dashAppName(dash.values.firstOrNull() ?: names, pkg)
+    }
 }
 
 /** Server se ek widget ka data. Fail ho to exception (cache wala snap rehta hai). */
@@ -211,6 +286,8 @@ internal object WidgetData {
         WKind.ADS -> ads(app, o, f).toJson()
         WKind.HEALTH -> health(app, o).toJson()
         WKind.ALERTS -> alerts(app, o).toJson()
+        WKind.PROMO -> promo(app, f).toJson()
+        WKind.PAY -> pay(app, f).toJson()
     }
 
     // ---- Paisa (api/data.php, sab apps; chune apps phone par jode jaate hain)
@@ -374,5 +451,54 @@ internal object WidgetData {
         }
         val t = alertsTop(d)
         return AlertsSnap(System.currentTimeMillis(), t.unread, t.open, t.items, missing = false)
+    }
+
+    // ---- Cross promo (api/crosspromo.php, sab apps, aaj; Cross promo screen wahi data)
+
+    private suspend fun promo(app: App, f: WFetch): PromoSnap {
+        val cp = app.api.crossPromo("all", "today")
+        // naam ek-ek karke (suspend), phir hisaab
+        val names = HashMap<String, String>()
+        for (p in cp.rows.map { it.tgt }.filter { it.isNotBlank() }.distinct()) names[p] = f.name(p)
+        val t = promoTop(cp.rows, { p -> names[p] ?: p.substringAfterLast('.') })
+        return PromoSnap(System.currentTimeMillis(), t.installs, t.views, t.clicks, t.top)
+    }
+
+    // ---- Payments (api/payments.php, sab apps, aaj; Payments screen wahi data)
+
+    private suspend fun pay(app: App, f: WFetch): PaySnap {
+        // null = server par payments.php nahi (404): "Update server". Net / login / server ki galti = exception (purana snap rahe)
+        val d = app.api.payments("all", "today") ?: return PaySnap(System.currentTimeMillis(), 0.0, 0, 0, emptyList(), missing = true)
+        // items sirf app=<pkg> par aate hain: aaj jin apps me paid / failed hua (4 tak), unke saath me. Ek app fail = bas uski
+        // lines nahi; net / login gaya = exception (aadhi list cache na ho)
+        var bad: ApiException? = null
+        val items: List<PayItem> = d.items.ifEmpty {
+            coroutineScope {
+                payItemApps(d.apps).map { p ->
+                    async {
+                        try {
+                            app.api.payments(p, "today")?.items.orEmpty()
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: ApiException) {
+                            if (e.network || e.unauthorized) throw e
+                            bad = e
+                            emptyList()
+                        }
+                    }
+                }.awaitAll().flatten()
+            }
+        }
+        // naam (Payments screen jaisa): data.php wala, warna server ka (apps config), warna package ka aakhri hissa
+        val server = d.apps.associate { it.pkg to it.name }
+        val last = payLast(items, { p -> server[p].orEmpty() }).map { x ->
+            val dn = f.name(x.pkg)
+            val known = dn != x.pkg.substringAfterLast('.')
+            x.copy(name = if (known) dn else x.name.takeIf { it.isNotBlank() && it != x.pkg } ?: dn)
+        }
+        // app wali call(s) fail aur ek bhi line nahi: "No payments" taaza data jaisa save na ho (ginti 38 paid ke saath).
+        // Exception = pichhla snap rahe, header amber (net ki galti jaisa)
+        bad?.let { if (last.isEmpty() && d.paid + d.failed > 0) throw it }
+        return PaySnap(System.currentTimeMillis(), d.amount, d.paid, d.failed, last, missing = false)
     }
 }

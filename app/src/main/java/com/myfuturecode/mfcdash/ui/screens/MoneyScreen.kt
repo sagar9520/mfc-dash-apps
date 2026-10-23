@@ -89,7 +89,7 @@ import com.myfuturecode.mfcdash.util.usd
 
 /**
  * Paisa: munafa (hero) + ROAS, 7 din ka munafa, kamai kahan se, kharcha kahan, phir "Aur":
- * Campaigns aur Pura hisaab (isi screen ke andar ke page, back = wapas), Users / Ads / Live / Cross promo.
+ * Campaigns aur Pura hisaab (isi screen ke andar ke page, back = wapas), Users / Ads / Live / Cross promo / Payments.
  * App filter (bar icon) ek app ka data dikhata hai.
  */
 @Composable
@@ -173,7 +173,7 @@ private fun PaisaSkel(wide: Boolean) {
             KSkelSection(width = 150.dp)
             PaisaSplitSkel()
             KSkelSection(width = 60.dp)
-            KSkelRows(6, value = false)
+            KSkelRows(7, value = false)
         }
         if (wide) KTwoPane(left = { KSkelHero(split = 4); week() }, right = rest) else { week(); rest() }
     }
@@ -298,7 +298,7 @@ private fun PaisaBar(w: List<Double>) {
     }
 }
 
-/** "Aur": Campaigns, Pura hisaab (isi screen me), Users / Ads / Live / Cross promo (alag screens). */
+/** "Aur": Campaigns, Pura hisaab (isi screen me), Users / Ads / Live / Cross promo / Payments (alag screens). */
 @Composable
 private fun PaisaLinks(v: View, nav: NavHostController, go: (String) -> Unit) {
     val d = v.d
@@ -335,6 +335,13 @@ private fun PaisaLinks(v: View, nav: NavHostController, go: (String) -> Unit) {
         KRow(
             "Cross promo".t(), sub = if (cp == null) null else num(cp.rows.sumOf { it.installs }) + " " + "installs".t(),
             lead = { KIconTile(KIcons.Apps) }, chevron = true, onClick = { nav.navigate("promo") },
+        )
+        KListDivider(true)
+        // Payments: data.php ke number (Paisa ke "Kamai kahan se" jaise), failed laal. Ek app chuna ho to seedha us app ke payments.
+        PayLinkRow(
+            "Payments".t(), paySub(inr(k.purchaseInr), k.purchases.toInt(), k.purchaseFailed.toInt()),
+            lead = { KIconTile(KIcons.Card) },
+            onClick = { nav.navigate(v.pkg?.let { "payments/app/$it" } ?: "payments") },
         )
     }
 }

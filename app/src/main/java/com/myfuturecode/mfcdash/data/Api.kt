@@ -256,6 +256,14 @@ class Api(private val prefs: Prefs, private val cache: JsonCache? = null) {
     suspend fun extraCached(app: String, range: String, from: String? = null, to: String? = null): Cached<ExtraData>? =
         peek("api/app.php?" + query(app, range, from, to), ExtraData::parse)
 
+    /** api/payments.php (Payments screen): app = "all" ya package. Server par upload na ho (404) = null; net / login / server ki galti = ApiException. */
+    suspend fun payments(app: String, range: String, from: String? = null, to: String? = null): PayData? =
+        try { getAs("api/payments.php?" + query(app, range, from, to), PayData::parse) }
+        catch (e: ApiException) { if (e.unauthorized || e.network || e.message?.contains("404") != true) throw e else null }
+    /** Disk wala pichhla payments.php jawab (network nahi). */
+    suspend fun paymentsCached(app: String, range: String, from: String? = null, to: String? = null): Cached<PayData>? =
+        peek("api/payments.php?" + query(app, range, from, to), PayData::parse)
+
     suspend fun addNote(campaign: String, pkg: String, note: String): Unit = withContext(Dispatchers.IO) {
         val body = FormBody.Builder().add("campaign", campaign).add("pkg", pkg).add("note", note).build()
         val req = Request.Builder().url(url("api/app.php?action=note")).post(body).build()
@@ -334,6 +342,9 @@ class Api(private val prefs: Prefs, private val cache: JsonCache? = null) {
     suspend fun hApp(pkg: String, days: Int): HAppDetail = hgetAs("app", mapOf("pkg" to pkg, "days" to days.toString()), HAppDetail::parse)
     /** CSV ka 15 min wala signed link (browser me khulta hai). */
     suspend fun hExport(f: Map<String, String>): String = hget("export", f).optString("url")
+    /** Export for Claude: sheet ki apps + ginti, aur .md file (types, status, days, top, pkgs). Purana server = 400 "unknown view". */
+    suspend fun hClaudeApps(f: Map<String, String>): HCxApps = hgetAs("claude_apps", f, HCxApps::parse)
+    suspend fun hClaudeExport(f: Map<String, String>): HCxExport = hgetAs("claude_export", f, HCxExport::parse)
 
     suspend fun hAction(action: String, fields: Map<String, String> = emptyMap()): JSONObject = hpost(action, fields)
 
@@ -375,4 +386,5 @@ private val CACHE_PATHS = listOf(
     "api/data.php?", "api/crosspromo.php?", "api/app.php?", "api/alerts.php?since=0",
     "api/health.php?view=overview", "api/health.php?view=consoles", "api/gads_health.php?view=overview",
     "api/studio.php?view=overview", "api/cost.php?range=",
+    "api/payments.php?",
 )

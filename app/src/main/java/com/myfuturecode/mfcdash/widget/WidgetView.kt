@@ -5,6 +5,7 @@ import com.myfuturecode.mfcdash.data.TopZone
 import com.myfuturecode.mfcdash.data.budgetZone
 import com.myfuturecode.mfcdash.data.roasZone
 import com.myfuturecode.mfcdash.ui.kit.KKind
+import com.myfuturecode.mfcdash.ui.screens.payPlanName
 import com.myfuturecode.mfcdash.ui.theme.ThemeStyle
 import com.myfuturecode.mfcdash.ui.theme.mfcColors
 import com.myfuturecode.mfcdash.util.agoText
@@ -15,8 +16,10 @@ import com.myfuturecode.mfcdash.util.t
 import com.myfuturecode.mfcdash.util.tf
 import org.json.JSONObject
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
 import kotlin.math.abs
 import kotlin.math.floor
 import kotlin.math.max
@@ -83,6 +86,27 @@ internal class WAlertV(val kind: KKind, val name: String, val label: String)
 /** Alerts: header ki "3 naye" pill (0 = null) + 3 line. */
 internal class WAlertsV(val unread: String?, val rows: List<WAlertV>)
 
+/** Cross promo ki ek line: app, promo installs, patli bar (fill 0..1 = sabse zyada installs wale ke hisaab se). */
+internal class WPromoRowV(val name: String, val installs: String, val fill: Float)
+
+/** Cross promo: bada = aaj ke promo installs, neeche views / clicks; daayein top 3 apps (khaali = "Koi promo nahi"). */
+internal class WPromoV(val installs: String, val views: String, val clicks: String, val rows: List<WPromoRowV>, val empty: Boolean)
+
+/** Payments ki ek line: paid (hara check) / failed (laal cross), app, "9:32 pm · Yearly" (failed: wajah, laal), ₹ (failed = kata hua). */
+internal class WPayRowV(val ok: Boolean, val name: String, val sub: String, val amount: String)
+
+/**
+ * Payments: bada = aaj ka ₹ (hara), "38 paid" / "6 failed" (0 = halka), daayein aakhri 2 payments (khaali = "Koi payment nahi").
+ * missing = server par payments.php nahi: sirf "Update server".
+ */
+internal class WPayV(
+    val amount: String, val good: Boolean, val paid: String, val failed: String, val anyFailed: Boolean, val rows: List<WPayRowV>,
+    val empty: Boolean, val missing: Boolean,
+)
+
+/**
+ * dot = header ke daayein hara dot + "Aaj" (Cross promo / Payments, taaza data); data purana = time me "3 ghante pehle" (amber).
+ */
 internal class WView(
     val kind: WKind,
     val style: ThemeStyle,
@@ -94,6 +118,9 @@ internal class WView(
     val top: WTopV? = null,
     val health: WHealthV? = null,
     val alerts: WAlertsV? = null,
+    val promo: WPromoV? = null,
+    val pay: WPayV? = null,
+    val dot: Boolean = false,
 )
 
 /** Widget ka theme: "app" = app ka roop (Settings), warna chuna hua. */
@@ -114,22 +141,40 @@ internal fun wView(
         WKind.ADS -> "Ads + Live".t()
         WKind.HEALTH -> "App Health".t()
         WKind.ALERTS -> "Alerts".t()
+        WKind.PROMO -> "Cross promo".t()
+        WKind.PAY -> "Payments".t()
     }
     if (!loggedIn) return WView(kind, style, title, "", false, login = true)
     val at = snap?.optLong("at", 0L) ?: 0L
-    val stale = at > 0L && (failed || now - at > (o.every + 10) * 60_000L)
+    // Cross promo / Payments "Aaj" ka data dikhate hain: kal ka snap (raat 11 baje ka, subah) bhi purana
+    val today = kind == WKind.PROMO || kind == WKind.PAY
+    val stale = at > 0L && (failed || now - at > (o.every + 10) * 60_000L || (today && !wSameDay(at, now)))
     val time = when {
         busy -> "…"
         at <= 0L -> W_DASH
         stale -> agoText(at)
+        today -> "Today".t()
         else -> wClock(at)
     }
+    val dot = today && !busy && at > 0L && !stale
+    // payments.php nahi: "Aaj" ka matlab nahi, header ke daayein kuch nahi
+    val paySnap = if (kind == WKind.PAY) PaySnap.of(snap) else null
+    val payGone = paySnap?.missing == true && !busy
     return when (kind) {
         WKind.PAISA -> WView(kind, style, title, time, stale, false, paisa = paisaV(PaisaSnap.of(snap)))
         WKind.ADS -> WView(kind, style, title, time, stale, false, top = topV(AdsSnap.of(snap), o.byApp))
         WKind.HEALTH -> WView(kind, style, title, time, stale, false, health = healthV(HealthSnap.of(snap)))
         WKind.ALERTS -> WView(kind, style, title, time, stale, false, alerts = alertsV(AlertsSnap.of(snap)))
+        WKind.PROMO -> WView(kind, style, title, time, stale, false, promo = promoV(PromoSnap.of(snap)), dot = dot)
+        WKind.PAY -> WView(kind, style, title, if (payGone) "" else time, stale && !payGone, false, pay = payV(paySnap), dot = dot && !payGone)
     }
+}
+
+/** Dono waqt phone ke ek hi din ke? */
+private fun wSameDay(a: Long, b: Long): Boolean {
+    val x = Calendar.getInstance().apply { timeInMillis = a }
+    val y = Calendar.getInstance().apply { timeInMillis = b }
+    return x.get(Calendar.YEAR) == y.get(Calendar.YEAR) && x.get(Calendar.DAY_OF_YEAR) == y.get(Calendar.DAY_OF_YEAR)
 }
 
 /** "9:41". Taaza data kuch ghante se purana nahi hota (purana = "5 ghante pehle"), isliye tareekh nahi. */
@@ -234,6 +279,40 @@ private fun healthV(s: HealthSnap?): WHealthV {
     return WHealthV(num(s.total.toDouble()), num(s.bad.toDouble()), num(s.fine.toDouble()), rows)
 }
 
+private fun promoV(s: PromoSnap?): WPromoV {
+    if (s == null) return WPromoV(W_DASH, W_DASH, W_DASH, List(3) { WPromoRowV(W_DASH, "", 0f) }, empty = false)
+    val most = s.top.maxOfOrNull { it.installs }?.takeIf { it > 0 }
+    val rows = s.top.take(3).map { a ->
+        WPromoRowV(a.name, wNum(a.installs), if (most == null) 0f else (a.installs / most).coerceIn(0.0, 1.0).toFloat())
+    }
+    return WPromoV(wNum(s.installs), wNum(s.views), wNum(s.clicks), rows, empty = rows.isEmpty())
+}
+
+/** Server ka local "2026-10-23 21:32:00" -> "9:32 pm" (wahi ghadi ka waqt; Payments screen ke payTime jaisa, apna formatter). */
+internal fun wPayTime(ts: String): String = runCatching {
+    val utc = TimeZone.getTimeZone("UTC")
+    val inF = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).apply { timeZone = utc }
+    val outF = SimpleDateFormat("h:mm a", Locale.US).apply { timeZone = utc }
+    outF.format(inF.parse(ts.take(19))!!).lowercase(Locale.US)
+}.getOrElse { ts.drop(11).take(5) }
+
+private fun payV(s: PaySnap?): WPayV {
+    if (s == null) return WPayV(W_DASH, false, tf("%s paid", W_DASH), tf("%s failed", W_DASH), false, List(2) { WPayRowV(true, W_DASH, "", "") }, false, false)
+    if (s.missing) return WPayV(W_DASH, false, "", "", false, emptyList(), empty = false, missing = true)
+    val rows = s.last.take(2).map { x ->
+        val known = x.amount >= 0.5
+        // failed: wajah (pata ho to), warna plan
+        val what = if (!x.paid && x.reason.isNotBlank()) x.reason.t() else payPlanName(x.plan)
+        WPayRowV(x.paid, x.name, wPayTime(x.ts) + " · " + what, if (known) inr(x.amount) else W_DASH)
+    }
+    // "No payments" sirf jab sach me koi nahi; ginti hai par lines nahi aayin (purana snap / app wali call) = "—" rows
+    val none = s.paid + s.failed == 0
+    return WPayV(
+        inr(s.amount), s.amount >= 0.5, tf("%s paid", num(s.paid.toDouble())), tf("%s failed", num(s.failed.toDouble())), s.failed > 0,
+        if (rows.isEmpty() && !none) List(2) { WPayRowV(true, W_DASH, "", "") } else rows, empty = rows.isEmpty() && none, missing = false,
+    )
+}
+
 private fun alertsV(s: AlertsSnap?): WAlertsV {
     if (s == null || s.missing) return WAlertsV(null, List(3) { WAlertV(KKind.NEUTRAL, W_DASH, "") })
     val unread = if (s.unread > 0) tf("%s new", num(s.unread.toDouble())) else null
@@ -328,7 +407,7 @@ internal fun wPal(style: ThemeStyle): WPal {
 
 /**
  * Ujla theme me card ka upar wala halka rang (neeche safed tak gradient): Paisa munafa = hara, loss = laal;
- * Ads + Live ret; Health gulabi; Alerts lavender. Dark / Brand = null (saada / brand gradient).
+ * Ads + Live ret; Health gulabi; Alerts lavender; Cross promo ret; Payments hara. Dark / Brand = null (saada / brand gradient).
  */
 internal enum class WTint(val top: Color, val stop: Float) {
     RED(Color(0xFFFDECEA), .46f), GREEN(Color(0xFFE7F5EC), .46f), SAND(Color(0xFFFFF0D6), .5f),
@@ -342,6 +421,8 @@ internal fun wTint(v: WView): WTint? {
         WKind.ADS -> WTint.SAND
         WKind.HEALTH -> WTint.ROSE
         WKind.ALERTS -> WTint.LAV
+        WKind.PROMO -> WTint.SAND
+        WKind.PAY -> WTint.GREEN
     }
 }
 
@@ -703,6 +784,165 @@ internal fun wAlertsPlan(v: WView, w: Float, h: Float, scale: Float): WAlertsPla
         }
     }
     return WAlertsPlan(1, false, pill, icon)
+}
+
+// ---------------------------------------------------------------- Cross promo + Payments (4x2, mockup promo_pay pp_6)
+
+/** Patli line ke dono taraf ki jagah (mockup .body gap 14). */
+internal const val W_GAP2 = 14f
+
+/** Promo ki installs bar (4dp). */
+internal const val W_PROMO_BAR = 4f
+
+/**
+ * Header: MFC nishaan + naam, daayein hara dot + "Aaj" (purana data = amber "3 ghante pehle", "…" refresh me).
+ * Jagah kam ho to pehle nishaan hatta, phir daayein wala, phir naam katta. time = daayein wala dikhe.
+ */
+internal fun wTodayHeadPlan(v: WView, inner: Float, scale: Float): WHeadPlan {
+    val titleW = wTextW(v.title, 14f, scale, bold = true)
+    val right = 8f + (if (v.dot) 7f + 5f else 0f) + wTextW(v.time, 12f, scale)
+    val mark = 27f
+    if (v.time.isEmpty()) {
+        return if (mark + titleW <= inner) WHeadPlan(true, v.title, false, false)
+        else WHeadPlan(false, wFit(v.title, inner, 14f, scale, true), false, false)
+    }
+    return when {
+        mark + titleW + right <= inner -> WHeadPlan(true, v.title, false, true)
+        titleW + right <= inner -> WHeadPlan(false, v.title, false, true)
+        mark + titleW <= inner -> WHeadPlan(true, v.title, false, false)
+        else -> WHeadPlan(false, wFit(v.title, inner, 14f, scale, true), false, false)
+    }
+}
+
+/** Do column ho to baayan hissa (bada number): andar ki chaudai ka ~37% (mockup 128 / 347), daayein kam se kam 140dp. */
+internal fun wSplitLeft(inner: Float): Float = (inner * .37f).coerceIn(112f, 150f)
+
+internal fun wSplitTwo(inner: Float): Boolean = inner - wSplitLeft(inner) - (2 * W_GAP2 + 1f) >= 140f
+
+/** Chhoti line (13sp) ki oonchai: icon 14dp se kam nahi. */
+internal fun wMiniH(scale: Float): Float = max(wLine(13f, scale), 15f)
+
+/**
+ * Cross promo. two = do column (baayein bada, daayein apps); patla = sirf baayan hissa poori chaudai me.
+ * gap = header ke neeche (8, tang ho to 4). bigSp = installs ka size, unit = "installs" likha, mini = views / clicks lines (0-2),
+ * rows = daayein apps ki lines (0-3), note = "Koi promo nahi" ki lines.
+ */
+internal class WPromoPlan(
+    val head: WHeadPlan, val two: Boolean, val leftW: Float, val rightW: Float, val gap: Float,
+    val bigSp: Float, val unit: Boolean, val mini: Int, val rows: Int, val note: Int,
+)
+
+/** Promo ki ek line: naam (13sp) + installs (15sp) ek line me, 5dp, bar. */
+internal fun wPromoRowH(scale: Float): Float = wLine(15f, scale) + 5f + W_PROMO_BAR
+
+internal fun wPromoPlan(v: WView, w: Float, h: Float, scale: Float): WPromoPlan {
+    val pv = v.promo!!
+    val inner = w - 2 * W_PH
+    val ih = h - 2 * W_PV
+    val head = wTodayHeadPlan(v, inner, scale)
+    val hdr = wHdr(scale)
+    val two = wSplitTwo(inner)
+    val leftW = if (two) wSplitLeft(inner) else inner
+    val rightW = if (two) inner - leftW - (2 * W_GAP2 + 1f) else 0f
+    // bada number kabhi "…" na ho: font ki chaudai me 4% chhoot (Paisa jaisa); patle me thoda bada chalega
+    val fit = wFitSp(pv.installs, leftW / 1.04f, if (two) 36f else 40f, 16f, scale)
+    val mh = wMiniH(scale)
+    fun need(b: Float, unit: Boolean, mini: Int) =
+        wLine(b, scale) + (if (unit) 1f + wLine(13f, scale) else 0f) + (if (mini > 0) 4f + mini * mh + (mini - 1) * 3f else 0f)
+    // kram: gap 8 -> 4, number 28sp tak, views / clicks hatein, number 22sp, "installs" hatta, number 16sp
+    val tries = listOf(
+        Triple(28f, true, 2), Triple(28f, true, 1), Triple(22f, true, 0), Triple(16f, false, 0),
+    )
+    var pick: Pair<Float, Float>? = null   // (gap, big)
+    var unit = true
+    var mini = 2
+    loop@ for ((floor, u, m) in tries) {
+        for (gap in listOf(8f, 4f)) {
+            val body = ih - hdr - gap
+            var b = fit
+            while (b > floor && need(b, u, m) > body) b -= 1f
+            if (need(b, u, m) <= body) {
+                pick = gap to b; unit = u; mini = m
+                break@loop
+            }
+        }
+    }
+    val (gap, big) = pick ?: (4f to 16f).also { unit = false; mini = 0 }
+    val body = ih - hdr - gap
+    val rowH = wPromoRowH(scale)
+    val rows = if (!two || pv.empty) 0 else (3 downTo 1).firstOrNull { n -> n * rowH + (n - 1) * 4f <= body } ?: 0
+    val note = if (wTextW(wPromoNote(), 13f, scale) <= rightW) 1 else 2
+    return WPromoPlan(head, two, leftW, rightW, gap, big, unit, mini, rows, note)
+}
+
+internal fun wPromoNote(): String = "No promo shown".t()
+
+internal fun wPayNote(): String = "No payments".t()
+
+internal fun wPayMissing(): String = "Update server".t()
+
+/**
+ * Payments. two / leftW / rightW / gap: promo jaisa. halves = baayan hissa do barabar aadhe (₹ pehle payment ke saamne,
+ * paid / failed doosre ke, mockup); jagah na ho to upar ₹, neeche paid / failed. mini = 2 lines, 1 = ek line (paid, jagah ho
+ * to " · failed" bhi: oneBoth), 0 = sirf ₹. rows = daayein payments (0-2), sub = har line ke neeche "9:32 pm · Yearly".
+ */
+internal class WPayPlan(
+    val head: WHeadPlan, val two: Boolean, val leftW: Float, val rightW: Float, val gap: Float,
+    val bigSp: Float, val halves: Boolean, val mini: Int, val oneBoth: Boolean, val rows: Int, val sub: Boolean, val note: Int,
+)
+
+/** Payment ki line: naam (13.5sp) / ₹ (15sp), sub ho to 2dp + 12.5sp. */
+internal fun wPayRowH(scale: Float, sub: Boolean): Float =
+    max(wLine(13.5f, scale), wLine(15f, scale)).let { if (sub) max(it, wLine(13.5f, scale) + 2f + wLine(12.5f, scale)) else it }
+
+/** paid / failed wali ek line: icon 14 + 6 + likhai (13sp bold). */
+internal fun wPayMiniW(text: String, scale: Float): Float = 14f + 6f + wTextW(text, 13f, scale, bold = true)
+
+internal fun wPayPlan(v: WView, w: Float, h: Float, scale: Float): WPayPlan {
+    val pv = v.pay!!
+    val inner = w - 2 * W_PH
+    val ih = h - 2 * W_PV
+    val head = wTodayHeadPlan(v, inner, scale)
+    val hdr = wHdr(scale)
+    val two = wSplitTwo(inner) && !pv.missing
+    val leftW = if (two) wSplitLeft(inner) else inner
+    val rightW = if (two) inner - leftW - (2 * W_GAP2 + 1f) else 0f
+    val fit = wFitSp(pv.amount, leftW / 1.04f, if (two) 32f else 36f, 16f, scale)
+    val mh = wMiniH(scale)
+    val miniH = { m: Int -> if (m > 0) m * mh + (m - 1) * 3f else 0f }
+    val oneBoth = wPayMiniW(pv.paid, scale) + wTextW(" · ", 13f, scale) + wTextW(pv.failed, 13f, scale, true) <= leftW
+    fun stacked(b: Float, m: Int) = wLine(b, scale) + (if (m > 0) 4f + miniH(m) else 0f)
+    var gap = 4f
+    var big = 16f
+    var halves = false
+    var mini = 0
+    run {
+        for (g in listOf(8f, 4f)) {
+            val body = ih - hdr - g
+            // aadhe: dono aadhon me apni cheez poori
+            if (two && max(wLine(fit, scale), miniH(2)) <= body / 2f) { gap = g; big = fit; halves = true; mini = 2; return@run }
+        }
+        // upar ₹, neeche lines: number 24sp tak, phir ek line, number 20sp tak, phir sirf ₹ (₹ hi asli baat), 16sp tak
+        for ((floor, m) in listOf(24f to 2, 24f to 1, 20f to 1, 20f to 0, 16f to 0)) {
+            for (g in listOf(8f, 4f)) {
+                val body = ih - hdr - g
+                var b = fit
+                while (b > floor && stacked(b, m) > body) b -= 1f
+                if (stacked(b, m) <= body) { gap = g; big = b; mini = m; return@run }
+            }
+        }
+    }
+    val body = ih - hdr - gap
+    // daayein: 2 lines (sub ke saath), 2 bina sub, 1 bina sub; beech me 1dp ki line
+    var rows = 0
+    var sub = false
+    if (two && !pv.empty) {
+        for ((n, sb) in listOf(2 to true, 2 to false, 1 to true, 1 to false)) {
+            if (n * wPayRowH(scale, sb) + (n - 1) * 1f <= body) { rows = n; sub = sb; break }
+        }
+    }
+    val note = if (wTextW(wPayNote(), 13f, scale) <= rightW) 1 else 2
+    return WPayPlan(head, two, leftW, rightW, gap, big, halves, mini, oneBoth, rows, sub, note)
 }
 
 // ---------------------------------------------------------------- bar / meter ke tukde

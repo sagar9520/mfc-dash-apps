@@ -6,14 +6,17 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * Chaar home-screen widget, har ek ka layout fix (mockup 2026-10-22): Paisa (4x2), Ads + Live (4x2),
- * App Health (2x2), Alerts (2x2). ADS ka key / receiver wahi rakha, taaki pehle se lage widget chalte rahein.
+ * Chhe home-screen widget, har ek ka layout fix (mockup 2026-10-22 + promo_pay pp_6): Paisa (4x2), Ads + Live (4x2),
+ * App Health (2x2), Alerts (2x2), Cross promo (4x2), Payments (4x2). Naye kind hamesha aakhir me: purane key / receiver
+ * wahi rakhe, taaki pehle se lage widget chalte rahein.
  */
 enum class WKind(val key: String, val route: String) {
     PAISA("paisa", "money"),
     ADS("ads", "gads"),
     HEALTH("health", "health"),
-    ALERTS("alerts", "alerts");
+    ALERTS("alerts", "alerts"),
+    PROMO("promo", "promo"),
+    PAY("pay", "payments");
 
     /** Widget ka naam (Widgets screen). */
     fun title(): String = when (this) {
@@ -21,16 +24,18 @@ enum class WKind(val key: String, val route: String) {
         ADS -> "Ads + Live".t()
         HEALTH -> "App Health".t()
         ALERTS -> "Alerts".t()
+        PROMO -> "Cross promo".t()
+        PAY -> "Payments".t()
     }
 
     /** Chhota naam (Widgets screen ka "Paisa widget set karo"). */
     fun shortTitle(): String = title()
 
     /** 4x2 (chauda) widget? baaki 2x2. */
-    val wide: Boolean get() = this == PAISA || this == ADS
+    val wide: Boolean get() = this == PAISA || this == ADS || this == PROMO || this == PAY
 
-    /** Apps / accounts / consoles chun sakte hain? (Alerts me nahi) */
-    val picks: Boolean get() = this != ALERTS
+    /** Apps / accounts / consoles chun sakte hain? (Alerts, Cross promo, Payments me nahi: sab apps, aaj) */
+    val picks: Boolean get() = this == PAISA || this == ADS || this == HEALTH
 
     companion object {
         fun of(key: String?): WKind? = entries.firstOrNull { it.key == key }

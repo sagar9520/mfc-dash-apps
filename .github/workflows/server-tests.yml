@@ -1,4 +1,4 @@
-# Server tests: Google Ads AI Health Monitor (rules, read-only guard, MySQL integration) + AI Cost & Usage Manager (budget gate, caps, warnings). SIMULATED dev data only.
+# Server tests: Google Ads AI Health Monitor, AI Cost & Usage Manager, Research Studio, Export for Claude and Payments. SIMULATED dev data only.
 name: Server tests
 on:
   push:
@@ -72,3 +72,39 @@ jobs:
           TEST_DB_USER: root
           TEST_DB_PASS: testpass
         run: php server/tests/studio_test.php
+  app-data:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: testpass
+          MYSQL_DATABASE: mfc_health_test
+        ports: ['3306:3306']
+        options: --health-cmd="mysqladmin ping -ptestpass" --health-interval=5s --health-timeout=5s --health-retries=20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: pdo_mysql, mbstring, curl, iconv
+          coverage: none
+          ini-values: opcache.jit=disable
+      - name: PHP syntax
+        run: for f in server/lib/health.php server/api/health.php server/api/payments.php server/tests/health_export_test.php server/tests/payments_test.php; do php -l "$f"; done
+      - name: Export for Claude (MySQL, simulated issues)
+        env:
+          TEST_DB_HOST: 127.0.0.1
+          TEST_DB_NAME: mfc_health_test
+          TEST_DB_USER: root
+          TEST_DB_PASS: testpass
+        run: php server/tests/health_export_test.php
+      - name: Payments (MySQL, simulated events)
+        env:
+          TEST_DB_HOST: 127.0.0.1
+          TEST_DB_NAME: mfc_pay_test
+          TEST_DB_USER: root
+          TEST_DB_PASS: testpass
+        run: |
+          mysql -h127.0.0.1 -uroot -ptestpass -e 'CREATE DATABASE IF NOT EXISTS mfc_pay_test'
+          php server/tests/payments_test.php

@@ -365,3 +365,46 @@ data class AlertsData(
         )
     }
 }
+
+// ---------------------------------------------------------------- api/payments.php (Payments screen + app detail)
+/** Ek app ke payments (period me): amount = paid orders ka ₹ jod (ek order ek baar). */
+data class PayApp(val pkg: String, val name: String, val amount: Double, val paid: Int, val failed: Int, val started: Int) {
+    companion object { fun of(j: JSONObject) = PayApp(j.s("pkg"), j.s("name"), j.d("amount"), j.d("paid").toInt(), j.d("failed").toInt(), j.d("started").toInt()) }
+}
+
+/**
+ * Ek payment (sirf app=<pkg> par). ts = app ke time zone ka "yyyy-MM-dd HH:mm:ss" (UTC nahi). status = paid | failed | started
+ * (started = shuru hua, poora nahi). reason = sirf jab event me ho (jaise "Cancelled"), warna "". amount failed par plan ka daam (pata na ho to 0).
+ */
+data class PayItem(val ts: String, val pkg: String, val plan: String, val amount: Double, val status: String, val order: String, val reason: String) {
+    val paid get() = status == "paid"
+    val failed get() = status == "failed"
+    val started get() = status == "started"
+    /** Local din "yyyy-MM-dd". */
+    val day get() = ts.take(10)
+    companion object { fun of(j: JSONObject) = PayItem(j.s("ts"), j.s("pkg"), j.s("plan"), j.d("amount"), j.s("status"), j.s("order"), j.s("reason")) }
+}
+
+/**
+ * api/payments.php ka jawab. amount / paid / failed / started = totals. apps = amount zyada -> kam. items = sirf app=<pkg> (naya pehle, max 500).
+ * rawFrom = sabse purana raw din; source = raw | agg | mixed (purane din agg_pay se: aggFrom..aggTo, unke items nahi).
+ */
+data class PayData(
+    val app: String, val from: String, val to: String, val today: Boolean, val tz: String,
+    val amount: Double, val paid: Int, val failed: Int, val started: Int,
+    val apps: List<PayApp>, val items: List<PayItem>,
+    val rawFrom: String, val source: String, val aggFrom: String, val aggTo: String, val aggCounts: Boolean,
+) {
+    val single get() = from == to
+    companion object {
+        fun parse(j: JSONObject): PayData {
+            val t = j.obj("totals")
+            return PayData(
+                j.s("app", "all"), j.s("from"), j.s("to"), j.b("today"), j.s("tz"),
+                t.d("amount"), t.d("paid").toInt(), t.d("failed").toInt(), t.d("started").toInt(),
+                j.arr("apps").mapObj(PayApp::of), j.arr("items").mapObj(PayItem::of),
+                j.s("raw_from"), j.s("source", "raw"), j.s("agg_from"), j.s("agg_to"), j.b("agg_counts"),
+            )
+        }
+    }
+}

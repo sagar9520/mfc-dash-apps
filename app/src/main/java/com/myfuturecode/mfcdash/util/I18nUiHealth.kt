@@ -24,4 +24,16 @@ val HI_UI_HEALTH: Map<String, String> = mapOf(
     "events" to "events",
     // app screen: Google ka din + version-wise crash / ANR
     "All versions" to "Sab versions", "Version-wise" to "Version ke hisaab se", "Newest" to "Naya",
+    // Export for Claude (Issues tab ka button + sheet, issue page ka Copy)
+    "For Claude" to "Claude ke liye", "Export for Claude" to "Claude ke liye export", "Crashes for Claude" to "Claude ke liye crashes",
+    "ANRs" to "ANR", "Open only" to "Sirf khule", "Top %s per app" to "Har app ke top %s", "All issues per app" to "Har app ke sab issues",
+    "1 crash" to "1 crash", "%s crashes" to "%s crashes", "1 ANR" to "1 ANR", "%s ANRs" to "%s ANR", "app" to "app", "crash" to "crash", "ANR" to "ANR",
+    "Share file" to "File share karo", "Copied" to "Copy ho gaya", "Copy failed" to "Copy nahi hua",
+    "No crash or ANR in this period" to "Is samay me koi crash ya ANR nahi", "Pick crashes or ANRs" to "Crash ya ANR chuno",
+    "Pick at least one app" to "Kam se kam ek app chuno", "Counting issues…" to "Issues gin rahe…",
+    "Too big to copy (%s), so it is shared as a file" to "Copy ke liye bahut bada (%s), isliye file share ho rahi hai",
+    "Could not copy, so it is shared as a file" to "Copy nahi hua, isliye file share ho rahi hai",
+    "Could not share the file. Free some space on the phone and try again." to "File share nahi hui. Phone me thodi jagah khali karke dobara try karo.",
+    "Upload the new lib/health.php and api/health.php to mfc_dash, then tap Try again." to
+        "Naya lib/health.php aur api/health.php mfc_dash me upload karo, phir Dobara try karo dabao.",
 )

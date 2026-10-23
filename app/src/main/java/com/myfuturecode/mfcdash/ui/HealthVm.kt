@@ -32,6 +32,9 @@ data class HState(
     val missing: Boolean = false,                            // server par api/health.php nahi (404)
     val lastOk: Long = 0L,
     val cached: Set<String> = emptySet(),                    // "overview" / "consoles": abhi disk cache wala copy (live nahi)
+    // Export for Claude sheet: apps + ginti (cxKey = kis filter ka), apni galti (screen ka error nahi); cxOld = server purana (view nahi);
+    // cxErrKey = kis filter ki ginti fail hui (sheet ka spinner wahin ruke, "Try again" dikhe)
+    val cx: HCxApps? = null, val cxKey: String = "", val cxErr: String? = null, val cxOld: Boolean = false, val cxErrKey: String = "",
 )
 
 class HealthVm(private val app: App) : ViewModel() {
@@ -43,6 +46,8 @@ class HealthVm(private val app: App) : ViewModel() {
     val msg: SharedFlow<String> = _msg
 
     private fun say(m: String) { _msg.tryEmit(m) }
+    /** Screen se chhota snackbar message (jaise "Copied"). */
+    fun tell(m: String) = say(m)
 
     private fun load(block: suspend () -> Unit) {
         viewModelScope.launch {
@@ -169,6 +174,42 @@ class HealthVm(private val app: App) : ViewModel() {
             try { api.hExport(f).takeIf { it.isNotBlank() }?.let(onUrl) } catch (e: Exception) { say(e.message ?: "Failed".t()) }
             _s.update { it.copy(busy = it.busy - "export") }
         }
+    }
+
+    // ---- Export for Claude
+    /** Sheet ki app list + ginti (filter badle to dobara; jaldi badle to sirf aakhri jawab). */
+    fun loadClaudeApps(f: Map<String, String>) {
+        val key = f.toSortedMap().toString()
+        pendingCx = key
+        _s.update { it.copy(cxErr = null, cxOld = false, cxErrKey = "") }
+        viewModelScope.launch {
+            try {
+                val r = api.hClaudeApps(f)
+                if (key == pendingCx) _s.update { it.copy(cx = r, cxKey = key) }
+            } catch (e: Exception) {
+                if (key == pendingCx) cxFail(e, key)
+            }
+        }
+    }
+    private var pendingCx = ""
+
+    /** .md file banwao (Copy / Share). Busy = "claude" (button par spinner). */
+    fun claudeExport(f: Map<String, String>, onDone: (HCxExport) -> Unit) {
+        if ("claude" in _s.value.busy) return
+        _s.update { it.copy(busy = it.busy + "claude", cxErr = null, cxOld = false) }
+        viewModelScope.launch {
+            try { onDone(api.hClaudeExport(f)) } catch (e: Exception) { cxFail(e) }
+            _s.update { it.copy(busy = it.busy - "claude") }
+        }
+    }
+
+    // purana server: view nahi = 400 ("unknown view"), health.php hi nahi = 404, sirf api/health.php naya (lib purani) = 500
+    // "Call to undefined function h_cx_params()" -> "naya server upload karo" (PHP ki galti nahi dikhani)
+    private fun cxFail(e: Exception, key: String = "") {
+        val m = e.message ?: "Failed".t()
+        val old = (e as? ApiException)?.let { !it.network && !it.unauthorized } == true &&
+            (m.contains("400") || m.contains("404") || m.contains("unknown view") || m.contains("undefined function", ignoreCase = true))
+        _s.update { it.copy(cxErr = if (old) null else m, cxOld = old, cxErrKey = key) }
     }
 
     private fun reloadIssues() { _s.value.issue.keys.forEach { loadIssue(it) } }

@@ -7,6 +7,8 @@
  *
  * App (login cookie):
  *   GET ?view=overview | consoles | runs | run&id= | issues | issue&id= | fixes | builds | logs | settings | app&pkg=&days= | export
+ *       | claude_apps&types=crash,anr&status=open|all&days=7|28|90&top=5|10|0   -> {apps: [{pkg, name, icon, crashes, anrs, crashes_top, anrs_top, users}], total, filters}
+ *       | claude_export&pkgs=a,b&types=..&status=..&days=..&top=..             -> {md, file_name, apps, crashes, anrs, bytes, left_out}  ("Export for Claude", lib/health.php h_cx_*)
  *   POST ?action=scan {pkg?, type?} | investigate {id} | autofix {id} | reject {id, reason} | reopen {id} | fixed {id}
  *        | task {pkg, title, details} | app_setting {pkg, field, value} | setting {key, value} | verify {pkg}
  *        | link {kind: aab|apk, id} | build_status {id, status} | publish {id, track, rollout} | test_email
@@ -217,6 +219,18 @@ try {
         case 'export':
             $f = array_intersect_key($_GET, array_flip(['what', 'console', 'pkg', 'status', 'severity', 'type', 'from', 'to', 'q', 'job']));
             $out = ['url' => h_signed('csv', base64_encode(h_json($f))), 'expires_in' => 900];
+            break;
+        // Export for Claude (sheet): sirf CRASH / ANR. Session lock upar hi chhoot chuka (session_write_close), query bina stack + LIMIT, stack sirf chune issues ka (kata hua).
+        case 'claude_apps':
+            $f = h_cx_params($_GET);
+            $apps = h_cx_apps($pdo, $f);
+            $out = ['apps' => $apps, 'total' => ['apps' => count($apps), 'crashes' => array_sum(array_column($apps, 'crashes')), 'anrs' => array_sum(array_column($apps, 'anrs')),
+                'crashes_top' => array_sum(array_column($apps, 'crashes_top')), 'anrs_top' => array_sum(array_column($apps, 'anrs_top'))],
+                'filters' => ['types' => array_map('strtolower', $f['types']), 'status' => $f['status'], 'days' => $f['days'], 'top' => $f['top']]];
+            break;
+        case 'claude_export':
+            @set_time_limit(60);
+            $out = h_cx_export($pdo, h_cx_params($_GET));
             break;
         default: json_out(['ok' => false, 'error' => 'unknown view'], 400);
     }

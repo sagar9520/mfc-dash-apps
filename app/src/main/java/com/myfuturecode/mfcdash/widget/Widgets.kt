@@ -14,7 +14,7 @@ import androidx.glance.appwidget.action.ActionCallback
 import androidx.glance.appwidget.provideContent
 
 /**
- * Chaaron widget ek hi tarah bante hain: har lage widget (appWidgetId) ke apne options, data cache se.
+ * Sab widget ek hi tarah bante hain: har lage widget (appWidgetId) ke apne options, data cache se.
  * rev badle (naya data / Save / theme) to chalu widget turant dobara banta hai.
  */
 abstract class MfcWidget(private val kind: WKind) : GlanceAppWidget() {
@@ -44,6 +44,8 @@ class PaisaWidget : MfcWidget(WKind.PAISA)
 class AdsWidget : MfcWidget(WKind.ADS)
 class HealthWidget : MfcWidget(WKind.HEALTH)
 class AlertsWidget : MfcWidget(WKind.ALERTS)
+class PromoWidget : MfcWidget(WKind.PROMO)
+class PayWidget : MfcWidget(WKind.PAY)
 
 class PaisaWidgetReceiver : GlanceAppWidgetReceiver() {
     override val glanceAppWidget: GlanceAppWidget = PaisaWidget()
@@ -61,12 +63,22 @@ class AlertsWidgetReceiver : GlanceAppWidgetReceiver() {
     override val glanceAppWidget: GlanceAppWidget = AlertsWidget()
 }
 
+class PromoWidgetReceiver : GlanceAppWidgetReceiver() {
+    override val glanceAppWidget: GlanceAppWidget = PromoWidget()
+}
+
+class PayWidgetReceiver : GlanceAppWidgetReceiver() {
+    override val glanceAppWidget: GlanceAppWidget = PayWidget()
+}
+
 internal val WKind.receiver: Class<out GlanceAppWidgetReceiver>
     get() = when (this) {
         WKind.PAISA -> PaisaWidgetReceiver::class.java
         WKind.ADS -> AdsWidgetReceiver::class.java
         WKind.HEALTH -> HealthWidgetReceiver::class.java
         WKind.ALERTS -> AlertsWidgetReceiver::class.java
+        WKind.PROMO -> PromoWidgetReceiver::class.java
+        WKind.PAY -> PayWidgetReceiver::class.java
     }
 
 internal fun WKind.widget(): GlanceAppWidget = when (this) {
@@ -74,6 +86,8 @@ internal fun WKind.widget(): GlanceAppWidget = when (this) {
     WKind.ADS -> AdsWidget()
     WKind.HEALTH -> HealthWidget()
     WKind.ALERTS -> AlertsWidget()
+    WKind.PROMO -> PromoWidget()
+    WKind.PAY -> PayWidget()
 }
 
 /** Band ka refresh: turant "…", phir sab widgets ka data naye sire se. */

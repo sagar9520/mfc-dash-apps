@@ -11,6 +11,10 @@ val HI_UI_WIDGET: Map<String, String> = mapOf(
     "This month's profit" to "Is mahine ka munafa",
     // Ads + Live widget
     "budget %" to "budget %",
+    // Payments widget (Cross promo: "installs" / "No promo shown" doosre map me)
+    "%s paid" to "%s paid",
+    "%s failed" to "%s fail",
+    "Update server" to "Server update karo",
     // App Health widget (teen number ke neeche)
     "apps" to "apps",
     "issue" to "issue",
@@ -60,6 +64,8 @@ val HI_UI_WIDGET: Map<String, String> = mapOf(
     "Total ads spend, top 3 apps with ROAS, top 3 live apps" to "Kul ads kharcha, top 3 apps ROAS ke saath, top 3 live apps",
     "Apps with issues, top 3 by open issues" to "Issue wale apps, sabse zyada khule issue wale 3",
     "3 newest open alerts, most urgent first" to "3 naye khule alerts, sabse zaroori pehle",
+    "Promo installs today, top 3 apps" to "Aaj ke promo installs, top 3 apps",
+    "Payments today, last 2 payments" to "Aaj ke payments, aakhri 2 payments",
     "Add to home screen" to "Home par lagao",
     "Change" to "Badlo",
     "Add one more" to "Ek aur lagao",

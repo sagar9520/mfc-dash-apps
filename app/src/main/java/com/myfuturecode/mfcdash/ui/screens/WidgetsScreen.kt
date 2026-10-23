@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -111,7 +112,7 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
 /**
- * Widgets: chaaron home-screen widget ka preview (asli data), kitne lage hain, lagao / badlo.
+ * Widgets: sab home-screen widget ka preview (asli data), kitne lage hain, lagao / badlo.
  * Har widget ka layout fix hai; "Badlo" = samay (Paisa), apps / accounts / consoles, rang, kitni der me update.
  * Save = lage widgets bhi badlein.
  */
@@ -174,19 +175,21 @@ private fun WList(nav: NavHostController, onEdit: (WKind) -> Unit) {
         )
     }) {
         if (isWide()) {
-            // Fold: baayein Paisa + Health, daayein Ads + Live + Alerts
+            // Fold: baayein Paisa + Cross promo + Health, daayein Ads + Live + Payments + Alerts
             KTwoPane(
                 left = {
                     item(WKind.PAISA)
+                    item(WKind.PROMO)
                     item(WKind.HEALTH)
                 },
                 right = {
                     item(WKind.ADS)
+                    item(WKind.PAY)
                     item(WKind.ALERTS)
                 },
             )
         } else {
-            WKind.entries.forEach { k -> item(k) }
+            W_ORDER.forEach { k -> item(k) }
         }
     }
 }
@@ -296,6 +299,10 @@ private fun WSkelPreview(v: WView, modifier: Modifier, onClick: (() -> Unit)?) {
                 Box(Modifier.weight(1f))
                 KSkelLine(32.dp, 10.dp)
             }
+            if (v.kind == WKind.PROMO || v.kind == WKind.PAY) {
+                WSkelSplit(v.kind == WKind.PAY)
+                return@KSkeleton
+            }
             when (v.kind) {
                 WKind.PAISA -> {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
@@ -345,6 +352,50 @@ private fun WSkelPreview(v: WView, modifier: Modifier, onClick: (() -> Unit)?) {
     }
 }
 
+/**
+ * Cross promo / Payments ka skeleton: baayein bada number + 2 chhoti lines, patli line, daayein 3 apps (naam + number + bar)
+ * ya 2 payments (gola + naam / waqt + rakam).
+ */
+@Composable
+private fun ColumnScope.WSkelSplit(pay: Boolean) {
+    Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+        Column(Modifier.weight(.6f).fillMaxHeight()) {
+            KSkelLine(.8f, 30.dp)
+            if (!pay) KSkelLine(.5f, 10.dp, Modifier.padding(top = 6.dp))
+            Box(Modifier.weight(1f))
+            KSkelLine(.55f, 11.dp)
+            KSkelLine(.45f, 11.dp, Modifier.padding(top = 7.dp))
+        }
+        Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.SpaceBetween) {
+            if (pay) {
+                repeat(2) { i ->
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        KSkelCircle(14.dp)
+                        Column(Modifier.weight(1f)) {
+                            KSkelLine(listOf(.8f, .6f)[i], 11.dp)
+                            KSkelLine(.5f, 9.dp, Modifier.padding(top = 6.dp))
+                        }
+                        KSkelLine(34.dp, 13.dp)
+                    }
+                }
+            } else {
+                repeat(3) { i ->
+                    Column {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(Modifier.weight(1f)) { KSkelLine(listOf(.6f, .75f, .5f)[i], 11.dp) }
+                            KSkelLine(28.dp, 13.dp)
+                        }
+                        KSkelLine(1f, 4.dp, Modifier.padding(top = 6.dp))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Phone par list ka kram: chaude (4x2) pehle, phir chhote (2x2). */
+private val W_ORDER = listOf(WKind.PAISA, WKind.ADS, WKind.PROMO, WKind.PAY, WKind.HEALTH, WKind.ALERTS)
+
 /** Preview ka size: 2x2 = 172dp ka chaukor (mockup), 4x2 = poori chaudai (max 460) x 172. */
 private const val W_SMALL = 172f
 private const val W_WIDE_MAX = 460f
@@ -356,6 +407,8 @@ private fun wDesc(kind: WKind, o: WOpts): String = when (kind) {
     else "Top 3 ad accounts with budget, top 3 live apps".t()
     WKind.HEALTH -> "Apps with issues, top 3 by open issues".t()
     WKind.ALERTS -> "3 newest open alerts, most urgent first".t()
+    WKind.PROMO -> "Promo installs today, top 3 apps".t()
+    WKind.PAY -> "Payments today, last 2 payments".t()
 }
 
 /** Pehli baar: "Home screen par lagao" + Badlo. Lag gaya: Badlo + "Ek aur lagao". */
@@ -416,7 +469,7 @@ private fun wChoices(kind: WKind, snap: JSONObject?): List<Pair<String, String>>
     WKind.PAISA -> PaisaSnap.of(snap)?.allApps
     WKind.ADS -> AdsSnap.of(snap)?.all
     WKind.HEALTH -> HealthSnap.of(snap)?.consoles
-    WKind.ALERTS -> null
+    WKind.ALERTS, WKind.PROMO, WKind.PAY -> null
 }
 
 /**
@@ -443,7 +496,7 @@ private suspend fun wPreviewSnap(
 }
 
 private suspend fun wLoadSnaps(app: App, force: Boolean): Map<WKind, JSONObject?> {
-    val f = WFetch(app) // Paisa (aaj) aur Ads + Live ek hi data.php se
+    val f = WFetch(app) // Paisa (aaj) aur Ads + Live ek hi data.php se (Cross promo / Payments ke naam bhi)
     val out = LinkedHashMap<WKind, JSONObject?>()
     for (k in WKind.entries) out[k] = wPreviewSnap(app, k, WidgetStore.defaults(app, k), force, f = f)
     return out

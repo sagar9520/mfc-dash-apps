@@ -4,6 +4,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -83,6 +84,8 @@ internal fun WPreview(v: WView, modifier: Modifier, onClick: (() -> Unit)? = nul
             v.kind == WKind.PAISA -> WpPaisa(v, p, w, h, scale)
             v.kind == WKind.ADS -> WpTop(v, p, w, h, scale)
             v.kind == WKind.HEALTH -> WpHealth(v, p, w, h, scale)
+            v.kind == WKind.PROMO -> WpPromo(v, p, w, h, scale)
+            v.kind == WKind.PAY -> WpPay(v, p, w, h, scale)
             else -> WpAlerts(v, p, w, h, scale)
         }
     }
@@ -92,13 +95,13 @@ internal fun WPreview(v: WView, modifier: Modifier, onClick: (() -> Unit)? = nul
 @Composable
 private fun WpT(
     text: String, sp: Float, c: Color, modifier: Modifier = Modifier, weight: FontWeight = FontWeight.Normal,
-    align: TextAlign = TextAlign.Start, under: Boolean = false, lines: Int = 1,
+    align: TextAlign = TextAlign.Start, under: Boolean = false, lines: Int = 1, strike: Boolean = false,
 ) {
     Text(
         text, modifier, color = c, maxLines = lines, softWrap = lines > 1, overflow = TextOverflow.Ellipsis,
         style = TextStyle(
             fontSize = sp.sp, fontWeight = weight, lineHeight = (sp * 1.32f).sp, fontFeatureSettings = "tnum", textAlign = align,
-            textDecoration = if (under) TextDecoration.Underline else null,
+            textDecoration = if (under) TextDecoration.Underline else if (strike) TextDecoration.LineThrough else null,
             lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.None),
         ),
     )
@@ -560,6 +563,198 @@ private fun WpAlerts(v: WView, p: WPal, w: Float, h: Float, scale: Float) {
                     if (plan.sub && r.label.isNotEmpty()) WpT(wFit(r.label, inner - 23f, 12f, scale), 12f, p.ink3, weight = FontWeight.Medium)
                 }
             }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- Cross promo + Payments
+
+@Composable
+private fun WpTodayHead(v: WView, head: WHeadPlan, p: WPal, scale: Float) {
+    Row(Modifier.fillMaxWidth().height(wHdr(scale).dp), verticalAlignment = Alignment.CenterVertically) {
+        if (head.mark) {
+            WpMark()
+            Spacer(Modifier.width(7.dp))
+        }
+        WpT(head.title, 14f, p.ink, Modifier.weight(1f), FontWeight.Medium)
+        if (head.time) {
+            Row(Modifier.padding(start = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (v.dot) WpLiveDot(p)
+                WpT(v.time, 12f, if (v.stale) p.amber else p.ink3, weight = FontWeight.Medium)
+            }
+        }
+    }
+}
+
+@Composable
+private fun WpMiniLine(icon: Int, text: String, ic: Color, tc: Color, scale: Float) {
+    Row(Modifier.height(wMiniH(scale).dp), verticalAlignment = Alignment.CenterVertically) {
+        Icon(painterResource(icon), null, tint = ic, modifier = Modifier.size(14.dp))
+        Spacer(Modifier.width(6.dp))
+        WpT(text, 13f, tc, weight = FontWeight.Bold)
+    }
+}
+
+@Composable
+private fun WpSplitLine(p: WPal) {
+    Spacer(Modifier.width(W_GAP2.dp))
+    WpVLine(p, null)
+    Spacer(Modifier.width(W_GAP2.dp))
+}
+
+@Composable
+private fun WpSideNote(text: String, lines: Int, p: WPal) {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.CenterStart) { WpT(text, 13f, p.ink3, weight = FontWeight.Medium, lines = lines) }
+}
+
+@Composable
+private fun WpPromo(v: WView, p: WPal, w: Float, h: Float, scale: Float) {
+    val pv = v.promo ?: return
+    val plan = wPromoPlan(v, w, h, scale)
+    Column(Modifier.fillMaxSize().then(PAD)) {
+        WpTodayHead(v, plan.head, p, scale)
+        Spacer(Modifier.height(plan.gap.dp))
+        Row(Modifier.fillMaxWidth().weight(1f)) {
+            Column((if (plan.two) Modifier.width(plan.leftW.dp) else Modifier.weight(1f)).fillMaxHeight()) {
+                WpT(pv.installs, plan.bigSp, p.ink, weight = FontWeight.Bold)
+                if (plan.unit) WpT("installs".t(), 13f, p.ink2, Modifier.padding(top = 1.dp), FontWeight.Medium)
+                if (plan.mini > 0) {
+                    Spacer(Modifier.weight(1f))
+                    WpMiniLine(R.drawable.widget_ic_eye, pv.views, p.ink3, p.ink2, scale)
+                    if (plan.mini > 1) {
+                        Spacer(Modifier.height(3.dp))
+                        WpMiniLine(R.drawable.widget_ic_click, pv.clicks, p.ink3, p.ink2, scale)
+                    }
+                }
+            }
+            if (plan.two) {
+                WpSplitLine(p)
+                Column(Modifier.weight(1f).fillMaxHeight()) {
+                    if (pv.empty) {
+                        WpSideNote(wPromoNote(), plan.note, p)
+                        return@Column
+                    }
+                    WpTopRows(plan.rows) { i ->
+                        val a = pv.rows.getOrNull(i)
+                        if (a == null) {
+                            Spacer(Modifier.height(wPromoRowH(scale).dp))
+                            return@WpTopRows
+                        }
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            val room = plan.rightW - wTextW(a.installs, 15f, scale, true) - 8f
+                            WpT(wFit(a.name, room, 13f, scale, true), 13f, if (a.name == W_DASH) p.ink3 else p.ink, Modifier.weight(1f), FontWeight.Medium)
+                            if (a.installs.isNotEmpty()) {
+                                Spacer(Modifier.width(8.dp))
+                                WpT(a.installs, 15f, p.ink, weight = FontWeight.Bold)
+                            }
+                        }
+                        Spacer(Modifier.height(5.dp))
+                        Box(Modifier.fillMaxWidth().height(W_PROMO_BAR.dp).wpRound(p.track, W_PROMO_BAR / 2f)) {
+                            if (a.fill > 0f) {
+                                Spacer(
+                                    Modifier.width((plan.rightW * a.fill).coerceAtLeast(W_PROMO_BAR).dp).height(W_PROMO_BAR.dp)
+                                        .wpRound(p.link, W_PROMO_BAR / 2f),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun WpPay(v: WView, p: WPal, w: Float, h: Float, scale: Float) {
+    val pv = v.pay ?: return
+    val plan = wPayPlan(v, w, h, scale)
+    Column(Modifier.fillMaxSize().then(PAD)) {
+        WpTodayHead(v, plan.head, p, scale)
+        if (pv.missing) {
+            Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) { WpT(wPayMissing(), 16f, p.ink, weight = FontWeight.Bold) }
+            return@Column
+        }
+        Spacer(Modifier.height(plan.gap.dp))
+        Row(Modifier.fillMaxWidth().weight(1f)) {
+            Column((if (plan.two) Modifier.width(plan.leftW.dp) else Modifier.weight(1f)).fillMaxHeight()) {
+                val bigTone = if (pv.good) p.green else p.ink
+                if (plan.halves) {
+                    Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.CenterStart) { WpT(pv.amount, plan.bigSp, bigTone, weight = FontWeight.Bold) }
+                    Column(Modifier.fillMaxWidth().weight(1f), verticalArrangement = Arrangement.Center) { WpPayMinis(pv, plan, p, scale) }
+                } else {
+                    WpT(pv.amount, plan.bigSp, bigTone, weight = FontWeight.Bold)
+                    if (plan.mini > 0) {
+                        Spacer(Modifier.weight(1f))
+                        WpPayMinis(pv, plan, p, scale)
+                    }
+                }
+            }
+            if (plan.two) {
+                WpSplitLine(p)
+                Column(Modifier.weight(1f).fillMaxHeight()) {
+                    if (pv.empty) {
+                        WpSideNote(wPayNote(), plan.note, p)
+                        return@Column
+                    }
+                    for (i in 0 until plan.rows) {
+                        if (i > 0 && i < pv.rows.size) Spacer(Modifier.fillMaxWidth().height(1.dp).background(p.line))
+                        Column(Modifier.fillMaxWidth().weight(1f), verticalArrangement = Arrangement.Center) {
+                            pv.rows.getOrNull(i)?.let { WpPayRow(it, plan, p, scale) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun WpPayMinis(pv: WPayV, plan: WPayPlan, p: WPal, scale: Float) {
+    val fc = if (pv.anyFailed) p.red else p.ink3
+    if (plan.mini >= 2) {
+        WpMiniLine(R.drawable.widget_ic_ok, pv.paid, p.green, p.green, scale)
+        Spacer(Modifier.height(3.dp))
+        WpMiniLine(R.drawable.widget_ic_fail, pv.failed, fc, fc, scale)
+    } else if (plan.mini == 1) {
+        Row(Modifier.height(wMiniH(scale).dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(painterResource(R.drawable.widget_ic_ok), null, tint = p.green, modifier = Modifier.size(14.dp))
+            Spacer(Modifier.width(6.dp))
+            WpT(pv.paid, 13f, p.green, weight = FontWeight.Bold)
+            if (plan.oneBoth) {
+                WpT(" · ", 13f, p.ink3)
+                WpT(pv.failed, 13f, fc, weight = FontWeight.Bold)
+            }
+        }
+    }
+}
+
+@Composable
+private fun WpPayRow(r: WPayRowV, plan: WPayPlan, p: WPal, scale: Float) {
+    val dash = r.name == W_DASH
+    val mark = when {
+        dash -> p.ink3
+        r.ok -> p.green
+        else -> p.red
+    }
+    val amtW = if (r.amount.isEmpty()) 0f else 8f + wTextW(r.amount, 15f, scale, true)
+    val room = plan.rightW - 15f - 8f - amtW
+    val pad = max(0f, (wLine(13.5f, scale) - 15f) / 2f)
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+        Icon(
+            painterResource(if (r.ok) R.drawable.widget_ic_ok else R.drawable.widget_ic_fail), null, tint = mark,
+            modifier = Modifier.padding(top = pad.dp).size(15.dp),
+        )
+        Spacer(Modifier.width(8.dp))
+        Column(Modifier.weight(1f)) {
+            WpT(wFit(r.name, room, 13.5f, scale, true), 13.5f, if (dash) p.ink3 else p.ink, weight = FontWeight.Bold)
+            if (plan.sub && r.sub.isNotEmpty()) {
+                WpT(wFit(r.sub, room, 12.5f, scale), 12.5f, if (r.ok) p.ink3 else p.red, Modifier.padding(top = 2.dp), FontWeight.Medium)
+            }
+        }
+        if (r.amount.isNotEmpty()) {
+            Spacer(Modifier.width(8.dp))
+            if (r.ok) WpT(r.amount, 15f, p.ink, weight = FontWeight.Bold)
+            else WpT(r.amount, 15f, p.ink3, weight = FontWeight.Medium, strike = true)
         }
     }
 }

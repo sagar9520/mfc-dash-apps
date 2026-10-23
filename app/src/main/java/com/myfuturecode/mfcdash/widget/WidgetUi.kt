@@ -79,6 +79,8 @@ internal fun WGlanceRoot(v: WView) {
         v.kind == WKind.PAISA -> WPaisa(v, p, w, h, scale, root)
         v.kind == WKind.ADS -> WTop(v, p, w, h, scale, root)
         v.kind == WKind.HEALTH -> WHealth(v, p, w, h, scale, root)
+        v.kind == WKind.PROMO -> WPromo(v, p, w, h, scale, root)
+        v.kind == WKind.PAY -> WPay(v, p, w, h, scale, root)
         else -> WAlerts(v, p, w, h, scale, root)
     }
 }
@@ -110,10 +112,10 @@ private fun wOpenIntent(ctx: Context, route: String?): Intent =
 private fun wFilter(c: Color): ColorFilter = ColorFilter.tint(ColorProvider(c))
 
 private fun wts(
-    c: Color, size: Float, weight: FontWeight = FontWeight.Normal, align: TextAlign? = null, under: Boolean = false,
+    c: Color, size: Float, weight: FontWeight = FontWeight.Normal, align: TextAlign? = null, under: Boolean = false, strike: Boolean = false,
 ): TextStyle = TextStyle(
     color = ColorProvider(c), fontSize = size.sp, fontWeight = weight, textAlign = align,
-    textDecoration = if (under) TextDecoration.Underline else null,
+    textDecoration = if (under) TextDecoration.Underline else if (strike) TextDecoration.LineThrough else null,
 )
 
 /** Gol kone wala rang: 12+ par cornerRadius, purane par gol drawable tint. */
@@ -683,6 +685,230 @@ private fun WAlerts(v: WView, p: WPal, w: Float, h: Float, scale: Float, root: G
                     }
                 }
             }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- Cross promo + Payments (4x2)
+
+/** Header: nishaan + naam, daayein hara dot + "Aaj" (purana = amber "3 ghante pehle"). */
+@Composable
+private fun WTodayHead(v: WView, head: WHeadPlan, p: WPal, scale: Float) {
+    Row(modifier = GlanceModifier.fillMaxWidth().height(wHdr(scale).dp), verticalAlignment = Alignment.CenterVertically) {
+        if (head.mark) {
+            WMark()
+            Spacer(GlanceModifier.width(7.dp))
+        }
+        Text(head.title, modifier = GlanceModifier.defaultWeight(), style = wts(p.ink, 14f, FontWeight.Medium), maxLines = 1)
+        if (head.time) {
+            Row(modifier = GlanceModifier.padding(start = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (v.dot) WLiveDot(p)
+                Text(v.time, style = wts(if (v.stale) p.amber else p.ink3, 12f, FontWeight.Medium), maxLines = 1)
+            }
+        }
+    }
+}
+
+/** Chhoti line: icon (14dp) + 6dp + number (13sp bold). */
+@Composable
+private fun WMiniLine(icon: Int, text: String, ic: Color, tc: Color, scale: Float) {
+    Row(modifier = GlanceModifier.height(wMiniH(scale).dp), verticalAlignment = Alignment.CenterVertically) {
+        Image(ImageProvider(icon), contentDescription = null, modifier = GlanceModifier.size(14.dp), colorFilter = wFilter(ic))
+        Spacer(GlanceModifier.width(6.dp))
+        Text(text, style = wts(tc, 13f, FontWeight.Bold), maxLines = 1)
+    }
+}
+
+/** Do column ke beech: 14dp + patli line + 14dp. */
+@Composable
+private fun WSplitLine(p: WPal) {
+    Spacer(GlanceModifier.width(W_GAP2.dp))
+    WVLine(p, null)
+    Spacer(GlanceModifier.width(W_GAP2.dp))
+}
+
+/** Daayein aadhe ka note ("Koi promo nahi"), beech me. */
+@Composable
+private fun WSideNote(text: String, lines: Int, p: WPal) {
+    Box(modifier = GlanceModifier.fillMaxSize(), contentAlignment = Alignment.CenterStart) {
+        Text(text, style = wts(p.ink3, 13f, FontWeight.Medium), maxLines = lines)
+    }
+}
+
+/** Cross promo: baayein aaj ke promo installs + views / clicks, daayein top 3 apps (installs + patli bar). */
+@Composable
+private fun WPromo(v: WView, p: WPal, w: Float, h: Float, scale: Float, root: GlanceModifier) {
+    val pv = v.promo ?: return
+    val plan = wPromoPlan(v, w, h, scale)
+    Column(modifier = root.padding(horizontal = W_PH.dp, vertical = W_PV.dp)) {
+        WTodayHead(v, plan.head, p, scale)
+        Spacer(GlanceModifier.height(plan.gap.dp))
+        Row(modifier = GlanceModifier.fillMaxWidth().defaultWeight()) {
+            var left = GlanceModifier.fillMaxHeight()
+            left = if (plan.two) left.width(plan.leftW.dp) else left.defaultWeight()
+            Column(modifier = left) {
+                Text(pv.installs, style = wts(p.ink, plan.bigSp, FontWeight.Bold), maxLines = 1)
+                if (plan.unit) {
+                    Text("installs".t(), modifier = GlanceModifier.padding(top = 1.dp), style = wts(p.ink2, 13f, FontWeight.Medium), maxLines = 1)
+                }
+                if (plan.mini > 0) {
+                    Spacer(GlanceModifier.defaultWeight())
+                    WMiniLine(R.drawable.widget_ic_eye, pv.views, p.ink3, p.ink2, scale)
+                    if (plan.mini > 1) {
+                        Spacer(GlanceModifier.height(3.dp))
+                        WMiniLine(R.drawable.widget_ic_click, pv.clicks, p.ink3, p.ink2, scale)
+                    }
+                }
+            }
+            if (plan.two) {
+                WSplitLine(p)
+                Column(modifier = GlanceModifier.defaultWeight().fillMaxHeight()) {
+                    if (pv.empty) {
+                        WSideNote(wPromoNote(), plan.note, p)
+                        return@Column
+                    }
+                    // 3 se kam apps: baaki jagah khaali (lines apni jagah rahein)
+                    WTopRows(plan.rows) { i ->
+                        val a = pv.rows.getOrNull(i) ?: return@WTopRows
+                        Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            val room = plan.rightW - wTextW(a.installs, 15f, scale, true) - 8f
+                            Text(
+                                wFit(a.name, room, 13f, scale, true), modifier = GlanceModifier.defaultWeight(),
+                                style = wts(if (a.name == W_DASH) p.ink3 else p.ink, 13f, FontWeight.Medium), maxLines = 1,
+                            )
+                            if (a.installs.isNotEmpty()) {
+                                Spacer(GlanceModifier.width(8.dp))
+                                Text(a.installs, style = wts(p.ink, 15f, FontWeight.Bold), maxLines = 1)
+                            }
+                        }
+                        Spacer(GlanceModifier.height(5.dp))
+                        Box(modifier = GlanceModifier.fillMaxWidth().height(W_PROMO_BAR.dp).wRound(p.track, W_PROMO_BAR / 2f)) {
+                            if (a.fill > 0f) {
+                                Spacer(
+                                    GlanceModifier.width((plan.rightW * a.fill).coerceAtLeast(W_PROMO_BAR).dp).height(W_PROMO_BAR.dp)
+                                        .wRound(p.link, W_PROMO_BAR / 2f),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Payments: baayein aaj ka ₹ (hara) + paid / failed, daayein aakhri 2 payments (beech me patli line).
+ * Server par payments.php nahi = sirf "Update server" (tap = Payments screen, wahan poori baat).
+ */
+@Composable
+private fun WPay(v: WView, p: WPal, w: Float, h: Float, scale: Float, root: GlanceModifier) {
+    val pv = v.pay ?: return
+    val plan = wPayPlan(v, w, h, scale)
+    Column(modifier = root.padding(horizontal = W_PH.dp, vertical = W_PV.dp)) {
+        WTodayHead(v, plan.head, p, scale)
+        if (pv.missing) {
+            Box(modifier = GlanceModifier.fillMaxWidth().defaultWeight(), contentAlignment = Alignment.Center) {
+                Text(wPayMissing(), style = wts(p.ink, 16f, FontWeight.Bold), maxLines = 1)
+            }
+            return@Column
+        }
+        Spacer(GlanceModifier.height(plan.gap.dp))
+        Row(modifier = GlanceModifier.fillMaxWidth().defaultWeight()) {
+            var left = GlanceModifier.fillMaxHeight()
+            left = if (plan.two) left.width(plan.leftW.dp) else left.defaultWeight()
+            Column(modifier = left) {
+                val bigTone = if (pv.good) p.green else p.ink
+                if (plan.halves) {
+                    // ₹ pehle payment ke saamne, paid / failed doosre ke (mockup)
+                    Column(modifier = GlanceModifier.fillMaxWidth().defaultWeight(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(pv.amount, style = wts(bigTone, plan.bigSp, FontWeight.Bold), maxLines = 1)
+                    }
+                    Column(modifier = GlanceModifier.fillMaxWidth().defaultWeight(), verticalAlignment = Alignment.CenterVertically) {
+                        WPayMinis(pv, plan, p, scale)
+                    }
+                } else {
+                    Text(pv.amount, style = wts(bigTone, plan.bigSp, FontWeight.Bold), maxLines = 1)
+                    if (plan.mini > 0) {
+                        Spacer(GlanceModifier.defaultWeight())
+                        WPayMinis(pv, plan, p, scale)
+                    }
+                }
+            }
+            if (plan.two) {
+                WSplitLine(p)
+                Column(modifier = GlanceModifier.defaultWeight().fillMaxHeight()) {
+                    if (pv.empty) {
+                        WSideNote(wPayNote(), plan.note, p)
+                        return@Column
+                    }
+                    for (i in 0 until plan.rows) {
+                        // beech ki line sirf jab dono taraf payment ho
+                        if (i > 0 && i < pv.rows.size) Spacer(GlanceModifier.fillMaxWidth().height(1.dp).background(p.line))
+                        Column(modifier = GlanceModifier.fillMaxWidth().defaultWeight(), verticalAlignment = Alignment.CenterVertically) {
+                            pv.rows.getOrNull(i)?.let { WPayRow(it, plan, p, scale) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** "38 paid" (hara check) / "6 failed" (laal cross; 0 = halka). mini = 1: ek line, jagah ho to " · 6 failed" bhi. */
+@Composable
+private fun WPayMinis(pv: WPayV, plan: WPayPlan, p: WPal, scale: Float) {
+    val fc = if (pv.anyFailed) p.red else p.ink3
+    if (plan.mini >= 2) {
+        WMiniLine(R.drawable.widget_ic_ok, pv.paid, p.green, p.green, scale)
+        Spacer(GlanceModifier.height(3.dp))
+        WMiniLine(R.drawable.widget_ic_fail, pv.failed, fc, fc, scale)
+    } else if (plan.mini == 1) {
+        Row(modifier = GlanceModifier.height(wMiniH(scale).dp), verticalAlignment = Alignment.CenterVertically) {
+            Image(ImageProvider(R.drawable.widget_ic_ok), contentDescription = null, modifier = GlanceModifier.size(14.dp), colorFilter = wFilter(p.green))
+            Spacer(GlanceModifier.width(6.dp))
+            Text(pv.paid, style = wts(p.green, 13f, FontWeight.Bold), maxLines = 1)
+            if (plan.oneBoth) {
+                Text(" · ", style = wts(p.ink3, 13f), maxLines = 1)
+                Text(pv.failed, style = wts(fc, 13f, FontWeight.Bold), maxLines = 1)
+            }
+        }
+    }
+}
+
+/** Ek payment: nishaan (paid / failed) | app + "9:32 pm · Yearly" | ₹ (failed = kata hua, halka). */
+@Composable
+private fun WPayRow(r: WPayRowV, plan: WPayPlan, p: WPal, scale: Float) {
+    val dash = r.name == W_DASH
+    val mark = when {
+        dash -> p.ink3
+        r.ok -> p.green
+        else -> p.red
+    }
+    val amtW = if (r.amount.isEmpty()) 0f else 8f + wTextW(r.amount, 15f, scale, true)
+    val room = plan.rightW - 15f - 8f - amtW
+    val lineH = wLine(13.5f, scale)
+    val pad = max(0f, (lineH - 15f) / 2f)
+    Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+        // Glance me padding view ke andar: (15 + pad) oonchi view, upar pad = 15dp ka nishaan pehli line ke beech
+        Image(
+            ImageProvider(if (r.ok) R.drawable.widget_ic_ok else R.drawable.widget_ic_fail), contentDescription = null,
+            modifier = GlanceModifier.width(15.dp).height((15f + pad).dp).padding(top = pad.dp), colorFilter = wFilter(mark),
+        )
+        Spacer(GlanceModifier.width(8.dp))
+        Column(modifier = GlanceModifier.defaultWeight()) {
+            Text(wFit(r.name, room, 13.5f, scale, true), style = wts(if (dash) p.ink3 else p.ink, 13.5f, FontWeight.Bold), maxLines = 1)
+            if (plan.sub && r.sub.isNotEmpty()) {
+                Text(
+                    wFit(r.sub, room, 12.5f, scale), modifier = GlanceModifier.padding(top = 2.dp),
+                    style = wts(if (r.ok) p.ink3 else p.red, 12.5f, FontWeight.Medium), maxLines = 1,
+                )
+            }
+        }
+        if (r.amount.isNotEmpty()) {
+            Spacer(GlanceModifier.width(8.dp))
+            if (r.ok) Text(r.amount, style = wts(p.ink, 15f, FontWeight.Bold), maxLines = 1)
+            else Text(r.amount, style = wts(p.ink3, 15f, FontWeight.Medium, strike = true), maxLines = 1)
         }
     }
 }

@@ -91,6 +91,10 @@ data class TopSpendApp(
 private fun topAppName(d: DashData, pkg: String, per: PerApp?): String =
     d.apps.firstOrNull { it.pkg == pkg }?.name?.ifBlank { null } ?: per?.name?.ifBlank { null } ?: pkg.substringAfterLast('.')
 
+/** App ka naam (widgets): data.php ki apps list, warna per_app ka, warna package ka aakhri hissa. d nahi = aakhri hissa. */
+fun dashAppName(d: DashData?, pkg: String): String =
+    if (d == null) pkg.substringAfterLast('.') else topAppName(d, pkg, d.perApp.firstOrNull { it.pkg == pkg })
+
 /** Aaj sabse zyada Google Ads kharch wale n apps (data.php per_app; kharcha 0 wale nahi). Kul kharcha = kpi.gadsCostInr. */
 fun topSpendApps(d: DashData, n: Int = 3): List<TopSpendApp> =
     d.perApp.filter { it.pkg.isNotBlank() && it.gadsCostInr.isFinite() && it.gadsCostInr > 0 }
@@ -307,3 +311,40 @@ private fun playLabel(title: String, titleHi: String): String {
         else -> "Play mail"
     }
 }
+
+// ---------------------------------------------------------------- Cross promo: aaj ke top promote hue apps
+
+/** Ek promote hua app (crosspromo.php ka tgt): promo se installs, views, clicks. */
+data class TopPromoApp(val pkg: String, val name: String, val installs: Double, val views: Double, val clicks: Double)
+
+/** Cross promo ka jod: kul installs / views / clicks + top apps. */
+data class PromoTop(val installs: Double, val views: Double, val clicks: Double, val top: List<TopPromoApp>)
+
+/**
+ * crosspromo.php rows se: kul (Cross promo screen ke hero jaisa) + tgt ke hisaab se jode n apps, installs zyada -> kam
+ * (barabar ho to views; screen ki list jaisa). Khaali tgt nahi. name = pkg -> naam.
+ */
+fun promoTop(rows: List<CpRow>, name: (String) -> String, n: Int = 3): PromoTop {
+    val fin = { v: Double -> if (v.isFinite()) v else 0.0 }
+    val top = rows.filter { it.tgt.isNotBlank() }.groupBy { it.tgt }.map { (p, l) ->
+        TopPromoApp(p, name(p), l.sumOf { fin(it.installs) }, l.sumOf { fin(it.views) }, l.sumOf { fin(it.clicks) })
+    }.sortedWith(compareByDescending<TopPromoApp> { it.installs }.thenByDescending { it.views }).take(n)
+    return PromoTop(rows.sumOf { fin(it.installs) }, rows.sumOf { fin(it.views) }, rows.sumOf { fin(it.clicks) }, top)
+}
+
+// ---------------------------------------------------------------- Payments: aaj ke aakhri payments
+
+/** Ek payment ka chhota roop: app, server ka local waqt ("yyyy-MM-dd HH:mm:ss"), plan (product id), ₹, paid ya failed, wajah. */
+data class PayLast(val pkg: String, val name: String, val ts: String, val plan: String, val amount: Double, val paid: Boolean, val reason: String)
+
+/**
+ * payments.php items sirf app=<pkg> par deta hai: kin apps ke items laane hain. Jinme paid / failed hua, sabse zyada wale
+ * pehle (aakhri payment unhi me hone ke chance zyada), n tak.
+ */
+fun payItemApps(apps: List<PayApp>, n: Int = 4): List<String> =
+    apps.filter { it.pkg.isNotBlank() && it.paid + it.failed > 0 }.sortedByDescending { it.paid + it.failed }.take(n).map { it.pkg }
+
+/** Sabse naye n payments, naya pehle; sirf paid / failed ("started" = adhoora, payment nahi). name = pkg -> naam. */
+fun payLast(items: List<PayItem>, name: (String) -> String, n: Int = 2): List<PayLast> =
+    items.filter { it.paid || it.failed }.sortedByDescending { it.ts }.take(n)
+        .map { PayLast(it.pkg, name(it.pkg), it.ts, it.plan, if (it.amount.isFinite()) it.amount else 0.0, it.paid, it.reason) }

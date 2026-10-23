@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Payments preview ki ek line: nishaan + app ("—") -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="0dp"
+    android:layout_weight="1"
+    android:gravity="center_vertical"
+    android:orientation="horizontal">
+
+    <ImageView
+        android:layout_width="15dp"
+        android:layout_height="15dp"
+        android:layout_marginEnd="8dp"
+        android:importantForAccessibility="no"
+        android:src="@drawable/widget_ic_ok"
+        android:tint="#FF6A6876" />
+
+    <TextView
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:maxLines="1"
+        android:text="@string/widget_pv_dash"
+        android:textColor="#FF6A6876"
+        android:textSize="13.5sp"
+        android:textStyle="bold" />
+</LinearLayout>

@@ -5,11 +5,15 @@
     <string name="widget_ads_label">MFC Ads + Live</string>
     <string name="widget_health_label">MFC App Health</string>
     <string name="widget_alerts_label">MFC Alerts</string>
+    <string name="widget_promo_label">MFC Cross promo</string>
+    <string name="widget_pay_label">MFC Payments</string>
 
     <string name="widget_paisa_desc">Profit, ROAS, earnings, ad spend, live users</string>
     <string name="widget_ads_desc">Top ad accounts with budget, top live apps</string>
     <string name="widget_health_desc">Apps with issues, top 3 to fix</string>
     <string name="widget_alerts_desc">Newest open alerts, most urgent first</string>
+    <string name="widget_promo_desc">Promo installs today, top 3 apps</string>
+    <string name="widget_pay_desc">Payments today, paid and failed, last 2</string>
 
     <string name="widget_pv_profit">Today\'s profit</string>
     <string name="widget_pv_roas">ROAS</string>
@@ -28,4 +32,10 @@
     <string name="widget_pv_fine">fine</string>
     <string name="widget_pv_alerts_title">Alerts</string>
     <string name="widget_pv_dash">—</string>
+    <string name="widget_pv_promo_title">Cross promo</string>
+    <string name="widget_pv_pay_title">Payments</string>
+    <string name="widget_pv_today_cap">Today</string>
+    <string name="widget_pv_installs">installs</string>
+    <string name="widget_pv_paid">— paid</string>
+    <string name="widget_pv_failed">— failed</string>
 </resources>
