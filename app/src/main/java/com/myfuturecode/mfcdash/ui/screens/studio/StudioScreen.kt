@@ -34,6 +34,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -121,13 +122,14 @@ import kotlinx.coroutines.delay
 import org.json.JSONObject
 
 val STABS = listOf(
-    "overview" to "Overview", "research" to "Research & Ranking", "mine" to "Your apps", "projects" to "Projects", "approvals" to "Approvals", "history" to "History",
+    "overview" to "Overview", "research" to "Research & Ranking", "discovery" to "Daily discovery", "mine" to "Your apps", "projects" to "Projects", "approvals" to "Approvals", "history" to "History",
     "runs" to "Runs", "sources" to "Data sources", "settings" to "Settings",
 )
 
 private fun tabIcon(k: String): ImageVector = when (k) {
     "overview" -> KIcons.Bulb
     "research" -> KIcons.Chart
+    "discovery" -> KIcons.Search
     "mine" -> KIcons.Rupee
     "projects" -> KIcons.Apps
     "approvals" -> KIcons.DoneAll
@@ -161,9 +163,10 @@ private fun sSortOpts(tab: String): List<Pair<String, String>> = when (tab) {
 /**
  * AI App Research Studio: research -> ranking -> Gate 1 -> competitor analysis -> Gate 2. Kabhi khud publish nahi karta.
  * Overview = mockup (hero, OK chahiye, top ideas, budget); baaki tab ⋮ menu / "Aur" list se, back = overview.
+ * run > 0 = run detail ka "See findings" (us run ki Daily discovery).
  */
 @Composable
-fun StudioScreen(vm: StudioVm, nav: NavHostController, startTab: String) {
+fun StudioScreen(vm: StudioVm, nav: NavHostController, startTab: String, run: Long = 0L) {
     val g by vm.s.collectAsStateWithLifecycle()
     val start = if (startTab == "ranking") "research" else startTab
     val first = if (STABS.any { it.first == start }) start else "overview"
@@ -171,7 +174,18 @@ fun StudioScreen(vm: StudioVm, nav: NavHostController, startTab: String) {
     var idea by remember { mutableStateOf(false) }
     val reload = remember { mutableIntStateOf(0) }
     val r = reload.intValue
-    val go: (String) -> Unit = { tab = it }
+    // Daily discovery: calendar se chuna din (artifact id) / run detail wala run
+    var discSel by rememberSaveable { mutableStateOf("") }
+    var discRun by rememberSaveable { mutableLongStateOf(run) }
+    val discP = discParams(discSel, discRun)
+    val go: (String) -> Unit = { k ->
+        // dusre tab se discovery = sabse naya din
+        if (k == "discovery" && tab != "discovery") {
+            discSel = ""
+            discRun = 0L
+        }
+        tab = k
+    }
     KLoadOnChange(tab)   // user ne tab badla = upar ki line
     val back: () -> Unit = {
         if (tab != first) {
@@ -188,17 +202,18 @@ fun StudioScreen(vm: StudioVm, nav: NavHostController, startTab: String) {
     var mineSeg by rememberSaveable { mutableIntStateOf(0) }
     val bar: @Composable ColumnScope.() -> Unit = {
         val barSort = if (tab == "mine" && !mineSortOn(mineSeg, isWide())) null else sort
-        StudioBar(tab, g, back, go, { idea = true }, { reload.intValue++ }, barSort)
+        StudioBar(tab, g, back, go, { idea = true }, { reload.intValue++ }, barSort, discP) { discSel = it }
     }
     if (tab == "overview") OverviewPage(g, vm, nav, r, bar, go)
-    else key(tab) { TabBody(tab, g, vm, nav, r, go, sort, bar, mineSeg) { mineSeg = it } }
+    else key(tab) { TabBody(tab, g, vm, nav, r, go, sort, bar, mineSeg, discP) { mineSeg = it } }
     if (idea) IdeaDialog(g, vm, nav) { idea = false }
 }
 
-/** Upar ki patti: back + naam + ⋮ (saare tabs, apna idea, refresh). */
+/** Upar ki patti: back + naam + ⋮ (saare tabs, apna idea, refresh). Daily discovery: calendar (pichhle din). */
 @Composable
 private fun StudioBar(
     tab: String, g: GState, back: () -> Unit, go: (String) -> Unit, onIdea: () -> Unit, onRefresh: () -> Unit, sort: KSortState? = null,
+    discP: Map<String, String> = emptyMap(), onDiscPick: (String) -> Unit = {},
 ) {
     KPullAction(onRefresh)   // refresh sirf ⋮ menu me: upar se kheencho = yahi
     val o = g.view("overview")
@@ -207,6 +222,7 @@ private fun StudioBar(
     val sub = when (tab) {
         "overview" -> o?.let { tf("%s ideas", num(ideaTotal(it).toDouble())) } ?: sUpdated(g)
         "mine" -> mineSub(g) ?: "Research Studio".t()
+        "discovery" -> discSub(g, discP) ?: "Research Studio".t()
         else -> "Research Studio".t()
     }
     KDetailBar(
@@ -215,6 +231,7 @@ private fun StudioBar(
             // filter nahi (list ke upar dropdowns), isliye Sort pehla
             if (sort != null) KSortButton(sort, sSortOpts(tab), S_SORT_KINDS)
             if (tab == "research") KBarIcon(KIcons.Plus, "Add your own idea".t(), onIdea)
+            if (tab == "discovery") DiscDayPicker(g, discP, onDiscPick)
             Box {
                 KBarIcon(KIcons.More, "More".t(), { menu = true }, badge = if (tab == "overview") 0 else pend, badgeUrgent = false)
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
@@ -248,14 +265,17 @@ private fun StudioBar(
     )
 }
 
-/** Tab ka page. "mine" ka hero top me (Overview jaisa), isliye woh apna KScreen khud banata hai. */
+/** Tab ka page. "mine" / "discovery" ka hero top me (Overview jaisa), isliye woh apna KScreen khud banate hain. */
 @Composable
 private fun TabBody(
     tab: String, g: GState, vm: StudioVm, nav: NavHostController, reload: Int, go: (String) -> Unit, sort: KSortState?,
-    bar: @Composable ColumnScope.() -> Unit, mineSeg: Int, onMineSeg: (Int) -> Unit,
+    bar: @Composable ColumnScope.() -> Unit, mineSeg: Int, discP: Map<String, String>, onMineSeg: (Int) -> Unit,
 ) {
-    if (tab == "mine") MinePage(g, vm, nav, reload, bar, sort, mineSeg, onMineSeg)
-    else KScreen(top = bar) { TabList(tab, g, vm, nav, reload, go, sort) }
+    when (tab) {
+        "mine" -> MinePage(g, vm, nav, reload, bar, sort, mineSeg, onMineSeg)
+        "discovery" -> DiscoveryPage(g, vm, reload, bar, discP)
+        else -> KScreen(top = bar) { TabList(tab, g, vm, nav, reload, go, sort) }
+    }
 }
 
 @Composable
@@ -314,6 +334,7 @@ private fun OverviewPage(g: GState, vm: StudioVm, nav: NavHostController, reload
                     left = {
                         StudioHero(ov)
                         OkSection(ov, nav, go)
+                        DiscoverySection(ov, go)
                         MineSection(ov, g, vm, go)
                         TopIdeas(ov, nav, go)
                         BudgetCard(ov, go)
@@ -331,6 +352,7 @@ private fun OverviewPage(g: GState, vm: StudioVm, nav: NavHostController, reload
         KScreen(top = { bar(); if (o != null) StudioHero(o) else if (sSkelOn(g, o)) KSkelHero(KTint.Lav) }) {
             SLoad(g, o, { vm.load("overview") }, { OverviewSkel(false) }) { ov ->
                 OkSection(ov, nav, go)
+                DiscoverySection(ov, go)
                 MineSection(ov, g, vm, go)
                 TopIdeas(ov, nav, go)
                 BudgetCard(ov, go)
@@ -350,6 +372,8 @@ private fun OverviewSkel(wide: Boolean) {
         val left: @Composable ColumnScope.() -> Unit = {
             KSkelSection()
             KSkelRows(2)
+            KSkelSection(width = 130.dp)   // Latest discovery
+            KSkelRows(3)
             KSkelSection(width = 100.dp)   // Your apps
             KSkelCard(3)
             KSkelSection(width = 110.dp)
@@ -524,6 +548,14 @@ private fun MoreCard(o: JSONObject, go: (String) -> Unit) {
             lead = { KIconTile(tabIcon("research")) }, chevron = true, onClick = { go("research") },
         )
         KListDivider(true)
+        // key hi nahi (purana server / cache) = row nahi; null = abhi koi khoj nahi
+        if (o.has("discovery")) {
+            KRow(
+                "Daily discovery".t(), sub = discMoreSub(o),
+                lead = { KIconTile(tabIcon("discovery")) }, chevron = true, onClick = { go("discovery") },
+            )
+            KListDivider(true)
+        }
         // key hi nahi (purana server / cache) = row nahi; null = job kabhi nahi chala
         if (o.has("mine")) {
             val mine = o.optJSONObject("mine")

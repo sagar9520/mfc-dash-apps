@@ -85,11 +85,12 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** Research Studio email link: mfcdash://studio/project/3, /opp/12, /run/5, /<tab>. */
+    /** Research Studio email link: mfcdash://studio/project/3, /opp/12, /run/5, /discovery/run/7, /<tab>. */
     private fun studioRoute(seg: List<String>): String {
         val id = seg.getOrNull(1)?.toLongOrNull()
         return when (seg.firstOrNull()) {
             "project", "opp", "run" -> if (id != null) "studio/${seg[0]}/$id" else "studio"
+            "discovery" -> seg.getOrNull(2)?.toLongOrNull()?.takeIf { seg.getOrNull(1) == "run" }?.let { "studio/discovery/run/$it" } ?: "studio/discovery"
             null, "" -> "studio"
             else -> seg[0].let { t -> if (t.matches(Regex("[a-z]+"))) "studio/$t" else "studio" }
         }

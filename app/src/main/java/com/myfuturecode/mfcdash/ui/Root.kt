@@ -242,6 +242,10 @@ private fun AppNav(nav: NavHostController, vm: DashVm, st: UiState, hvm: HealthV
         composable("studio/run/{id}", arguments = listOf(navArgument("id") { type = NavType.LongType })) {
             StudioRunScreen(svm, nav, it.arguments?.getLong("id") ?: 0L)
         }
+        // run detail ka "See findings": us discover run ki Daily discovery
+        composable("studio/discovery/run/{id}", arguments = listOf(navArgument("id") { type = NavType.LongType })) {
+            StudioScreen(svm, nav, "discovery", it.arguments?.getLong("id") ?: 0L)
+        }
         composable("studio/compare/{ids}", arguments = listOf(navArgument("ids") { type = NavType.StringType })) {
             StudioCompareScreen(svm, nav, it.arguments?.getString("ids") ?: "")
         }

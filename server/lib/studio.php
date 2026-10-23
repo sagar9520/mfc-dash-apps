@@ -1175,18 +1175,235 @@ function st_web_notes(PDO $pdo, StRun $run, string $theme, string $question, arr
     return ["## Notes: $theme\n" . $r['text'] . "\n\nSources:\n" . $list, $map];
 }
 
+// ---------------------------------------------------------------- daily discovery (structured findings)
+const ST_DISC_TYPES = ['NEW_APP', 'COMPETITOR', 'POLICY', 'ADS', 'OTHER'];
+const ST_DISC_MAX = 8;         // ek din me max findings
+const ST_DISC_TITLE = 60;      // title ki hard limit (prompt 45 maangta hai; thoda zyada aaye to bhi '…' nahi)
+const ST_DISC_DETAIL = 140;    // detail ki hard limit (prompt 100)
+// weekly ranking: 7 din (dono sire shamil) = 8 roz ke scan tak poore. Manual scan se zyada ho to sabse purane chhoot-te hain (poora scan, aadha nahi) aur unka used_in_ranking false
+const ST_DISC_RANK_MAX = ST_DISC_MAX * 8;
+
+/**
+ * Daily scan: (1) web notes (search) -> (2) dusri sasti AI call (bina search) notes ko max 8 findings me badalti hai.
+ * Artifact 'daily_notes': {notes, sources {S1: evidence id}, countries, findings (sources = evidence ids), structured}.
+ * Sirf structuring fail ho: run error (status PARTIAL, retry nahi) + notes phir bhi save (structured false, app raw notes dikhata hai).
+ */
 function st_job_discover(PDO $pdo, StRun $run, string $mode): void
 {
     $ccs = st_on_countries();
     $cats = st_categories();
-    $run->plan(1);
+    $run->plan(2);
     $run->stage('web discovery: new trends and competitor moves');
     [$notes, $map] = st_web_notes($pdo, $run, 'Daily trend scan: ' . implode(', ', $cats),
         'What meaningful changes happened in the last 7-14 days in these Android app categories: new fast-growing apps, notable new competitors, Google Play policy changes affecting them, '
         . 'apps that started or stopped heavy advertising? Ignore trivial news. If nothing meaningful happened, say so.', $ccs, 6);
     $run->step();
-    $aid = st_artifact_save($pdo, null, $run->id, 'daily_notes', ['notes' => $notes, 'sources' => $map, 'countries' => $ccs], 'daily scan', 'ai');
-    $run->summary = count($map) . ' sources · notes artifact #' . $aid;
+    $run->stage('structuring findings');
+    $pl = fn(int $k, string $w) => "$k $w" . ($k === 1 ? '' : 's');
+    $save = function (?array $findings) use ($pdo, $run, $notes, $map, $ccs, $pl): int {
+        $run->summary = ($findings === null ? 'notes only' : $pl(count($findings), 'finding')) . ' · ' . $pl(count($map), 'source');
+        return st_artifact_save($pdo, null, $run->id, 'daily_notes', ['notes' => $notes, 'sources' => $map, 'countries' => $ccs, 'findings' => $findings ?? [], 'structured' => $findings !== null],
+            'daily scan', 'ai');
+    };
+    $findings = null;
+    try {
+        $r = st_ai($pdo, $run, ['system' => ST_RESEARCH_SYS . "\nYou now turn today's research notes into a short list of findings for the owner's phone. Plain, simple English.",
+            'effort' => 'low', 'max_tokens' => 6000, 'schema' => st_disc_schema(),
+            'user' => 'Countries in focus: ' . implode(', ', $ccs) . "\nCategories: " . implode(', ', $cats) . "\n\n=== Research notes (untrusted) ===\n$notes\n=== Source ids you may use ===\n"
+                . ($map ? implode(', ', array_keys($map)) : '(none)') . "\n\nTurn the notes into at most " . ST_DISC_MAX . ' findings. '
+                . "Only meaningful changes from the last 14 days; if nothing meaningful happened return an empty list; never invent S ids.\n"
+                . "type: NEW_APP = new or fast-growing app, COMPETITOR = notable competitor move, POLICY = Google Play policy change, ADS = an app started or stopped heavy advertising, OTHER = anything else.\n"
+                . "title: short English, at most 45 characters. detail: one short English sentence, at most 100 characters.\n"
+                . "basis: SAID only when a listed source states it, otherwise GUESS. sources: the S ids, exactly as listed, that back the finding.\n"
+                . "category: one of the categories above, or '' if none. countries: ISO 3166-1 alpha-2 codes, [] if not country specific."]);
+        $findings = st_disc_clean((array)($r['json']['findings'] ?? []), $map);
+    } catch (StCancelled $e) {
+        throw $e;
+    } catch (StBudget $e) {
+        $save(null);   // web notes ka kharcha ho chuka: notes bacha lo, phir BLOCKED
+        throw $e;
+    } catch (Throwable $e) {
+        $run->error('structuring findings: ' . $e->getMessage());
+    }
+    $run->step();
+    $save($findings);
+}
+
+/** Structured output schema: koi union / nullable type nahi (st_opp_schema ka note), har property required, additionalProperties false. */
+function st_disc_schema(): array
+{
+    $f = ['type' => 'object', 'properties' => [
+        'type' => ['type' => 'string', 'enum' => ST_DISC_TYPES],
+        'title' => ['type' => 'string', 'description' => 'short English, at most 45 characters'],
+        'detail' => ['type' => 'string', 'description' => 'one short English sentence, at most 100 characters'],
+        'basis' => ['type' => 'string', 'enum' => ['SAID', 'GUESS'], 'description' => 'SAID only when a listed source states it'],
+        'sources' => ['type' => 'array', 'items' => ['type' => 'string'], 'description' => 'S ids exactly as listed'],
+        'category' => ['type' => 'string', 'description' => "'' if none"],
+        'countries' => ['type' => 'array', 'items' => ['type' => 'string'], 'description' => 'ISO 3166-1 alpha-2 codes']],
+        'required' => ['type', 'title', 'detail', 'basis', 'sources', 'category', 'countries'], 'additionalProperties' => false];
+    return ['type' => 'object', 'properties' => ['findings' => ['type' => 'array', 'items' => $f]], 'required' => ['findings'], 'additionalProperties' => false];
+}
+
+/** Trim + whitespace ek space + cut (lamba ho to '…' ke saath, kul n chars tak). */
+function st_disc_txt($v, int $n): string
+{
+    $s = trim((string)preg_replace('/\s+/u', ' ', is_scalar($v) ? (string)$v : ''));
+    return mb_strlen($s) > $n ? rtrim(st_cut($s, $n - 1)) . '…' : $s;
+}
+
+/**
+ * AI findings saaf: anjaan S id drop, S -> evidence id ($map), strings trim/cut (ST_DISC_TITLE / ST_DISC_DETAIL), countries ISO2 (uppercase), khaali title drop, AI ka order, max ST_DISC_MAX.
+ * SAID tabhi jab koi asli source bacha ho; warna GUESS. Type enum se bahar = OTHER.
+ */
+function st_disc_clean(array $raw, array $map): array
+{
+    $out = [];
+    foreach ($raw as $f) {
+        if (!is_array($f)) continue;
+        $title = st_disc_txt($f['title'] ?? '', ST_DISC_TITLE);
+        if ($title === '') continue;
+        $src = [];
+        foreach ((array)($f['sources'] ?? []) as $s) {
+            $k = is_scalar($s) ? strtoupper(trim((string)$s)) : '';
+            if (isset($map[$k])) $src[] = (int)$map[$k];
+        }
+        $src = array_values(array_unique($src));
+        $ccs = [];
+        foreach ((array)($f['countries'] ?? []) as $c) {
+            $c = is_string($c) ? strtoupper(trim($c)) : '';
+            if (preg_match('/^[A-Z]{2}$/', $c)) $ccs[] = $c;
+        }
+        $out[] = ['type' => in_array($f['type'] ?? '', ST_DISC_TYPES, true) ? (string)$f['type'] : 'OTHER', 'title' => $title, 'detail' => st_disc_txt($f['detail'] ?? '', ST_DISC_DETAIL),
+            'basis' => ($f['basis'] ?? '') === 'SAID' && $src ? 'SAID' : 'GUESS', 'category' => st_disc_txt($f['category'] ?? '', 60), 'countries' => array_values(array_unique($ccs)), 'sources' => $src];
+        if (count($out) >= ST_DISC_MAX) break;
+    }
+    return $out;
+}
+
+/** Evidence ids -> [id => {id, title, url, page_age}]; jo row nahi mili wo skip. */
+function st_disc_sources(PDO $pdo, array $ids): array
+{
+    $ids = array_values(array_unique(array_filter(array_map('intval', $ids), fn($i) => $i > 0)));
+    if (!$ids) return [];
+    $out = [];
+    foreach (h_q($pdo, 'SELECT id, title, url, page_age FROM st_evidence WHERE id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')', $ids) as $e)
+        $out[(int)$e['id']] = ['id' => (int)$e['id'], 'title' => (string)$e['title'], 'url' => (string)$e['url'], 'page_age' => (string)$e['page_age']];
+    return $out;
+}
+
+/**
+ * Weekly ranking ke liye: rank run ke start se pichhle 7 din ki findings, newest first, title (lowercase) par dedupe (naya jeetta), max ST_DISC_RANK_MAX.
+ * Cap poore scan par: scan ya to poora padha ya bilkul nahi. $read = jo scan padhe (ranking artifact me 'discovery_ids', used_in_ranking isi se).
+ * Sirf duplicate wala scan bhi padha gina (uski baat naye scan ke through gayi).
+ * Har source ko S number $n se aage + $smap me evidence id (category notes jaisa), taaki ranking cite kar sake. Kuch na ho to ''.
+ */
+function st_disc_context(PDO $pdo, int $runId, int &$n, array &$smap, array &$read = []): string
+{
+    $ref = (string)(h_q1($pdo, 'SELECT COALESCE(started_at, UTC_TIMESTAMP()) FROM st_runs WHERE id = ?', [$runId]) ?? st_now());
+    $pick = []; $seen = [];
+    foreach (h_q($pdo, "SELECT id, content FROM st_artifacts WHERE project_id IS NULL AND kind = 'daily_notes' AND created_at >= DATE_SUB(?, INTERVAL 7 DAY) AND created_at <= ?
+        ORDER BY created_at DESC, id DESC", [$ref, $ref]) as $a) {
+        $c = st_dec($a['content'], []);
+        if (!is_array($c) || ($c['structured'] ?? false) !== true) continue;
+        $new = []; $has = false;
+        foreach ((array)($c['findings'] ?? []) as $f) {
+            $key = is_array($f) ? mb_strtolower(trim((string)($f['title'] ?? ''))) : '';
+            if ($key === '') continue;
+            $has = true;
+            if (!isset($seen[$key]) && !isset($new[$key])) $new[$key] = $f;
+        }
+        if (!$has) continue;   // khaali scan: ranking ne kuch nahi padha
+        if (count($pick) + count($new) > ST_DISC_RANK_MAX) break;
+        foreach ($new as $key => $f) { $seen[$key] = true; $pick[] = $f; }
+        $read[] = (int)$a['id'];
+    }
+    if (!$pick) return '';
+    $ev = st_disc_sources($pdo, array_merge(...array_map(fn($f) => (array)($f['sources'] ?? []), $pick)));
+    $sOf = []; $lines = ''; $list = '';
+    foreach ($pick as $f) {
+        $refs = [];
+        foreach ((array)($f['sources'] ?? []) as $id) {
+            $id = (int)$id;
+            if (!isset($ev[$id])) continue;   // evidence row nahi: cite nahi
+            if (!isset($sOf[$id])) {
+                $n++; $sOf[$id] = 'S' . $n; $smap['S' . $n] = $id;
+                $list .= "S$n: {$ev[$id]['title']} <{$ev[$id]['url']}>" . ($ev[$id]['page_age'] !== '' ? " ({$ev[$id]['page_age']})" : '') . "\n";
+            }
+            $refs[] = $sOf[$id];
+        }
+        $d = trim((string)($f['detail'] ?? ''));
+        $lines .= '- [' . (in_array($f['type'] ?? '', ST_DISC_TYPES, true) ? $f['type'] : 'OTHER') . '] ' . trim((string)$f['title']) . ($d !== '' ? ": $d" : '')
+            . ($refs ? ' (' . implode(', ', array_unique($refs)) . ')' : '') . (($f['basis'] ?? '') === 'SAID' ? ' [SOURCE SAYS]' : ' [MY INFERENCE]') . "\n";
+    }
+    return "## Daily discovery (last 7 days)\nFindings from the daily web scans, newest first.\n$lines" . ($list !== '' ? "\nSources:\n$list" : '');
+}
+
+/**
+ * Pehli rank run (DONE/PARTIAL) jo is discovery ke baad 7 din ke andar shuru hui AUR jisne ise sach me padha (ranking artifact ki discovery_ids):
+ * uska started_at, warna null. Purani ranking (discovery_ids nahi) ne discovery nahi padhi = null.
+ */
+function st_disc_ranked(PDO $pdo, int $artId, string $createdAt): ?string
+{
+    foreach (h_q($pdo, "SELECT r.started_at, a.content FROM st_runs r JOIN st_artifacts a ON a.run_id = r.id AND a.kind = 'ranking' AND a.project_id IS NULL
+        WHERE r.job = 'rank' AND r.status IN ('DONE','PARTIAL') AND r.started_at >= ? AND r.started_at <= DATE_ADD(?, INTERVAL 7 DAY) ORDER BY r.started_at, r.id", [$createdAt, $createdAt]) as $r) {
+        $c = st_dec($r['content'], []);
+        if (is_array($c) && in_array($artId, array_map('intval', (array)($c['discovery_ids'] ?? [])), true)) return (string)$r['started_at'];
+    }
+    return null;
+}
+
+/** daily_notes artifact -> app shape (api/studio.php view=discovery). Purana artifact (findings nahi) / structuring fail = structured false + raw notes. */
+function st_disc_item(PDO $pdo, array $a): array
+{
+    $c = st_dec($a['content'], []);
+    if (!is_array($c)) $c = [];
+    $structured = ($c['structured'] ?? false) === true && is_array($c['findings'] ?? null);
+    $raw = $structured ? array_values(array_filter($c['findings'], 'is_array')) : [];
+    $smap = is_array($c['sources'] ?? null) ? $c['sources'] : [];
+    uksort($smap, fn($x, $y) => (int)substr((string)$x, 1) <=> (int)substr((string)$y, 1));   // S order (S2 < S10)
+    $ids = array_values($smap);
+    foreach ($raw as $f) foreach ((array)($f['sources'] ?? []) as $id) $ids[] = $id;
+    $ev = st_disc_sources($pdo, $ids);
+    $res = fn(array $l) => array_values(array_filter(array_map(fn($id) => $ev[(int)$id] ?? null, $l)));
+    $counts = ['new_app' => 0, 'competitor' => 0, 'policy' => 0, 'ads' => 0, 'other' => 0];
+    $findings = [];
+    foreach ($raw as $f) {
+        $type = in_array($f['type'] ?? '', ST_DISC_TYPES, true) ? (string)$f['type'] : 'OTHER';
+        $counts[strtolower($type)]++;
+        $findings[] = ['type' => $type, 'title' => (string)($f['title'] ?? ''), 'detail' => (string)($f['detail'] ?? ''), 'basis' => ($f['basis'] ?? '') === 'SAID' ? 'SAID' : 'GUESS',
+            'category' => (string)($f['category'] ?? ''), 'countries' => array_values(array_map('strval', (array)($f['countries'] ?? []))),
+            'sources' => $res(array_values(array_unique(array_map('intval', (array)($f['sources'] ?? [])))))];
+    }
+    $at = $findings ? st_disc_ranked($pdo, (int)$a['id'], (string)$a['created_at']) : null;   // bina findings ke rank ne kuch nahi padha
+    return ['id' => (int)$a['id'], 'run_id' => (int)$a['run_id'], 'created_at' => (string)$a['created_at'], 'structured' => $structured,
+        'countries' => array_values(array_map('strval', (array)($c['countries'] ?? []))), 'used_in_ranking' => $at !== null, 'ranking_at' => $at, 'counts' => $counts,
+        'findings' => $findings, 'sources' => $res(array_values($smap)), 'notes' => $structured ? '' : (string)($c['notes'] ?? '')];
+}
+
+/** view=discovery: latest / id / run ka artifact + pichhle 30 din (newest first). Na mile to item null. */
+function st_disc_view(PDO $pdo, int $id, int $runId): array
+{
+    $w = "project_id IS NULL AND kind = 'daily_notes'";
+    if ($id > 0) $a = h_q($pdo, "SELECT * FROM st_artifacts WHERE $w AND id = ?", [$id]);
+    elseif ($runId > 0) $a = h_q($pdo, "SELECT * FROM st_artifacts WHERE $w AND run_id = ? ORDER BY id DESC LIMIT 1", [$runId]);
+    else $a = h_q($pdo, "SELECT * FROM st_artifacts WHERE $w ORDER BY created_at DESC, id DESC LIMIT 1");
+    $days = [];
+    foreach (h_q($pdo, "SELECT id, run_id, created_at, content FROM st_artifacts WHERE $w ORDER BY created_at DESC, id DESC LIMIT 30") as $d) {
+        $c = st_dec($d['content'], []);
+        $days[] = ['id' => (int)$d['id'], 'run_id' => (int)$d['run_id'], 'created_at' => (string)$d['created_at'],
+            'findings' => is_array($c) && ($c['structured'] ?? false) === true ? count(array_filter((array)($c['findings'] ?? []), 'is_array')) : 0];
+    }
+    return ['item' => $a ? st_disc_item($pdo, $a[0]) : null, 'days' => $days];
+}
+
+/** overview.discovery: latest daily_notes ka saar (top = pehli 3 findings), ya null. */
+function st_disc_brief(PDO $pdo): ?array
+{
+    $a = h_q($pdo, "SELECT * FROM st_artifacts WHERE project_id IS NULL AND kind = 'daily_notes' ORDER BY created_at DESC, id DESC LIMIT 1");
+    if (!$a) return null;
+    $it = st_disc_item($pdo, $a[0]);
+    return ['id' => $it['id'], 'run_id' => $it['run_id'], 'created_at' => $it['created_at'], 'structured' => $it['structured'], 'total' => count($it['findings']), 'used_in_ranking' => $it['used_in_ranking'],
+        'top' => array_map(fn($f) => ['type' => $f['type'], 'title' => $f['title'], 'sources' => count($f['sources'])], array_slice($it['findings'], 0, 3))];
 }
 
 /**
@@ -1297,7 +1514,10 @@ function st_job_rank(PDO $pdo, StRun $run): void
                 "Find Android app opportunities in '$cat': (A) ORGANIC signals: apps or niches growing in Google Play charts or search interest, new competitors rising fast, weak incumbents with many complaints, under-served needs; "
                 . "(B) PAID signals: apps visibly advertising heavily over time (many ad creatives, multiple countries). Name real apps (with package name if the source shows it) and what users complain about. "
                 . "Do not claim revenue or downloads unless a source states them.", $ccs, 5);
-            foreach ($map as $k => $v) { $n++; $smap['S' . $n] = $v; $notes = preg_replace('/\b' . $k . ':/', 'S' . $n . ':', $notes, 1); }
+            // S1.. -> aage ke number, ek hi pass me (ek-ek replace karne par naya S6 baad me purane S6 se takra jaata tha)
+            $ren = [];
+            foreach ($map as $k => $v) { $n++; $smap['S' . $n] = $v; $ren[$k] = 'S' . $n; }
+            $notes = preg_replace_callback('/^(S\d+):/m', fn($m) => isset($ren[$m[1]]) ? $ren[$m[1]] . ':' : $m[0], $notes);
             $allNotes .= $notes . "\n\n";
         } catch (StBudget $e) { throw $e; } catch (Throwable $e) { $run->error("$cat: " . $e->getMessage()); }
         $run->step();
@@ -1321,6 +1541,10 @@ function st_job_rank(PDO $pdo, StRun $run): void
     }
     $run->step();
     if ($allNotes === '') throw new RuntimeException('no research notes collected');
+    // daily discovery: pichhle 7 din ki findings bhi notes me (S numbers aage se, evidence ki tarah cite ho sakti hain)
+    $discIds = [];
+    $disc = st_disc_context($pdo, $run->id, $n, $smap, $discIds);
+    if ($disc !== '') $allNotes .= $disc . "\n\n";
     [$econ, $emap] = st_econ_context($pdo);
     [$port, $pmap] = st_portfolio_context($pdo);
     $own = st_user_ideas_context($pdo);
@@ -1334,7 +1558,7 @@ function st_job_rank(PDO $pdo, StRun $run): void
     $run->step();
     $ids = st_store_opps($pdo, $run, (array)($r['json']['opportunities'] ?? []), $smap + $emap + $pmap, 'ai');
     st_rank_positions($pdo, $ids);
-    $aid = st_artifact_save($pdo, null, $run->id, 'ranking', ['opportunity_ids' => $ids, 'countries' => $ccs, 'categories' => $cats, 'weights' => st_weights()], 'weekly ranking', 'ai');
+    $aid = st_artifact_save($pdo, null, $run->id, 'ranking', ['opportunity_ids' => $ids, 'countries' => $ccs, 'categories' => $cats, 'weights' => st_weights(), 'discovery_ids' => $discIds], 'weekly ranking', 'ai');
     $run->step();
     $run->summary = count($ids) . ' opportunities · ranking artifact #' . $aid;
     if ($ids) {

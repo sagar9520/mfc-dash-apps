@@ -35,4 +35,12 @@ val HI_UI_STUDIO: Map<String, String> = mapOf(
     "Implementation" to "Kaise banega", "Android APIs" to "Android APIs", "Privacy" to "Privacy", "Battery / performance" to "Battery / speed",
     "Navigation / UI" to "Navigation / UI", "Monetization impact" to "Kamai par asar", "Premium" to "Premium", "Ads experience" to "Ads ka anubhav",
     "User satisfaction" to "User khushi", "Risks / alternatives" to "Risk / vikalp",
+    // daily discovery (overview card + tab + run detail)
+    "Latest discovery" to "Nayi khoj", "Today's scan" to "Aaj ki khoj", "Yesterday's scan" to "Kal ki khoj", "%s scan" to "%s ki khoj",
+    "Notes only" to "Sirf notes", "Used in ranking" to "Ranking me liya", "For next ranking" to "Agli ranking ke liye",
+    "finding" to "khoj", "findings" to "khoj", "1 finding" to "1 khoj", "%s findings" to "%s khoj",
+    "1 source" to "1 source", "%s sources" to "%s sources", "Sources %s" to "Sources %s", "Findings" to "Khoj", "No findings" to "Koi khoj nahi",
+    "No sources" to "Koi source nahi", "New apps" to "Naye apps", "New app" to "Naya app", "Rivals" to "Rivals", "Competitor" to "Competitor",
+    "Source says" to "Source kehta", "AI guess" to "AI andaza", "Yesterday %s" to "Kal %s", "Pick a day" to "Din chuno", "See findings" to "Khoj dekho",
+    "No discovery yet" to "Abhi koi khoj nahi", "Daily discovery runs every day when it is on in Settings." to "Settings me chalu ho to roz ki khoj har din chalti hai.",
 )

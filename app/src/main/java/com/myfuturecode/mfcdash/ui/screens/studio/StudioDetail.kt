@@ -878,17 +878,21 @@ fun StudioRunScreen(vm: StudioVm, nav: NavHostController, id: Long) {
     }) {
         SLoad(g, o, { vm.load("run", p) }, { SDetailSkel(wide) }) { oo ->
             val item = oo.obj("item")
+            // Daily discovery ka run (DONE / PARTIAL): us run ki findings
+            val findings = if (item.s("job") == "discover" && item.s("status").uppercase() in setOf("DONE", "PARTIAL")) {
+                { nav.navigate("studio/discovery/run/$id") }
+            } else null
             if (wide) KTwoPane(
                 left = {
                     RunHero(item)
-                    RunFacts(item, g.busy, { vm.act("cancel", mapOf("id" to id.toString()), "cancel", ok = "Cancel requested".t()) { vm.load("run", p) } })
+                    RunFacts(item, g.busy, { vm.act("cancel", mapOf("id" to id.toString()), "cancel", ok = "Cancel requested".t()) { vm.load("run", p) } }, findings)
                 },
                 right = {
                     RunUsage(oo.arr("usage").objs())
                     RunLog(oo.arr("log").objs())
                 },
             ) else {
-                RunFacts(item, g.busy, { vm.act("cancel", mapOf("id" to id.toString()), "cancel", ok = "Cancel requested".t()) { vm.load("run", p) } })
+                RunFacts(item, g.busy, { vm.act("cancel", mapOf("id" to id.toString()), "cancel", ok = "Cancel requested".t()) { vm.load("run", p) } }, findings)
                 RunUsage(oo.arr("usage").objs())
                 RunLog(oo.arr("log").objs())
             }
@@ -921,8 +925,9 @@ private fun RunHero(r: JSONObject) {
 }
 
 @Composable
-private fun RunFacts(r: JSONObject, busy: Set<String>, onCancel: () -> Unit) {
+private fun RunFacts(r: JSONObject, busy: Set<String>, onCancel: () -> Unit, onFindings: (() -> Unit)? = null) {
     val c = Mfc.c
+    if (onFindings != null) KButton("See findings".t(), onFindings, Modifier.fillMaxWidth(), kind = KBtn.SOFT, icon = KIcons.Search)
     KCard(padding = PaddingValues(horizontal = 20.dp, vertical = 4.dp)) {
         KKv("Queued".t(), tFull(r.s("queued_at")))
         KKv("Started".t(), r.sn("started_at")?.let { tFull(it) } ?: "–")

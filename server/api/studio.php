@@ -7,7 +7,7 @@
  *
  * App (login cookie):
  *   GET ?view=overview | research&engine=organic|paid|combined&cc=&category=&status= | opp&id= | compare&ids=1,2,3 | evidence&ids= | projects
- *            | project&id= | approvals | history&q=&kind=&page= | runs | run&id= | sources | settings | mine
+ *            | project&id= | approvals | history&q=&kind=&page= | runs | run&id= | sources | settings | mine | discovery
  *       overview.mine = null (portfolio kabhi nahi chala) ya {computed_at, profit_inr, roas, ecpm_usd, apps, apps_ads_on, best:{cc, profit_inr}|null, loss:{cc, profit_inr}|null}
  *       mine = aapke apne apps, pichhle 30 local din from..to (aaj samet; pure SQL, AI cost nahi), roz ek baar 'portfolio' job:
  *              {empty (job kabhi nahi chala), computed_at (UTC), from, to, days, rate (INR/USD), spend_by_cc: exact|estimate|mixed|none, running (portfolio run QUEUED/RUNNING),
@@ -19,6 +19,12 @@
  *                focus {ccs[], ecpm_min_usd, profit_inr} | avoid_paid {ccs[], roas_min, roas_max, loss_inr, est} | strong {category, roas|null, profit_inr, d7|null, ecpm_usd|null}
  *                | weak {category, ecpm_usd|null, profit_inr, roas|null} | app_loss {pkgs[], names[], loss_inr}   — loss_inr = ghate ki rakam, POSITIVE (₹ jo gaye)}
  *              earn = ads + payments, profit = earn - spend (ghata = negative), roas = earn / spend (spend 0 = null), ecpm_usd = ad revenue USD / imps x 1000; paise 2 decimal, roas/eCPM 4
+ *       overview.discovery = null (daily_notes abhi nahi) ya {id, run_id, created_at, structured, total, used_in_ranking, top[]:{type, title, sources (count)}} — pehli 3 findings
+ *   GET ?view=discovery [&id=ARTIFACT_ID | &run=RUN_ID] -> {item: null | {id, run_id, created_at (UTC), structured, countries[], used_in_ranking, ranking_at|null,
+ *              counts:{new_app, competitor, policy, ads, other}, findings[]:{type NEW_APP|COMPETITOR|POLICY|ADS|OTHER, title, detail, basis SAID|GUESS, category, countries[],
+ *              sources[]:{id, title, url, page_age}}, sources[] (run ke saare, S order), notes ('' jab structured)}, days[]:{id, run_id, created_at, findings} (newest first, max 30)}
+ *       structured false = purana artifact ya structuring fail (app raw notes dikhata hai). used_in_ranking = rank run (DONE/PARTIAL) iske baad 7 din me shuru hui
+ *              aur ise sach me padha (ranking artifact ki discovery_ids); bina findings ke hamesha false
  *       opp rows me 'fit' = own_fit ka saar {focus_ccs[], avoid_paid_ccs[], category_roas|null, category_profit_inr|null, rating, basis: VERIFIED|ESTIMATE} ya null
  *   POST ?action=gate1 {select:[ids], note} | opp {id, decision: REJECT|WATCH|MORE_RESEARCH|RESTORE, note} | idea {title, concept, category, countries[]}
  *        | gate {project_id, gate, artifact_id, hash, decision: APPROVE|REQUEST_CHANGES|REJECT, feedback}
@@ -168,6 +174,11 @@ switch ($view) {
         $out['schedule'] = ['daily' => st_set('st_daily') === '1', 'weekly' => st_set('st_weekly') === '1', 'monthly' => st_set('st_monthly') === '1',
             'weekly_dow' => (int)st_set('st_weekly_dow'), 'last_daily' => kv_get('st_daily_day'), 'last_weekly' => kv_get('st_weekly_wk'), 'last_monthly' => kv_get('st_monthly_m')];
         $out['mine'] = st_port_brief($pdo);
+        $out['discovery'] = st_disc_brief($pdo);
+        break;
+
+    case 'discovery':   // daily discovery: latest, ya &id= (artifact), ya &run= (us run ka artifact)
+        $out += st_disc_view($pdo, max(0, (int)($_GET['id'] ?? 0)), max(0, (int)($_GET['run'] ?? 0)));
         break;
 
     case 'mine':   // aapke apne apps: eCPM, kamai, spend, ROAS, country-wise profit/loss (last 30 days)

@@ -10,6 +10,9 @@
  * Owner's server failures: AI schemas without union types (API limit 16; -1 = no evidence, own_fit not asked), economics with cc '' / NULL / 'UNK' / 'in'
  *   (no duplicate key), categories merged by the DB collation (Café/Cafe, Straße/Strase), atomic st_econ save, new temp-table cohort SQL = old SQL (edge days),
  *   no row locks under dashboard writes (READ COMMITTED), fallback to the old SQL without CREATE TEMPORARY TABLES.
+ * Daily discovery: notes -> structured findings (2nd AI call, no search; invented S ids dropped), structuring failure / budget keeps the notes, weekly ranking reads
+ *   the last 7 days of findings (continued S numbers, citable evidence; busy week capped by whole scans, read scans recorded), view=discovery (latest / id / run,
+ *   old format, used_in_ranking = the ranking really read it), overview.discovery.
  * CI: .github/workflows/server-tests.yml. Local: TEST_DB_HOST=127.0.0.1 TEST_DB_NAME=mfc_test TEST_DB_USER=root TEST_DB_PASS=... php server/tests/studio_test.php
  */
 declare(strict_types=1);
@@ -93,6 +96,26 @@ $cs2 = st_clean_spec(['features' => [['name' => 'A', 'priority' => 'MUST HAVE', 
     ['name' => 'B', 'priority' => 'OPTIONAL', 'feasible_on_android' => true, 'effort_days' => 3, 'evidence' => []]]], []);
 ok($cs2['features'][0]['effort_days'] === null && $cs2['features'][1]['effort_days'] === 3, 'spec: effort_days -1 (unknown) -> null, 3 stays 3');
 ok(st_pctl([1, 2, 3, 4], 50) === 2.5 && st_pctl([], 50) === null, 'percentile helper');
+// daily discovery: findings schema + server-side cleaning of the AI output
+$ds = st_disc_schema()['properties']['findings']['items'];
+ok($uc['st_disc_schema'] === 0 && $ds['required'] === array_keys($ds['properties']) && $ds['additionalProperties'] === false && $ds['properties']['type']['enum'] === ST_DISC_TYPES
+    && $ds['properties']['basis']['enum'] === ['SAID', 'GUESS'] && !str_contains(json_encode(st_disc_schema()), 'null'), 'discovery schema: 0 union/nullable types, every property required, no extra properties');
+$dRaw = [
+    ['type' => 'NEW_APP', 'title' => "  Ghost detector\n  apps rising ", 'detail' => str_repeat('word ', 50), 'basis' => 'SAID', 'sources' => ['S1', 's2', 'S9', 'S1'], 'category' => ' Entertainment ',
+        'countries' => ['us', 'USA', ' in', 'us', 7, 'X1']],
+    ['type' => 'POLICY', 'title' => 'Policy only invented', 'detail' => 'd', 'basis' => 'SAID', 'sources' => ['S9'], 'category' => '', 'countries' => []],
+    ['type' => 'NEW_APP', 'title' => '   ', 'detail' => 'empty title', 'basis' => 'GUESS', 'sources' => ['S1'], 'category' => '', 'countries' => []],
+    ['type' => 'HACK', 'title' => 'Odd one', 'detail' => ['x'], 'basis' => 'MAYBE', 'sources' => 'S2', 'category' => ['y'], 'countries' => 'in'],
+    'junk', ['title' => str_repeat('T', 90)]];
+$dc = st_disc_clean($dRaw, ['S1' => 11, 'S2' => 12]);
+ok(count($dc) === 4 && $dc[0]['title'] === 'Ghost detector apps rising' && mb_strlen($dc[0]['detail']) === ST_DISC_DETAIL && ST_DISC_DETAIL === 140 && str_ends_with($dc[0]['detail'], 'word…') && $dc[0]['sources'] === [11, 12]
+    && $dc[0]['countries'] === ['US', 'IN'] && $dc[0]['category'] === 'Entertainment' && $dc[0]['basis'] === 'SAID',
+    'discovery clean: title trimmed, detail cut to 140 with …, invented S9 + duplicate dropped (s2 accepted), countries ISO2 uppercase, AI order');
+ok($dc[1]['sources'] === [] && $dc[1]['basis'] === 'GUESS' && $dc[2]['type'] === 'OTHER' && $dc[2]['basis'] === 'GUESS' && $dc[2]['detail'] === '' && $dc[2]['category'] === '' && $dc[2]['sources'] === [12]
+    && $dc[2]['countries'] === ['IN'] && $dc[3]['type'] === 'OTHER' && mb_strlen($dc[3]['title']) === ST_DISC_TITLE && ST_DISC_TITLE === 60 && $dc[3]['sources'] === [] && $dc[3]['countries'] === [],
+    'discovery clean: SAID without a real source -> GUESS, unknown type -> OTHER, empty title / non-array dropped, title cut to 60, missing fields safe');
+$many = array_map(fn($i) => ['type' => 'ADS', 'title' => "F$i", 'detail' => 'd', 'basis' => 'GUESS', 'sources' => [], 'category' => '', 'countries' => []], range(1, 12));
+ok(array_column(st_disc_clean($many, []), 'title') === ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8'], 'discovery clean: at most 8 findings, first 8 kept');
 
 if (!getenv('TEST_DB_HOST')) { echo "\nTEST_DB_HOST not set: DB part skipped\n$n checks, $fail failed\n"; exit($fail > 0 ? 1 : 0); }
 
@@ -442,6 +465,141 @@ st_work($pdo, 60);
 $r = $pdo->query("SELECT * FROM st_runs WHERE id = $rid")->fetch();
 ok($r['status'] === 'FAILED' && (int)$r['attempts'] === 2, 'API failure: retried once, then FAILED (never DONE)');
 
+// ---------------------------------------------------------------- daily discovery: web notes -> structured findings (2nd AI call, no search) -> weekly ranking
+@unlink("$Q.log");
+$dF = fn(string $type, string $title, string $detail, string $basis, array $src, string $cat = '', array $ccs = []) => ['type' => $type, 'title' => $title, 'detail' => $detail,
+    'basis' => $basis, 'sources' => $src, 'category' => $cat, 'countries' => $ccs];
+$fake([$webResp(['https://news.example/ghost', 'https://news.example/top50', 'https://policy.example/calllog'], '- Ghost detector apps rising in US [SOURCE SAYS] (https://news.example/ghost)'),
+    $jsonResp(['findings' => [
+        $dF('NEW_APP', 'Ghost detector apps rising in US', '2 new apps entered the top 50 in Entertainment this week.', 'SAID', ['S1', 'S2'], 'Entertainment', ['us']),
+        $dF('COMPETITOR', 'New rival for Clap to Find', 'Clap Finder Pro launched: no ads, 4.6 stars, 100K+ installs.', 'SAID', ['S7']),   // only an invented id
+        $dF('POLICY', 'Call log permission rule update', 'Play asks call history apps to explain why they need call log access.', 'SAID', ['S3'], 'Tools'),
+        $dF('ADS', 'Prank apps cut ads in India', 'Fewer new ad creatives for prank apps in IN since 10 Oct.', 'GUESS', ['S2'], 'Prank apps', ['IN']),
+        $dF('OTHER', ' ', 'no title', 'GUESS', [])]])]);
+$rid1 = st_run_new($pdo, 'discover', ['trigger' => 'manual', 'by' => 'test']);
+st_work($pdo, 60);
+$dr = $pdo->query("SELECT * FROM st_runs WHERE id = $rid1")->fetch();
+$d1 = $pdo->query("SELECT * FROM st_artifacts WHERE run_id = $rid1 AND kind = 'daily_notes'")->fetch();
+$dc1 = $d1 ? (array)json_decode($d1['content'], true) : [];
+$dEv = array_map('intval', (array)($dc1['sources'] ?? []));
+ok($dr['status'] === 'DONE' && $left() === 0 && (int)$dr['steps_done'] === 2 && (int)$dr['steps_total'] === 2 && (int)$dr['ai_calls'] === 2 && (int)$dr['searches'] === 2
+    && $dr['summary'] === '4 findings · 3 sources', 'discover: web notes + structuring call, run DONE 2/2 steps, summary "' . $dr['summary'] . '"' . ($dr['status'] !== 'DONE' ? ' · ' . $dr['error_text'] : ''));
+$evUrl = fn(int $id) => (string)q1('SELECT url FROM st_evidence WHERE id = ?', [$id]);
+ok(($dc1['structured'] ?? null) === true && array_keys($dEv) === ['S1', 'S2', 'S3'] && $evUrl($dEv['S3']) === 'https://policy.example/calllog' && str_contains($dc1['notes'] ?? '', 'S3: T https://policy.example/calllog')
+    && ($dc1['countries'] ?? null) === ['IN', 'US'] && array_column($dc1['findings'] ?? [], 'type') === ['NEW_APP', 'COMPETITOR', 'POLICY', 'ADS'],
+    'daily_notes artifact: notes + S map (evidence ids) + countries + 4 structured findings in AI order (empty title dropped)');
+$f = $dc1['findings'] ?? [[], [], [], []];
+ok(($f[0]['sources'] ?? null) === [$dEv['S1'], $dEv['S2']] && $f[0]['countries'] === ['US'] && $f[0]['basis'] === 'SAID' && $f[1]['sources'] === [] && $f[1]['basis'] === 'GUESS'
+    && $f[2]['sources'] === [$dEv['S3']] && $f[3]['sources'] === [$dEv['S2']] && $f[3]['basis'] === 'GUESS',
+    'findings saved with evidence ids; invented S7 dropped (finding left without a source -> GUESS)');
+$lines = array_values(array_filter(explode("\n", (string)@file_get_contents("$Q.log"))));
+$jr = array_map(fn($l) => json_decode(substr($l, (int)strpos($l, ' ') + 1), true), $lines);
+$um = (string)($jr[1]['messages'][0]['content'] ?? '');
+ok(count($jr) === 2 && isset($jr[0]['tools']) && !isset($jr[1]['tools']) && ($jr[1]['output_config']['effort'] ?? '') === 'low' && ($jr[1]['max_tokens'] ?? 0) === 6000
+    && $unions($jr[1]['output_config']['format']['schema'] ?? ['x' => ['anyOf' => []]]) === 0 && isset($jr[1]['output_config']['format']['schema']['properties']['findings'])
+    && str_contains($um, 'never invent S ids') && str_contains($um, 'if nothing meaningful happened return an empty list') && str_contains($um, "=== Source ids you may use ===\nS1, S2, S3")
+    && str_contains($um, 'Ghost detector apps rising in US [SOURCE SAYS]') && str_contains($um, 'S2: T https://news.example/top50') && str_contains($um, 'title: short English, at most 45 characters')
+    && str_contains($um, 'at most 100 characters'),
+    'structuring request: no web search tool, effort low, 6000 tokens, findings schema (0 union types), notes + S list + rules in the prompt');
+// structuring call fails (not budget/cancel): error recorded, run PARTIAL (no retry), notes still saved
+$fake([$webResp(['https://news.example/quiet'], 'Quiet day: nothing meaningful [MY INFERENCE]'), [400, ['type' => 'error', 'error' => ['type' => 'invalid_request_error', 'message' => 'schema too complex']]]]);
+$rid2 = st_run_new($pdo, 'discover', ['trigger' => 'manual', 'by' => 'test']);
+st_work($pdo, 60);
+$dr2 = $pdo->query("SELECT * FROM st_runs WHERE id = $rid2")->fetch();
+$d2 = $pdo->query("SELECT * FROM st_artifacts WHERE run_id = $rid2 AND kind = 'daily_notes'")->fetch();
+$dc2 = $d2 ? (array)json_decode($d2['content'], true) : [];
+ok($dr2['status'] === 'PARTIAL' && (int)$dr2['attempts'] === 1 && (int)$dr2['errors'] === 1 && str_contains($dr2['error_text'], 'structuring findings: Claude API HTTP 400 schema too complex')
+    && $dr2['summary'] === 'notes only · 1 source' && $left() === 0, 'structuring failure: error recorded, run PARTIAL (not retried), summary "' . $dr2['summary'] . '"');
+ok(($dc2['structured'] ?? null) === false && ($dc2['findings'] ?? null) === [] && str_contains($dc2['notes'] ?? '', 'Quiet day') && count($dc2['sources'] ?? []) === 1,
+    'structuring failure: notes + sources still saved (structured false, no findings)');
+// budget runs out after the web call: run BLOCKED (as before), but the paid-for notes are kept
+kv_set('st_ai_budget_usd', (string)(st_month_spend($pdo) + 0.01));
+$fake([$webResp(['https://news.example/budget'], 'budget day notes')]);
+$ridB = st_run_new($pdo, 'discover', ['trigger' => 'manual', 'by' => 'test']);
+st_work($pdo, 60);
+kv_set('st_ai_budget_usd', '40');
+$drB = $pdo->query("SELECT * FROM st_runs WHERE id = $ridB")->fetch();
+$dB = $pdo->query("SELECT * FROM st_artifacts WHERE run_id = $ridB AND kind = 'daily_notes'")->fetch();
+$dcB = $dB ? (array)json_decode($dB['content'], true) : [];
+ok($drB['status'] === 'BLOCKED' && str_contains($drB['error_text'], 'budget reached') && (int)$drB['ai_calls'] === 1 && $left() === 0 && ($dcB['structured'] ?? null) === false
+    && str_contains($dcB['notes'] ?? '', 'budget day notes') && $drB['summary'] === 'notes only · 1 source', 'budget reached before the structuring call: run BLOCKED, web notes still saved (structured false)');
+if ($dB) h_x($pdo, 'DELETE FROM st_artifacts WHERE id = ?', [(int)$dB['id']]);
+// newer scan repeats a title (other case): the ranking keeps only the newest one
+$fake([$webResp(['https://news.example/ghost2'], 'ghost update'), $jsonResp(['findings' => [$dF('NEW_APP', 'GHOST DETECTOR APPS RISING IN US', 'Now 3 new ghost apps in the top 50.', 'SAID', ['S1'], 'Entertainment', ['US'])]])]);
+$rid3 = st_run_new($pdo, 'discover', ['trigger' => 'manual', 'by' => 'test']);
+st_work($pdo, 60);
+$d3 = $pdo->query("SELECT * FROM st_artifacts WHERE run_id = $rid3 AND kind = 'daily_notes'")->fetch();
+$d3Ev = (int)(json_decode((string)($d3['content'] ?? '{}'), true)['sources']['S1'] ?? 0);
+$tAgo = fn(int $h) => gmdate('Y-m-d H:i:s', time() - $h * 3600);
+$dOld = st_artifact_save($pdo, null, null, 'daily_notes', ['notes' => 'old', 'sources' => ['S1' => $dEv['S1']], 'countries' => ['IN'], 'findings' => [$dF('OTHER', 'Nine day old finding', 'too old', 'GUESS', [$dEv['S1']])],
+    'structured' => true], 'test: 9 days old', 'test');
+h_x($pdo, 'UPDATE st_artifacts SET created_at = ? WHERE id = ?', [$tAgo(216), $dOld]);
+// busy week: 9 scans x 8 findings = 72 > cap 64 -> the newest 8 scans are read whole (all 64 titles), the oldest not at all; used_in_ranking follows what was read
+$pdo->exec("UPDATE st_artifacts SET kind = 'daily_off' WHERE kind = 'daily_notes'");
+$busy = [];
+for ($i = 0; $i < 9; $i++) {
+    $busy[$i] = st_artifact_save($pdo, null, null, 'daily_notes', ['notes' => "busy $i", 'sources' => [], 'countries' => ['IN'], 'structured' => true,
+        'findings' => array_map(fn($j) => $dF('OTHER', "Busy scan $i finding $j", 'd', 'GUESS', []), range(1, ST_DISC_MAX))], "test: busy $i", 'test');
+    h_x($pdo, 'UPDATE st_artifacts SET created_at = ? WHERE id = ?', [$tAgo(1 + $i * 18), $busy[$i]]);   // 1 hour .. 6 days ago
+}
+@unlink("$Q.log");
+$fake([$webResp(['https://example.com/busy'], 'tools notes'), $jsonResp(['opportunities' => []])]);
+$brid = st_run_new($pdo, 'rank', ['trigger' => 'manual', 'by' => 'test']);
+st_work($pdo, 60);
+$br = $pdo->query("SELECT * FROM st_runs WHERE id = $brid")->fetch();
+$bp = '';
+foreach (explode("\n", (string)@file_get_contents("$Q.log")) as $line) { $j = json_decode(substr($line, (int)strpos($line, ' ') + 1), true); if (isset($j['output_config']['format']['schema']['properties']['opportunities'])) $bp = (string)($j['messages'][0]['content'] ?? ''); }
+$bIn = array_map(fn($i) => count(array_filter(range(1, ST_DISC_MAX), fn($j) => str_contains($bp, "- [OTHER] Busy scan $i finding $j: d [MY INFERENCE]"))), array_keys($busy));
+$bUsed = array_map(fn($id) => st_disc_item($pdo, $pdo->query("SELECT * FROM st_artifacts WHERE id = $id")->fetch())['used_in_ranking'], $busy);
+$bArt = json_decode((string)q1("SELECT content FROM st_artifacts WHERE run_id = ? AND kind = 'ranking'", [$brid]), true);
+ok($br['status'] === 'DONE' && $left() === 0 && ST_DISC_RANK_MAX === 64 && $bIn === [8, 8, 8, 8, 8, 8, 8, 8, 0] && ($bArt['discovery_ids'] ?? null) === array_slice($busy, 0, 8)
+    && $bUsed === [true, true, true, true, true, true, true, true, false],
+    'busy week (9 scans x 8): rank prompt has all 64 findings of the 8 newest scans, ranking artifact lists them, the 9th scan is not "used in ranking" ('
+    . json_encode($bIn) . ')' . ($br['status'] !== 'DONE' ? ' · ' . $br['error_text'] : ''));
+foreach ($busy as $id) h_x($pdo, 'DELETE FROM st_artifacts WHERE id = ?', [$id]);
+$pdo->exec("UPDATE st_artifacts SET kind = 'daily_notes' WHERE kind = 'daily_off'");
+// weekly ranking, 2 categories: Tools 1 source (S1), Utilities 3 (S2..S4) -> discovery continues at S5
+kv_set('st_categories', json_encode(['Tools', 'Utilities']));
+@unlink("$Q.log");
+$oppD = ['title' => 'Call Log Explainer', 'concept' => 'explains call log permission', 'category' => 'Tools', 'countries' => ['IN'], 'competitors' => [], 'monetization' => ['banner'], 'risks' => [],
+    'why_build' => 'policy change', 'why_avoid' => 'small', 'complexity' => 'Low', 'recommendation' => 'TEST FIRST', 'decision_card' => $card,
+    'factors' => $fx(['policy_risk' => $I(6, ['S6']), 'demand' => $I(5, ['S2']), 'competition' => $I(4, ['S5', 'S99'])])];
+$fake([$webResp(['https://example.com/t1'], 'tools notes'), $webResp(['https://example.com/u1', 'https://example.com/u2', 'https://example.com/u3'], 'utilities notes'), $jsonResp(['opportunities' => [$oppD]])]);
+$rrid = st_run_new($pdo, 'rank', ['trigger' => 'manual', 'by' => 'test']);
+st_work($pdo, 60);
+kv_set('st_categories', json_encode(['Tools']));
+$rr = $pdo->query("SELECT * FROM st_runs WHERE id = $rrid")->fetch();
+$rq = [];
+foreach (explode("\n", (string)@file_get_contents("$Q.log")) as $line) { $j = json_decode(substr($line, (int)strpos($line, ' ') + 1), true); if (isset($j['output_config']['format']['schema']['properties']['opportunities'])) $rq = $j; }
+$rp = (string)($rq['messages'][0]['content'] ?? '');
+$secExp = "## Daily discovery (last 7 days)\nFindings from the daily web scans, newest first.\n"
+    . "- [NEW_APP] GHOST DETECTOR APPS RISING IN US: Now 3 new ghost apps in the top 50. (S5) [SOURCE SAYS]\n"
+    . "- [COMPETITOR] New rival for Clap to Find: Clap Finder Pro launched: no ads, 4.6 stars, 100K+ installs. [MY INFERENCE]\n"
+    . "- [POLICY] Call log permission rule update: Play asks call history apps to explain why they need call log access. (S6) [SOURCE SAYS]\n"
+    . "- [ADS] Prank apps cut ads in India: Fewer new ad creatives for prank apps in IN since 10 Oct. (S7) [MY INFERENCE]\n"
+    . "\nSources:\nS5: T https://news.example/ghost2 <https://news.example/ghost2> (3 days ago)\nS6: T https://policy.example/calllog <https://policy.example/calllog> (3 days ago)\n"
+    . "S7: T https://news.example/top50 <https://news.example/top50> (3 days ago)\n";
+ok($rr['status'] === 'DONE' && $left() === 0 && str_contains($rp, "=== Web research notes (untrusted) ===\n") && str_contains($rp, $secExp) && !str_contains($rp, 'Nine day old') && !str_contains($rp, 'Quiet day')
+    && substr_count(strtolower($rp), 'ghost detector apps rising in us') === 1,
+    'rank prompt: "Daily discovery (last 7 days)" section, newest duplicate title wins, S numbers continue after category sources (S5..S7), [SOURCE SAYS]/[MY INFERENCE], 9-day-old + unstructured scans left out'
+    . ($rr['status'] !== 'DONE' ? ' · ' . $rr['error_text'] : ''));
+ok(str_contains($rp, "S1: T https://example.com/t1 <") && str_contains($rp, "S2: T https://example.com/u1 <") && str_contains($rp, "S3: T https://example.com/u2 <") && str_contains($rp, "S4: T https://example.com/u3 <"),
+    'rank prompt: second category renumbered S2..S4 in one pass (S1 -> S2 no longer collides with the old S2 line)');
+$OD = $pdo->query("SELECT * FROM st_opps WHERE title = 'Call Log Explainer'")->fetch();
+$fd = $OD ? json_decode($OD['factors'], true) : [];
+$u1 = (int)q1("SELECT id FROM st_evidence WHERE url = 'https://example.com/u1' AND run_id = ?", [$rrid]);
+ok(($fd['policy_risk']['evidence'] ?? null) === [$dEv['S3']] && ($fd['competition']['evidence'] ?? null) === [$d3Ev] && $d3Ev > 0 && ($fd['demand']['evidence'] ?? null) === [$u1] && $u1 > 0,
+    'ranking cites discovery S ids as evidence (S6 -> call log policy page, S5 -> newest ghost source), S2 -> first Utilities source, unknown S99 dropped');
+$rrArt = json_decode((string)q1("SELECT content FROM st_artifacts WHERE run_id = ? AND kind = 'ranking'", [$rrid]), true);
+ok(($rrArt['discovery_ids'] ?? null) === [(int)$d3['id'], (int)$d1['id']],
+    'ranking artifact: discovery_ids = scans it read, newest first (unstructured + 9-day-old scans not listed)');
+// timeline for used_in_ranking: older rank runs 10 days ago, scans 3 / 3 / 2 days ago, this ranking 1 day ago (old scan: 9 days ago = 8 days before it)
+$rankAt = $tAgo(24);
+h_x($pdo, "UPDATE st_runs SET started_at = ? WHERE job = 'rank' AND id <> ?", [$tAgo(240), $rrid]);
+h_x($pdo, 'UPDATE st_runs SET started_at = ? WHERE id = ?', [$rankAt, $rrid]);
+$dAt = [(int)$d1['id'] => $tAgo(72), (int)$d2['id'] => $tAgo(72), (int)$d3['id'] => $tAgo(48)];
+foreach ($dAt as $aid => $t) h_x($pdo, 'UPDATE st_artifacts SET created_at = ? WHERE id = ?', [$t, $aid]);
+
 // ---------------------------------------------------------------- portfolio: your own apps, last 30 days (pure SQL, no AI)
 // Fresh SIMULATED data so every number is exact (old cohort rows removed). rate = 95 INR/USD (stub cfg).
 //   com.sim.cam  Utilities      USD account: campaign c1 has an Ads geo report (US $3, IN $7 = exact), c2 ($6) has none -> split by cam's paid installs (US 40, BD 10)
@@ -678,6 +836,61 @@ foreach (['overview', 'research&engine=organic', 'research&engine=paid&cc=US', '
     [$c, $j, $raw] = $http('GET', "api/studio.php?view=$v");
     ok($c === 200 && ($j['ok'] ?? false), "view $v" . ($c !== 200 ? ' -> ' . substr($raw, 0, 300) : ''));
 }
+// daily discovery views (contract: overview.discovery + view=discovery latest / id / run)
+$pdo->exec("UPDATE st_artifacts SET kind = 'daily_off' WHERE kind = 'daily_notes'");
+[$c, $j] = $http('GET', 'api/studio.php?view=overview');
+[$c2, $j2] = $http('GET', 'api/studio.php?view=discovery');
+$pdo->exec("UPDATE st_artifacts SET kind = 'daily_notes' WHERE kind = 'daily_off'");
+ok($c === 200 && is_array($j) && array_key_exists('discovery', $j) && $j['discovery'] === null && $c2 === 200 && ($j2['ok'] ?? false) && array_key_exists('item', $j2) && $j2['item'] === null
+    && ($j2['days'] ?? null) === [], 'no daily scan yet: overview.discovery null, view=discovery item null and no days');
+$d0 = st_artifact_save($pdo, null, null, 'daily_notes', ['notes' => 'old format notes', 'sources' => ['S1' => $dEv['S1']], 'countries' => ['IN']], 'test: old format', 'test');
+$d4 = st_artifact_save($pdo, null, null, 'daily_notes', ['notes' => 'fresh', 'sources' => ['S10' => $dEv['S2'], 'S1' => $dEv['S1'], 'S2' => 999999], 'countries' => ['IN', 'US'],
+    'findings' => [$dF('POLICY', 'Fresh policy', 'd1', 'SAID', [$dEv['S1'], 999999]), $dF('ADS', 'Fresh ads', 'd2', 'GUESS', []), $dF('NEW_APP', 'Fresh app', 'd3', 'SAID', [$dEv['S2'], $dEv['S1']]),
+        $dF('OTHER', 'Fourth', 'd4', 'GUESS', [])], 'structured' => true], 'test: fresh', 'test');
+$dv = function (string $q) use ($http) { [$c, $j, $raw] = $http('GET', "api/studio.php?view=discovery$q"); return $c === 200 && ($j['ok'] ?? false) && array_key_exists('item', $j) ? $j : ['err' => substr($raw, 0, 300)]; };
+$zero = ['new_app' => 0, 'competitor' => 0, 'policy' => 0, 'ads' => 0, 'other' => 0];
+$L = $dv('');
+$it = $L['item'] ?? [];
+ok(($it['id'] ?? 0) === $d4 && $it['run_id'] === 0 && $it['structured'] === true && $it['used_in_ranking'] === false && $it['ranking_at'] === null && $it['notes'] === '' && $it['countries'] === ['IN', 'US']
+    && preg_match('/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$/', $it['created_at']) && $it['counts'] === ['new_app' => 1, 'competitor' => 0, 'policy' => 1, 'ads' => 1, 'other' => 1]
+    && array_column($it['findings'], 'title') === ['Fresh policy', 'Fresh ads', 'Fresh app', 'Fourth'] && array_column($it['findings'][0]['sources'], 'id') === [$dEv['S1']]
+    && array_keys($it['findings'][0]['sources'][0]) === ['id', 'title', 'url', 'page_age'] && array_column($it['findings'][2]['sources'], 'id') === [$dEv['S2'], $dEv['S1']]
+    && $it['findings'][1]['sources'] === [] && array_column($it['sources'], 'id') === [$dEv['S1'], $dEv['S2']],
+    'view=discovery latest: newest scan, findings in order with resolved sources (missing evidence row skipped), run sources in S order (S1, S10), counts by type, not used in ranking' . (isset($L['err']) ? ' · ' . $L['err'] : ''));
+$f0 = array_keys($it['findings'][0] ?? []); sort($f0);
+$i0 = array_keys($it); sort($i0);
+ok($f0 === ['basis', 'category', 'countries', 'detail', 'sources', 'title', 'type'] && $i0 === ['countries', 'counts', 'created_at', 'findings', 'id', 'notes', 'ranking_at', 'run_id', 'sources', 'structured', 'used_in_ranking']
+    && array_column($L['days'] ?? [], 'id') === [$d4, $d0, (int)$d3['id'], (int)$d2['id'], (int)$d1['id'], $dOld] && array_column($L['days'], 'findings') === [4, 0, 1, 0, 4, 1]
+    && array_keys($L['days'][0]) === ['id', 'run_id', 'created_at', 'findings'] && $L['days'][4]['run_id'] === $rid1 && $L['days'][4]['created_at'] === $dAt[(int)$d1['id']],
+    'view=discovery: item + finding keys as in the contract; days newest first with finding counts');
+$it = $dv('&id=' . (int)$d1['id'])['item'] ?? [];
+$s0 = $it['findings'][0]['sources'] ?? [];
+ok(($it['id'] ?? 0) === (int)$d1['id'] && $it['run_id'] === $rid1 && $it['created_at'] === $dAt[(int)$d1['id']] && $it['structured'] === true && $it['used_in_ranking'] === true && $it['ranking_at'] === $rankAt
+    && $it['counts'] === ['new_app' => 1, 'competitor' => 1, 'policy' => 1, 'ads' => 1, 'other' => 0] && $it['notes'] === '' && $it['countries'] === ['IN', 'US']
+    && array_column($s0, 'url') === ['https://news.example/ghost', 'https://news.example/top50'] && ($s0[0]['title'] ?? '') === 'T https://news.example/ghost' && ($s0[0]['page_age'] ?? '') === '3 days ago'
+    && $it['findings'][0]['detail'] === '2 new apps entered the top 50 in Entertainment this week.' && $it['findings'][0]['category'] === 'Entertainment' && $it['findings'][0]['countries'] === ['US']
+    && $it['findings'][0]['basis'] === 'SAID' && $it['findings'][1]['basis'] === 'GUESS' && $it['findings'][1]['sources'] === []
+    && array_column($it['sources'], 'url') === ['https://news.example/ghost', 'https://news.example/top50', 'https://policy.example/calllog'],
+    'view=discovery&id: scan 3 days ago used by the ranking 1 day ago (ranking_at), sources resolved to title/url/page_age');
+$it = $dv("&run=$rid2")['item'] ?? [];
+ok(($it['id'] ?? 0) === (int)$d2['id'] && $it['run_id'] === $rid2 && $it['structured'] === false && $it['findings'] === [] && $it['counts'] === $zero && str_contains($it['notes'], 'Quiet day')
+    && array_column($it['sources'], 'url') === ['https://news.example/quiet'] && $it['used_in_ranking'] === false && $it['ranking_at'] === null,
+    'view=discovery&run: structuring failed -> structured false, raw notes, no findings, not used in ranking');
+$it = $dv("&id=$d0")['item'] ?? [];
+ok(($it['id'] ?? 0) === $d0 && $it['structured'] === false && $it['findings'] === [] && $it['counts'] === $zero && $it['notes'] === 'old format notes' && array_column($it['sources'], 'id') === [$dEv['S1']]
+    && $it['used_in_ranking'] === false && $it['countries'] === ['IN'], 'old-format artifact (no findings): structured false, counts 0, notes text');
+$io = $dv("&id=$dOld")['item'] ?? []; $i3 = $dv('&id=' . (int)$d3['id'])['item'] ?? [];
+ok(($io['used_in_ranking'] ?? null) === false && count($io['findings']) === 1 && ($i3['used_in_ranking'] ?? null) === true && $i3['ranking_at'] === $rankAt,
+    'used_in_ranking: ranking 8 days after a scan -> false; ranking 1 day after -> true');
+$rankArt = (int)q1("SELECT id FROM st_artifacts WHERE kind = 'ranking' ORDER BY id DESC LIMIT 1");
+$na = $dv("&id=$rankArt"); $nr = $dv('&run=999999');
+ok($rankArt > 0 && array_key_exists('item', $na) && $na['item'] === null && array_key_exists('item', $nr) && $nr['item'] === null && count($nr['days'] ?? []) === 6,
+    'view=discovery: id of a non-discovery artifact / unknown run -> item null (200)');
+[$c, $j] = $http('GET', 'api/studio.php?view=overview');
+$od = $j['discovery'] ?? [];
+ok(($od['id'] ?? 0) === $d4 && $od['run_id'] === 0 && $od['structured'] === true && $od['total'] === 4 && $od['used_in_ranking'] === false && $od['created_at'] === ($L['item']['created_at'] ?? '')
+    && $od['top'] === [['type' => 'POLICY', 'title' => 'Fresh policy', 'sources' => 1], ['type' => 'ADS', 'title' => 'Fresh ads', 'sources' => 0], ['type' => 'NEW_APP', 'title' => 'Fresh app', 'sources' => 2]],
+    'overview.discovery: latest scan, structured, total, used_in_ranking, top 3 findings with source counts');
 [$c, $j] = $http('GET', 'api/studio.php?view=mine');
 $jf = array_column($j['apps'] ?? [], null, 'pkg');
 ok(($j['empty'] ?? true) === false && count($j['apps'] ?? []) === 3 && ($j['spend_by_cc'] ?? '') === 'mixed' && abs(($j['totals']['profit_inr'] ?? 0) + 471.5) < 0.006 && ($j['running'] ?? null) === false
