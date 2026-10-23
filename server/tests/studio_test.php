@@ -1,6 +1,6 @@
 <?php
 /**
- * AI App Research Studio — tests (DEVELOPMENT ENVIRONMENT, SIMULATED DATA ONLY; Claude API responses are canned fakes, nothing calls the network).
+ * AI App Research Studio — tests (DEVELOPMENT ENVIRONMENT, SIMULATED DATA ONLY; Claude API responses are canned fakes from a local fake API, nothing calls the network).
  * Part 1 (no DB): scoring formula, recommendation rule, spec diff, spec cleaning.
  * Part 2 (MySQL, TEST_DB_HOST): economics from simulated dashboard tables, rank job (evidence validation, label downgrade, policy REJECT),
  *   budget block, Gate 1 limits, competitor analysis -> Gate 2, artifact hash conflicts, request changes -> v2 + diff, approve, retries/crash recovery/cancel,
@@ -13,6 +13,13 @@
  * Daily discovery: notes -> structured findings (2nd AI call, no search; invented S ids dropped), structuring failure / budget keeps the notes, weekly ranking reads
  *   the last 7 days of findings (continued S numbers, citable evidence; busy week capped by whole scans, read scans recorded), view=discovery (latest / id / run,
  *   old format, used_in_ranking = the ranking really read it), overview.discovery.
+ * Streaming Claude calls (local fake SSE API, php -S fake_claude.php): SSE accumulator (chunks cut anywhere incl. UTF-8, \r\n, comments, cumulative usage, cut streams, tool input
+ *   given in content_block_start), clear failure texts + retry rules (429/529/5xx, overloaded/api_error before output, nothing received; never after output), idle abort, healthy
+ *   slow stream not aborted (2 s MySQL wait_timeout kept alive by the in-stream ping), Cancel mid-stream, usage recorded on failure (ok 0), mid-stream fallback (streaming: partial +
+ *   continuation; non-streaming: text after the fallback block; pause_turn echo rule keeps the fallback block in place), ST_NO_STREAM non-streaming path, streaming connect failure -> owner's http_json
+ *   (6 h), st_work wait_timeout;
+ *   ranking salvage at max_tokens and on a stream cut after output (>= 3 complete ideas kept -> PARTIAL, fewer -> FAILED), rank_notes reuse (24 h, FAILED / PARTIAL / BLOCKED /
+ *   CANCELLED or the same run's crash-requeued attempt, same categories + countries, evidence still there, the notes chain used once; only missing categories researched again).
  * CI: .github/workflows/server-tests.yml. Local: TEST_DB_HOST=127.0.0.1 TEST_DB_NAME=mfc_test TEST_DB_USER=root TEST_DB_PASS=... php server/tests/studio_test.php
  */
 declare(strict_types=1);
@@ -29,16 +36,90 @@ function http_json(string $method, string $url, ?string $body = null, array $hea
     $q = getenv('STUDIO_FAKE_Q') ?: (sys_get_temp_dir() . '/studio_fake_q.json');
     $list = is_file($q) ? (array)json_decode((string)file_get_contents($q), true) : [];
     @file_put_contents($q . '.log', $url . ' ' . substr((string)$body, 0, 2000000) . "\n", FILE_APPEND);
-    if (!str_contains($url, 'api.anthropic.com') || !$list) return [0, '', 'network disabled in tests'];
+    if ((!str_contains($url, 'api.anthropic.com') && !str_contains($url, '/fake_claude.php')) || !$list) return [0, '', 'network disabled in tests'];
     $next = array_shift($list);
     file_put_contents($q, json_encode($list));
     return [(int)$next[0], is_string($next[1]) ? $next[1] : json_encode($next[1]), ''];
 }
 PHP, $stub, 1);
+// st_ai streams (SSE, curl) to ST_API_URL = local fake Claude API (php -S, same canned queue). Small timeouts keep the stream tests fast.
+$FP = 20000 + getmypid() % 1000;   // app views server below: 18000 + pid % 1000 + 7
+$stub = str_replace("const MFC_ROOT = __DIR__ . '/..';", "const MFC_ROOT = __DIR__ . '/..';\nconst ST_API_URL = 'http://127.0.0.1:$FP/fake_claude.php';\n"
+    . "const ST_STREAM_MAX_SEC = 30, ST_STREAM_IDLE_SEC = 2, ST_STREAM_CHECK_SEC = 1, ST_RETRY_WAIT = 0;", $stub);
 file_put_contents("$M/lib/common.php", $stub);
 foreach (['lib/cost.php', 'lib/health.php', 'lib/studio.php', 'api/studio.php'] as $f) copy("$src/$f", "$M/$f");
 $Q = "$T/fake_q.json";
 putenv("STUDIO_FAKE_Q=$Q");
+@mkdir("$T/fake", 0777, true);
+file_put_contents("$T/fake/sse_gen.php", <<<'PHP'
+<?php
+/** Canned Claude message -> realistic SSE events (tests only): message_start (input usage), ping, per block start + deltas (cut mid-word) + stop, message_delta (stop_reason + output usage), message_stop. */
+function fake_sse_events(array $m): array
+{
+    $e = fn(string $t, array $d): string => "event: $t\ndata: " . json_encode(['type' => $t] + $d, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n\n";
+    $u = (array)($m['usage'] ?? []);
+    $out = [$e('message_start', ['message' => ['id' => $m['id'] ?? 'msg_fake', 'type' => 'message', 'role' => 'assistant', 'model' => $m['model'] ?? 'claude-opus-5-5', 'content' => [],
+        'stop_reason' => null, 'stop_sequence' => null, 'usage' => array_diff_key($u, ['output_tokens' => 1, 'server_tool_use' => 1]) + ['output_tokens' => 1]]]), $e('ping', [])];
+    foreach (array_values((array)($m['content'] ?? [])) as $i => $b) {
+        $t = (string)($b['type'] ?? '');
+        $d = fn(array $x): string => $e('content_block_delta', ['index' => $i, 'delta' => $x]);
+        if ($t === 'text') {
+            $out[] = $e('content_block_start', ['index' => $i, 'content_block' => ['type' => 'text', 'text' => '']]);
+            foreach (mb_str_split((string)$b['text'], 7) as $p) $out[] = $d(['type' => 'text_delta', 'text' => $p]);
+            foreach ((array)($b['citations'] ?? []) as $c) $out[] = $d(['type' => 'citations_delta', 'citation' => $c]);
+        } elseif ($t === 'thinking') {
+            $out[] = $e('content_block_start', ['index' => $i, 'content_block' => ['type' => 'thinking', 'thinking' => '', 'signature' => '']]);
+            foreach (mb_str_split((string)$b['thinking'], 9) as $p) $out[] = $d(['type' => 'thinking_delta', 'thinking' => $p]);
+            $out[] = $d(['type' => 'signature_delta', 'signature' => (string)$b['signature']]);
+        } elseif ($t === 'tool_use' || $t === 'server_tool_use') {
+            $out[] = $e('content_block_start', ['index' => $i, 'content_block' => array_merge($b, ['input' => new stdClass()])]);
+            foreach (str_split(empty($b['input']) ? '' : json_encode($b['input']), 5) as $p) $out[] = $d(['type' => 'input_json_delta', 'partial_json' => $p]);
+        } else $out[] = $e('content_block_start', ['index' => $i, 'content_block' => $b]);   // web_search_tool_result, fallback, redacted_thinking, unknown: whole block in start
+        if ($i === 0) $out[] = $e('ping', []);
+        $out[] = $e('content_block_stop', ['index' => $i]);
+    }
+    $out[] = $e('message_delta', ['delta' => ['stop_reason' => $m['stop_reason'] ?? 'end_turn', 'stop_sequence' => null], 'usage' => array_intersect_key($u, ['output_tokens' => 1, 'server_tool_use' => 1])]);
+    $out[] = $e('message_stop', []);
+    return $out;
+}
+PHP);
+file_put_contents("$T/fake/fake_claude.php", <<<'PHP'
+<?php
+/**
+ * FAKE Claude Messages API (tests only, SIMULATED): pops [code, body, options] from the STUDIO_FAKE_Q queue and logs the request like the http_json stub.
+ * 200 -> realistic SSE stream (each event written in 2 flushed pieces); other codes -> JSON error body with that status; empty queue -> 404.
+ * options: error => k (overloaded_error event after k events), cut => k (connection closed after k events, no message_stop), stall => [k, sec] (no bytes for sec
+ *   after k events; k = 0: not even headers), delay => sec (between events), cancel => k (after k events the RUNNING run is set to CANCELLING, like the app's Cancel)
+ */
+declare(strict_types=1);
+require __DIR__ . '/sse_gen.php';
+$q = (string)getenv('STUDIO_FAKE_Q');
+@file_put_contents("$q.log", 'http://' . ($_SERVER['HTTP_HOST'] ?? '') . ($_SERVER['REQUEST_URI'] ?? '') . ' ' . substr((string)file_get_contents('php://input'), 0, 2000000) . "\n", FILE_APPEND);
+$list = is_file($q) ? (array)json_decode((string)file_get_contents($q), true) : [];
+$next = array_shift($list);
+file_put_contents($q, json_encode($list));
+if (!is_array($next)) { http_response_code(404); header('Content-Type: application/json'); echo json_encode(['type' => 'error', 'error' => ['type' => 'not_found_error', 'message' => 'no canned response (test queue empty)']]); exit; }
+$code = (int)$next[0]; $body = $next[1] ?? null; $opt = (array)($next[2] ?? []);
+if ($code !== 200) { http_response_code($code); header('Content-Type: application/json'); echo is_string($body) ? $body : json_encode($body); exit; }
+$ev = fake_sse_events(is_string($body) ? (array)json_decode($body, true) : (array)$body);
+$stall = array_map('intval', (array)($opt['stall'] ?? []));
+if ($stall && $stall[0] === 0) sleep($stall[1]);
+header('Content-Type: text/event-stream');
+header('Cache-Control: no-cache');
+while (ob_get_level()) ob_end_flush();
+foreach ($ev as $k => $e) {
+    if (isset($opt['error']) && $k === (int)$opt['error']) { echo "event: error\ndata: " . json_encode(['type' => 'error', 'error' => ['type' => 'overloaded_error', 'message' => 'Overloaded']]) . "\n\n"; flush(); exit; }
+    if (isset($opt['cut']) && $k === (int)$opt['cut']) exit;
+    if (isset($opt['cancel']) && $k === (int)$opt['cancel'])
+        (new PDO('mysql:host=' . getenv('TEST_DB_HOST') . ';dbname=' . getenv('TEST_DB_NAME'), (string)getenv('TEST_DB_USER'), (string)getenv('TEST_DB_PASS')))->exec("UPDATE st_runs SET status = 'CANCELLING' WHERE status = 'RUNNING'");
+    if ($stall && $k > 0 && $k === $stall[0]) sleep($stall[1]);
+    $h = intdiv(strlen($e), 2);   // event in 2 pieces: the client sees lines (and sometimes UTF-8 chars) cut in the middle
+    echo substr($e, 0, $h); flush();
+    echo substr($e, $h); flush();
+    if (!empty($opt['delay'])) usleep((int)((float)$opt['delay'] * 1e6));
+}
+PHP);
+require "$T/fake/sse_gen.php";
 require "$M/lib/studio.php";
 
 $fail = 0; $n = 0;
@@ -116,10 +197,112 @@ ok($dc[1]['sources'] === [] && $dc[1]['basis'] === 'GUESS' && $dc[2]['type'] ===
     'discovery clean: SAID without a real source -> GUESS, unknown type -> OTHER, empty title / non-array dropped, title cut to 60, missing fields safe');
 $many = array_map(fn($i) => ['type' => 'ADS', 'title' => "F$i", 'detail' => 'd', 'basis' => 'GUESS', 'sources' => [], 'category' => '', 'countries' => []], range(1, 12));
 ok(array_column(st_disc_clean($many, []), 'title') === ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8'], 'discovery clean: at most 8 findings, first 8 kept');
+// streaming (SSE) accumulator: owner's weekly ranking failed at step 4/6 (non-streaming call, 300 s timeout / 32k max_tokens)
+$norm = function ($v) use (&$norm) { if (!is_array($v)) return $v; $v = array_map($norm, $v); if (!array_is_list($v)) ksort($v); return $v; };
+$feed = function (string $sse, int $size): array { $st = st_sse_new(); foreach (str_split($sse, max(1, $size)) as $c) st_sse_feed($st, $c); return $st; };
+$msgU = ['id' => 'msg_u1', 'type' => 'message', 'role' => 'assistant', 'model' => 'claude-opus-5-5', 'content' => [
+    ['type' => 'thinking', 'thinking' => 'सोच रहा हूँ… plan 🔦 next', 'signature' => 'sig-abc=='],
+    ['type' => 'server_tool_use', 'id' => 'srvtoolu_1', 'name' => 'web_search', 'input' => ['query' => 'टॉर्च ऐप "best" \\ 2026']],
+    ['type' => 'web_search_tool_result', 'tool_use_id' => 'srvtoolu_1', 'content' => [['type' => 'web_search_result', 'url' => 'https://ex.example/a', 'title' => 'A', 'page_age' => '1 day', 'encrypted_content' => 'xx']]],
+    ['type' => 'text', 'text' => 'खेल ऐप बढ़ रहे हैं 🎮 — growth in "Tools" {[ ]} data: x', 'citations' => [['type' => 'web_search_result_location', 'url' => 'https://ex.example/a', 'title' => 'A', 'cited_text' => 'x', 'encrypted_index' => 'e1']]],
+    ['type' => 'redacted_thinking', 'data' => 'ENC=='], ['type' => 'mystery_block', 'x' => 1]],
+    'stop_reason' => 'end_turn', 'stop_sequence' => null, 'usage' => ['input_tokens' => 1234, 'cache_creation_input_tokens' => 10, 'cache_read_input_tokens' => 20, 'output_tokens' => 567, 'server_tool_use' => ['web_search_requests' => 1]]];
+$sse = implode('', fake_sse_events($msgU));
+$same = true;
+foreach ([1, 7, 64, strlen($sse)] as $sz) { $st = $feed($sse, $sz); $same = $same && $st['done'] && $st['error'] === null && $st['buf'] === '' && $norm(st_sse_message($st)) === $norm($msgU); }
+$utf8Cut = (bool)array_filter(str_split($sse, 7), fn($c) => !mb_check_encoding($c, 'UTF-8'));
+ok($same && $utf8Cut, 'SSE: same message as the non-streaming JSON for chunk sizes 1, 7, 64 and whole (Hindi/emoji UTF-8 cut between chunks, thinking + signature, server_tool_use input from partial_json, web_search_tool_result, citations_delta, unknown block)');
+$same = true;
+foreach ([1, 5, 64] as $sz) { $st = $feed(str_replace("\n", "\r\n", $sse), $sz); $same = $same && $st['done'] && $norm(st_sse_message($st)) === $norm($msgU); }
+ok($same, 'SSE: \r\n line endings (\r and \n arriving in different chunks)');
+$evs = fake_sse_events($msgU);
+$k3 = (int)array_key_first(array_filter($evs, fn($e) => str_contains($e, '"type":"content_block_stop","index":3')));
+array_splice($evs, $k3, 0, ["event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":3,\ndata:\"delta\":{\"type\":\"text_delta\",\"text\":\" ✓\"}}\n\n"]);   // one event, 2 data lines
+array_splice($evs, 1, 0, [": keep-alive comment\n\nevent: future_event\ndata: {\"type\":\"future_event\",\"x\":1}\n\nid: 7\nretry: 1000\ndata: {\"type\":\"ping\"}\n\nevent: ping\ndata: not json\n\n"]);
+$exp = $msgU; $exp['content'][3]['text'] .= ' ✓';
+$st = $feed(implode('', $evs), 3);
+ok($st['done'] && $norm(st_sse_message($st)) === $norm($exp), 'SSE: comments, unknown events / fields, data-only event, bad JSON ignored; multi-line data joined');
+$um = "event: message_start\ndata: " . json_encode(['type' => 'message_start', 'message' => ['id' => 'm', 'model' => 'claude-opus-5-5', 'content' => [], 'stop_reason' => null, 'usage' => ['input_tokens' => 100, 'output_tokens' => 1]]])
+    . "\n\nevent: message_delta\ndata: " . json_encode(['type' => 'message_delta', 'delta' => ['stop_reason' => 'max_tokens', 'stop_sequence' => null], 'usage' => ['input_tokens' => 150, 'cache_read_input_tokens' => 50, 'output_tokens' => 300,
+        'server_tool_use' => ['web_search_requests' => 2]]]) . "\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
+$st = $feed($um, 3); $mm = st_sse_message($st);
+ok($mm['usage'] === ['input_tokens' => 150, 'output_tokens' => 300, 'cache_read_input_tokens' => 50, 'server_tool_use' => ['web_search_requests' => 2]] && $mm['stop_reason'] === 'max_tokens' && $mm['content'] === []
+    && st_sse_usage($st) === $mm['usage'], 'SSE: message_delta usage is cumulative (merged, later values win), stop_reason from the delta');
+$evs = fake_sse_events(['usage' => ['input_tokens' => 4321, 'output_tokens' => 9], 'content' => [['type' => 'server_tool_use', 'id' => 's9', 'name' => 'web_search', 'input' => ['query' => 'abc def']],
+    ['type' => 'text', 'text' => 'partial answer here']]]);
+$st = $feed(implode('', array_slice($evs, 0, 12)) . "event: content_block_delta\ndata: {\"type\":\"content_bl", 4); $mm = st_sse_message($st);
+$st2 = $feed(implode('', array_slice($evs, 0, 5)), 64);
+$st3 = $feed(implode('', array_slice($evs, 0, 2)) . "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}\n\n", 7);
+$st4 = $feed(implode('', fake_sse_events(['content' => [['type' => 'tool_use', 'id' => 't1', 'name' => 'noop', 'input' => []]]])), 9);
+ok(!$st['done'] && ($mm['content'][1]['text'] ?? '') === 'partial answer' && ($mm['content'][0]['input'] ?? null) === ['query' => 'abc def'] && st_sse_usage($st) === ['input_tokens' => 4321, 'output_tokens' => 9]
+    && json_encode(st_sse_message($st2)['content'][0]['input']) === '{}' && st_sse_usage($st2)['output_tokens'] === 3 && $st3['error'] === ['type' => 'overloaded_error', 'message' => 'Overloaded'] && !$st3['done']
+    && st_sse_message($st3)['content'] === [] && json_encode(st_sse_message($st4)['content'][0]['input']) === '{}' && st_sse_message(st_sse_new()) === null,
+    'SSE: stream cut mid-way keeps what arrived (half tool input -> {}), output tokens ~ streamed bytes / 4 without message_delta, error event recorded, empty tool input -> {} object');
+// tool input given whole in content_block_start (no input_json_delta) is kept, not overwritten with {}
+$si = "event: message_start\ndata: " . json_encode(['type' => 'message_start', 'message' => ['id' => 'm', 'model' => 'claude-opus-5-5', 'content' => [], 'usage' => ['input_tokens' => 1]]]) . "\n\n"
+    . "event: content_block_start\ndata: " . json_encode(['type' => 'content_block_start', 'index' => 0, 'content_block' => ['type' => 'server_tool_use', 'id' => 's1', 'name' => 'web_search',
+        'input' => ['query' => 'android prank apps'], 'caller' => ['type' => 'direct']]]) . "\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n"
+    . "event: content_block_start\ndata: " . json_encode(['type' => 'content_block_start', 'index' => 1, 'content_block' => ['type' => 'tool_use', 'id' => 't2', 'name' => 'x', 'input' => ['a' => 1]]]) . "\n\n"
+    . "event: content_block_delta\ndata: " . json_encode(['type' => 'content_block_delta', 'index' => 1, 'delta' => ['type' => 'input_json_delta', 'partial_json' => '{"b":2}']]) . "\n\n"
+    . "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n";
+$sim = st_sse_message($feed($si, 5));
+ok(($sim['content'][0]['input'] ?? null) === ['query' => 'android prank apps'] && ($sim['content'][0]['caller'] ?? null) === ['type' => 'direct'] && ($sim['content'][1]['input'] ?? null) === ['b' => 2],
+    'SSE: tool input given whole in content_block_start kept when no delta follows; deltas (when sent) win');
+$fr = fn(array $x): array => $x + ['code' => 0, 'raw' => '', 'st' => st_sse_new(), 'idle' => false, 'cancel' => false, 'dberr' => null, 'errno' => 0, 'err' => '', 'secs' => 0.0];
+$stOut = $feed(implode('', array_slice($evs, 0, 12)), 64);
+$sf = [st_stream_fail($fr(['code' => 529, 'raw' => '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}'])),
+    st_stream_fail($fr(['code' => 400, 'raw' => '{"type":"error","error":{"type":"invalid_request_error","message":"bad schema"}}'])),
+    st_stream_fail($fr(['errno' => 7, 'err' => 'Failed to connect to api.anthropic.com port 443', 'secs' => 0.2])),
+    st_stream_fail($fr(['errno' => 28, 'err' => 'Operation timed out after 1500000 milliseconds', 'secs' => 1500.4, 'code' => 200, 'st' => $stOut])),
+    st_stream_fail($fr(['errno' => 42, 'err' => 'Callback aborted', 'idle' => true, 'secs' => 3.2])),
+    st_stream_fail($fr(['code' => 200, 'st' => $stOut])), st_stream_fail($fr(['code' => 200, 'st' => $st3])),
+    st_stream_fail($fr(['code' => 200, 'st' => ['error' => ['type' => 'api_error', 'message' => 'Internal']] + $stOut]))];
+ok($sf === [[true, 'Claude API HTTP 529 Overloaded'], [false, 'Claude API HTTP 400 bad schema'], [true, 'Claude API connection failed: Failed to connect to api.anthropic.com port 443'],
+    [false, 'Claude API did not answer in time (1500 s): Operation timed out after 1500000 milliseconds'], [true, 'Claude API did not answer in time (3 s): no data for 2 s'],
+    [false, 'Claude API answer stopped early (connection closed)'], [true, 'Claude API error during answer: overloaded_error: Overloaded'], [false, 'Claude API error during answer: api_error: Internal']],
+    'stream failures: clear texts; retry only for 429/529/5xx, overloaded/api_error before any output, and nothing received; never after output started');
+$fbB = ['type' => 'fallback', 'from' => ['model' => 'claude-opus-5-5'], 'to' => ['model' => 'claude-opus-5']];
+$fbC = [['type' => 'thinking', 'thinking' => '', 'signature' => 'sigA'], ['type' => 'server_tool_use', 'id' => 'a', 'name' => 'web_search', 'input' => ['query' => 'q']],
+    ['type' => 'web_search_tool_result', 'tool_use_id' => 'a', 'content' => []], ['type' => 'server_tool_use', 'id' => 'b', 'name' => 'web_search', 'input' => ['query' => 'q2']],
+    ['type' => 'tool_use', 'id' => 'c', 'name' => 'x', 'input' => []], ['type' => 'redacted_thinking', 'data' => 'R'], ['type' => 'mystery', 'x' => 1], ['type' => 'text', 'text' => '{"dead":'], $fbB,
+    ['type' => 'thinking', 'thinking' => '', 'signature' => 'sigB'], ['type' => 'text', 'text' => '{"ok":'], ['type' => 'text', 'text' => '1}']];
+ok(st_ai_text($fbC) === '{"ok":1}' && st_ai_text([['type' => 'text', 'text' => 'a'], ['type' => 'thinking', 'thinking' => 'z'], ['type' => 'text', 'text' => 'b']]) === 'ab' && st_ai_text([$fbB]) === '',
+    'non-streaming answer text = text blocks after the last fallback block only (the API already dropped the declined partial)');
+ok(st_ai_text($fbC, true) === '{"dead":{"ok":1}' && st_ai_text([['type' => 'text', 'text' => '{"opportunities":[{"title":"A"},{"ti'], $fbB, ['type' => 'text', 'text' => 'tle":"B"}]}']], true) === '{"opportunities":[{"title":"A"},{"title":"B"}]}'
+    && st_ai_text([$fbB], true) === '', 'streaming answer text = every text block (the fallback model continues the declined partial)');
+$echo = st_ai_echo($fbC);
+$fbD = [['type' => 'text', 'text' => 'p1'], $fbB, ['type' => 'thinking', 'thinking' => '', 'signature' => 'sigM'], ['type' => 'text', 'text' => 'p2'], $fbB + ['n' => 2], ['type' => 'text', 'text' => 'p3']];
+ok(array_column($echo, 'type') === ['server_tool_use', 'web_search_tool_result', 'text', 'fallback', 'thinking', 'text', 'text'] && $echo[0]['id'] === 'a' && $echo[3] === $fbB && $echo[4]['signature'] === 'sigB'
+    && st_ai_echo(array_slice($fbC, 0, 8)) === array_slice($fbC, 0, 8) && array_column(st_ai_echo($fbD), 'type') === ['text', 'fallback', 'text', 'fallback', 'text'],
+    'pause_turn echo after a mid-stream fallback: thinking / redacted / tool_use / unpaired server_tool_use / unknown before the last boundary dropped, '
+    . 'text + paired search kept, fallback blocks kept in place; without a fallback block unchanged');
+// truncated JSON salvage (max_tokens): only complete items of the top-level list
+$sv = [['title' => 'A "quoted" [x] {y}', 'deep' => ['k' => [1, 2, ['z' => 'q\\']]]], ['title' => "B ]} line\nbreak", 'n' => ['m' => ['o' => -1.5]]], ['title' => 'C ✓ खेल']];
+$full = json_encode(['meta' => ['opportunities' => [9]], 'opportunities' => $sv, 'tail' => true], JSON_UNESCAPED_UNICODE);
+$at = fn(string $needle, string $plus = '') => substr($full, 0, (int)strpos($full, $needle)) . $plus;
+ok(st_json_salvage_list($full, 'opportunities') === $sv && st_json_salvage_list(json_encode(['opportunities' => $sv], JSON_PRETTY_PRINT), 'opportunities') === $sv
+    && st_json_salvage_list('Sure: {"opportunities":[{"a":1},{"b":2}]', 'opportunities') === [['a' => 1], ['b' => 2]], 'salvage: complete JSON (also pretty-printed, text before it) -> every item; same key nested deeper ignored');
+ok(st_json_salvage_list($at('C ✓', 'C'), 'opportunities') === array_slice($sv, 0, 2) && st_json_salvage_list($at('"o"', '"o":'), 'opportunities') === [$sv[0]]
+    && st_json_salvage_list($at('"z"', '"z":"q\\'), 'opportunities') === [] && st_json_salvage_list($at('{"title":"A'), 'opportunities') === [] && st_json_salvage_list('{"opportunities":[{"a":1},', 'opportunities') === [['a' => 1]],
+    'salvage: cut mid-string, mid nested object, inside an escape, right after "[" or a comma -> only the complete items');
+ok(st_json_salvage_list('{"opportunities":["a\\"b]", 3, true, null, "c', 'opportunities') === ['a"b]', 3, true, null] && st_json_salvage_list('not json [1, 2]', 'opportunities') === []
+    && st_json_salvage_list('', 'opportunities') === [] && st_json_salvage_list('{"opportunities":"x","other":[{"a":1}]}', 'opportunities') === [] && st_json_salvage_list('{"opportunities":{"a":[1]}}', 'opportunities') === [],
+    'salvage: scalar items, garbage / empty / key not a list -> []');
+$bigOpps = array_map(fn($i) => ['title' => "Idea $i", 'note' => str_repeat('x "y" \\ [z] ', 400)], range(1, 60));
+$bigCut = substr(json_encode(['opportunities' => $bigOpps]), 0, -500);
+$t0 = microtime(true); $bigN = count(st_json_salvage_list($bigCut, 'opportunities')); $bigT = microtime(true) - $t0;
+ok($bigN === 59 && $bigT < 1.0, sprintf('salvage: %d KB cut answer scanned in %.0f ms (59 of 60 ideas complete)', strlen($bigCut) / 1024, $bigT * 1000));
 
 if (!getenv('TEST_DB_HOST')) { echo "\nTEST_DB_HOST not set: DB part skipped\n$n checks, $fail failed\n"; exit($fail > 0 ? 1 : 0); }
 
 // ================================================================ Part 2: MySQL + simulated data
+// fake Claude API server (fake_claude.php): started before the first st_ai call; workers so a stalled stream never blocks the next request
+$env = 'STUDIO_FAKE_Q=' . escapeshellarg($Q) . ' TEST_DB_HOST=' . escapeshellarg((string)getenv('TEST_DB_HOST')) . ' TEST_DB_NAME=' . escapeshellarg((string)getenv('TEST_DB_NAME'))
+    . ' TEST_DB_USER=' . escapeshellarg((string)getenv('TEST_DB_USER')) . ' TEST_DB_PASS=' . escapeshellarg((string)getenv('TEST_DB_PASS'));
+$fsrv = proc_open("PHP_CLI_SERVER_WORKERS=4 $env exec php -S 127.0.0.1:$FP -t " . escapeshellarg("$T/fake"), [1 => ['file', "$T/fake.log", 'a'], 2 => ['file', "$T/fake.log", 'a']], $fpipes);
+register_shutdown_function(function () use ($fsrv) { proc_terminate($fsrv); });
+for ($i = 0; $i < 50 && !($fs = @fsockopen('127.0.0.1', $FP, $en, $es, 0.2)); $i++) usleep(100000);
+if (!empty($fs)) fclose($fs);
 function q(string $sql, array $p = []): array { return h_q(db(), $sql, $p); }
 function q1(string $sql, array $p = []) { return h_q1(db(), $sql, $p); }
 $fake = function (array $responses) use ($Q) { file_put_contents($Q, json_encode($responses)); };
@@ -405,7 +588,8 @@ $run = $pdo->query("SELECT * FROM st_runs WHERE id = $rid")->fetch();
 ok($run['status'] === 'DONE' && $left() === 0, 'rank run DONE, all canned responses used (pause_turn resumed)' . ($run['status'] !== 'DONE' ? ' · ' . $run['error_text'] : ''));
 ok((int)$run['ai_calls'] === 3 && (int)$run['searches'] === 4 && (float)$run['cost_usd'] > 0, 'usage + cost recorded per call (3 calls, 4 searches)');
 $log = (string)@file_get_contents("$Q.log");
-ok(str_contains($log, 'web_search_20260209') && str_contains($log, 'json_schema') && str_contains($log, 'UNTRUSTED DATA'), 'requests use web search tool, structured output and the untrusted-content rule');
+ok(str_contains($log, 'web_search_20260209') && str_contains($log, 'json_schema') && str_contains($log, 'UNTRUSTED DATA') && substr_count($log, '"stream":true') === 3 && str_contains($log, '/fake_claude.php '),
+    'requests use web search tool, structured output and the untrusted-content rule; all 3 streamed (SSE)');
 ok(str_contains($log, "=== Owner's own apps, last 30 days (verified) ===\\nP1: all your apps") && preg_match('/\\\\nP\\d+: your apps in IN: 880 installs \\(220 paid\\)[^"]*\\(spend estimated from paid installs\\)/', $log)
     && str_contains($log, "paid ROAS is below 100%") && str_contains($log, 'cite those with basis ESTIMATE') && (bool)kv_get('st_port_meta'),
     "rank prompt: owner's-apps section with P ids (portfolio ran inline first), estimated spend marked, guidance in system prompt (estimated P lines = ESTIMATE)");
@@ -818,10 +1002,225 @@ st_work($pdo, 60);
 ok(q1('SELECT status FROM st_runs WHERE id = ?', [$rid]) === 'DONE' && (int)q1('SELECT attempts FROM st_runs WHERE id = ?', [$rid]) === 2, 'interrupted run (server restart) requeued and completed');
 ok((int)q1("SELECT COUNT(*) FROM st_events WHERE kind = 'decision' AND actor = 'sagar'") >= 4, 'decisions in searchable activity history');
 
+// ---------------------------------------------------------------- streaming Claude calls: owner's weekly ranking failed at step 4/6 (HTTP 0 after 300 s, answer cut at 32000 tokens, cost not recorded)
+// every call below goes through the fake streaming API (php -S, fake_claude.php): real SSE over curl, chunks cut mid-line, errors / cuts / stalls on demand
+$reqs = function () use ($Q) { $o = []; foreach (array_filter(explode("\n", (string)@file_get_contents("$Q.log"))) as $l) $o[] = (array)json_decode(substr($l, (int)strpos($l, ' ') + 1), true); return $o; };
+$rankRun = function (array $queue) use ($pdo, $fake, $Q) {
+    @unlink("$Q.log"); $fake($queue);
+    $id = st_run_new($pdo, 'rank', ['trigger' => 'manual', 'by' => 'test']);
+    $t0 = microtime(true); st_work($pdo, 60);
+    return $pdo->query("SELECT * FROM st_runs WHERE id = $id")->fetch() + ['secs' => microtime(true) - $t0];
+};
+$usageOf = fn(int $id) => q('SELECT ok, in_tokens, out_tokens, cost_usd FROM st_usage WHERE run_id = ? ORDER BY id', [$id]);
+$oppS = fn(string $t) => ['title' => $t, 'concept' => 'c', 'category' => 'Tools', 'countries' => ['IN'], 'competitors' => [], 'monetization' => ['banner'], 'risks' => [], 'why_build' => 'b',
+    'why_avoid' => 'a', 'complexity' => 'Low', 'recommendation' => 'TEST FIRST', 'decision_card' => $card, 'factors' => $fx(['demand' => ['rating' => 6, 'basis' => 'INFERENCE', 'evidence' => ['S1'], 'note' => 'n']])];
+// max_tokens answer: $total ideas, cut inside the title of idea $keep + 1
+$cutResp = function (string $p, int $keep, int $total = 5) use ($oppS) {
+    $j = json_encode(['opportunities' => array_map(fn($i) => $oppS("$p $i"), range(1, $total))]);
+    return [200, ['model' => 'claude-opus-5-5', 'stop_reason' => 'max_tokens', 'usage' => ['input_tokens' => 9000, 'output_tokens' => 64000], 'content' => [['type' => 'text', 'text' => substr($j, 0, (int)strpos($j, "\"$p " . ($keep + 1)) + 4)]]]];
+};
+$slowMsg = [200, ['model' => 'claude-opus-5-5', 'stop_reason' => 'end_turn', 'usage' => ['input_tokens' => 7777, 'output_tokens' => 999], 'content' => [['type' => 'text', 'text' => str_repeat('slow answer text ', 15)]]]];
+$errOf = fn(array $r, string $want = 'DONE') => $r['status'] !== $want ? ' · ' . $r['status'] . ' ' . $r['error_text'] : '';
+// T1: answer cut at max_tokens after 4 complete ideas -> kept, run PARTIAL, ranking + Gate 1 still happen
+$t1 = $rankRun([$webResp(['https://example.com/t1cut'], 'T1 web notes'), $cutResp('Cut idea', 4)]);
+$t1Arts = q('SELECT id, kind, content FROM st_artifacts WHERE run_id = ? ORDER BY id', [(int)$t1['id']]);
+$t1Rank = json_decode((string)($t1Arts[1]['content'] ?? '{}'), true);
+ok($t1['status'] === 'PARTIAL' && str_contains($t1['error_text'], 'AI answer was cut off (max_tokens 64000); kept 4 ideas') && (int)$t1['errors'] === 1 && (int)$t1['attempts'] === 1
+    && (int)q1("SELECT COUNT(*) FROM st_opps WHERE title LIKE 'Cut idea %'") === 4 && array_column($t1Arts, 'kind') === ['rank_notes', 'ranking'] && ($t1Rank['truncated'] ?? null) === true
+    && array_key_exists('reused_from', $t1Rank) && $t1Rank['reused_from'] === null && count($t1Rank['opportunity_ids'] ?? []) === 4
+    && (int)q1('SELECT COUNT(*) FROM st_notified WHERE nkey = ?', ['rank|' . $t1['id']]) === 1 && str_starts_with((string)$t1['summary'], '4 opportunities · ranking artifact #'),
+    'answer cut at max_tokens with 4 complete ideas: 4 stored, run PARTIAL ("kept 4 ideas"), ranking artifact (truncated) + Gate 1 notification' . $errOf($t1, 'PARTIAL'));
+$rq = $reqs();
+ok(count($rq) === 2 && ($rq[0]['stream'] ?? null) === true && ($rq[1]['stream'] ?? null) === true && ($rq[1]['max_tokens'] ?? 0) === 64000 && ($rq[1]['output_config']['effort'] ?? '') === 'high'
+    && str_contains($rq[1]['system'] ?? '', 'turn research notes into 8-12 app opportunities') && str_contains($rq[1]['system'], 'Be brief: concept at most 30 words; each factor note at most 15 words')
+    && str_contains($rq[1]['system'], 'at most 3 competitors, 4 risks and 4 monetization items'), 'ranking request: streamed, max_tokens 64000, effort high, 8-12 ideas with brevity limits');
+$n1 = json_decode((string)($t1Arts[0]['content'] ?? '{}'), true);
+$e1 = (int)q1('SELECT id FROM st_evidence WHERE url = ? AND run_id = ?', ['https://example.com/t1cut', (int)$t1['id']]);
+ok(str_contains($n1['notes'] ?? '', "## Notes: Tools\nT1 web notes") && !str_contains($n1['notes'], 'Daily discovery') && ($n1['smap'] ?? null) === ['S1' => $e1] && $e1 > 0 && ($n1['n'] ?? 0) === 1
+    && ($n1['ads'] ?? null) === '' && ($n1['countries'] ?? null) === ['IN', 'US'] && ($n1['categories'] ?? null) === ['Tools'] && ($n1['done'] ?? null) === ['Tools'] && ($n1['ads_ok'] ?? null) === false
+    && ($n1['runs'] ?? null) === [$t1['run_uid']]
+    && q1("SELECT kind FROM st_events WHERE run_id = ? AND msg LIKE '%rank_notes v%'", [(int)$t1['id']]) === 'log' && q1("SELECT kind FROM st_events WHERE run_id = ? AND msg LIKE '%ranking v%'", [(int)$t1['id']]) === 'artifact',
+    'rank_notes artifact: web notes (before discovery), S map, n, ads, countries, categories, done categories, ads_ok (Ads not configured), runs; logged as kind log (not in the app activity feed)');
+// T2: only 2 complete ideas -> clear error, nothing stored, run FAILED (no retry: research steps done); its notes stay reusable
+$t2 = $rankRun([$webResp(['https://example.com/t2'], 'T2 web notes'), $cutResp('Cut two', 2)]);
+$N2 = (int)q1("SELECT id FROM st_artifacts WHERE run_id = ? AND kind = 'rank_notes'", [(int)$t2['id']]);
+$e2 = (int)q1('SELECT id FROM st_evidence WHERE url = ? AND run_id = ?', ['https://example.com/t2', (int)$t2['id']]);
+ok($t2['status'] === 'FAILED' && str_contains($t2['error_text'], "Claude's answer was cut off (max_tokens 64000): only 2 complete ideas") && (int)$t2['attempts'] === 1
+    && (int)q1("SELECT COUNT(*) FROM st_opps WHERE title LIKE 'Cut two %'") === 0 && (int)q1("SELECT COUNT(*) FROM st_artifacts WHERE run_id = ? AND kind = 'ranking'", [(int)$t2['id']]) === 0 && $N2 > 0,
+    'answer cut with only 2 complete ideas: run FAILED with a clear error, no ideas / ranking stored, research notes saved' . $errOf($t2, 'FAILED'));
+$re = st_rank_notes_reuse($pdo, 0, ['Tools'], ['US', 'IN']);
+ok(($re['id'] ?? 0) === $N2 && $re['uid'] === $t2['run_uid'] && $re['smap'] === ['S1' => $e2] && $re['n'] === 1 && str_contains($re['notes'], 'T2 web notes') && $re['ads'] === ''
+    && $re['done'] === ['Tools'] && $re['ads_ok'] === false && $re['runs'] === [$t2['run_uid']],
+    'reuse: notes of the failed run found (countries in any order, done categories, ads_ok, runs); PARTIAL run with a ranking (T1) not offered');
+$noRe = [st_rank_notes_reuse($pdo, 0, ['Tools', 'Utilities'], ['IN', 'US']), st_rank_notes_reuse($pdo, 0, ['Tools'], ['IN'])];
+h_x($pdo, 'UPDATE st_artifacts SET created_at = DATE_SUB(UTC_TIMESTAMP(), INTERVAL 25 HOUR) WHERE id = ?', [$N2]);
+$noRe[] = st_rank_notes_reuse($pdo, 0, ['Tools'], ['IN', 'US']);
+h_x($pdo, 'UPDATE st_artifacts SET created_at = UTC_TIMESTAMP() WHERE id = ?', [$N2]);
+$reSt = [];
+foreach (['DONE', 'RUNNING', 'QUEUED', 'BLOCKED', 'CANCELLED', 'FAILED'] as $s) {
+    h_x($pdo, 'UPDATE st_runs SET status = ? WHERE id = ?', [$s, (int)$t2['id']]);
+    $reSt[$s] = [(st_rank_notes_reuse($pdo, 0, ['Tools'], ['IN', 'US'])['id'] ?? 0) === $N2, (st_rank_notes_reuse($pdo, (int)$t2['id'], ['Tools'], ['IN', 'US'])['id'] ?? 0) === $N2];
+}
+$evRow = $pdo->query("SELECT * FROM st_evidence WHERE id = $e2")->fetch();
+h_x($pdo, 'DELETE FROM st_evidence WHERE id = ?', [$e2]);
+$noRe[] = st_rank_notes_reuse($pdo, 0, ['Tools'], ['IN', 'US']);
+h_x($pdo, 'INSERT INTO st_evidence (`' . implode('`,`', array_keys($evRow)) . '`) VALUES (' . implode(',', array_fill(0, count($evRow), '?')) . ')', array_values($evRow));
+ok($noRe === [null, null, null, null] && (st_rank_notes_reuse($pdo, 0, ['Tools'], ['IN', 'US'])['id'] ?? 0) === $N2
+    && $reSt === ['DONE' => [false, true], 'RUNNING' => [false, true], 'QUEUED' => [false, true], 'BLOCKED' => [true, true], 'CANCELLED' => [true, true], 'FAILED' => [true, true]],
+    'reuse refused: other categories / countries, older than 24 h, an evidence row gone (back -> reusable again), run DONE / RUNNING / QUEUED; '
+    . 'offered: FAILED / PARTIAL / BLOCKED (budget) / CANCELLED, and to the same run (crash-requeued attempt 2) in any status · ' . json_encode($reSt));
+// T3: next rank run reuses T2's notes: no web search, one AI call, steps as usual, evidence still citable
+$t3 = $rankRun([$jsonResp(['opportunities' => [$oppS('Reuse idea')]])]);
+$rq = $reqs();
+$t3Rank = json_decode((string)q1("SELECT content FROM st_artifacts WHERE run_id = ? AND kind = 'ranking'", [(int)$t3['id']]), true);
+$OR = $pdo->query("SELECT * FROM st_opps WHERE title = 'Reuse idea'")->fetch();
+ok($t3['status'] === 'DONE' && count($rq) === 1 && !isset($rq[0]['tools']) && str_contains($rq[0]['messages'][0]['content'] ?? '', "## Notes: Tools\nT2 web notes") && (int)$t3['steps_done'] === 4
+    && (int)$t3['steps_total'] === 4 && (int)$t3['ai_calls'] === 1 && (int)$t3['searches'] === 0 && ($t3Rank['reused_from'] ?? null) === ['artifact_id' => $N2, 'run_uid' => $t2['run_uid'], 'runs' => [$t2['run_uid']]]
+    && str_ends_with((string)$t3['summary'], ' · research notes reused from ' . $t2['run_uid'])
+    && (int)q1('SELECT COUNT(*) FROM st_events WHERE run_id = ? AND msg LIKE ?', [(int)$t3['id'], '%reusing research notes from ' . $t2['run_uid'] . ' (no new web search)%']) === 1
+    && $OR && (json_decode($OR['factors'], true)['demand']['evidence'] ?? null) === [$e2] && (int)q1("SELECT COUNT(*) FROM st_artifacts WHERE run_id = ? AND kind = 'rank_notes'", [(int)$t3['id']]) === 0
+    && st_rank_notes_reuse($pdo, 0, ['Tools'], ['IN', 'US']) === null,
+    'rank run after a failed one: notes reused (no web search, 1 AI call, 4/4 steps), reused_from + summary + stage log, S1 still cites the evidence, notes used up' . $errOf($t3));
+// F1: overloaded error event AFTER output started -> no retry (would bill twice), FAILED; the partial call is still recorded (ok 0)
+$f1 = $rankRun([$webResp(['https://example.com/f1'], 'F1 web notes'), $slowMsg + [2 => ['error' => 4]], $jsonResp(['opportunities' => [$oppS('Never used')]])]);
+$u = $usageOf((int)$f1['id']); $ul = end($u);
+ok($f1['status'] === 'FAILED' && str_contains($f1['error_text'], 'Claude API error during answer: overloaded_error: Overloaded') && $left() === 1 && count($reqs()) === 2
+    && count($u) === 2 && (int)$ul['ok'] === 0 && (int)$ul['in_tokens'] === 7777 && (float)$ul['cost_usd'] > 0 && (int)$f1['ai_calls'] === 2
+    && str_contains((string)kv_get('ai_last_error'), 'overloaded_error') && str_ends_with((string)kv_get('ai_last_error'), '(studio)'),
+    'stream error after output: not retried, run FAILED with a clear error, cost of the failed call recorded (ok 0, input tokens from message_start)' . $errOf($f1, 'FAILED'));
+// F2: connection closed mid-answer (no message_stop) -> FAILED, no retry; reuses F1's notes
+$f2 = $rankRun([$slowMsg + [2 => ['cut' => 6]], $jsonResp(['opportunities' => [$oppS('Never used')]])]);
+$u = $usageOf((int)$f2['id']);
+ok($f2['status'] === 'FAILED' && str_contains($f2['error_text'], 'Claude API answer stopped early (connection closed)') && count($reqs()) === 1 && $left() === 1
+    && count($u) === 1 && (int)$u[0]['ok'] === 0 && (int)$u[0]['in_tokens'] === 7777 && (int)$u[0]['out_tokens'] >= 1
+    && (int)q1('SELECT COUNT(*) FROM st_events WHERE run_id = ? AND msg LIKE ?', [(int)$f2['id'], '%reusing research notes from ' . $f1['run_uid'] . '%']) === 1,
+    'stream cut mid-answer: run FAILED ("stopped early"), not retried, usage ok 0; research notes of the failed run reused' . $errOf($f2, 'FAILED'));
+// F3: stream stalls (no bytes, no ping) -> idle abort after ST_STREAM_IDLE_SEC, not after the full timeout
+$f3 = $rankRun([$slowMsg + [2 => ['stall' => [5, 6]]], $jsonResp(['opportunities' => [$oppS('Never used')]])]);
+ok($f3['status'] === 'FAILED' && preg_match('/Claude API did not answer in time \(\d+ s\): no data for 2 s/', $f3['error_text']) && $f3['secs'] < 6 && count($reqs()) === 1 && $left() === 1,
+    sprintf('stalled stream: idle abort in %.1f s ("did not answer in time ... no data for 2 s"), not retried after output', $f3['secs']) . $errOf($f3, 'FAILED'));
+// C1: Cancel pressed while a slow answer streams -> stream aborted within ~ST_STREAM_CHECK_SEC, run CANCELLED, partial usage recorded
+$c1 = $rankRun([$slowMsg + [2 => ['delay' => 0.25, 'cancel' => 3]]]);
+$u = $usageOf((int)$c1['id']);
+ok($c1['status'] === 'CANCELLED' && $c1['secs'] < 6 && count($u) === 1 && (int)$u[0]['ok'] === 0 && (int)$u[0]['in_tokens'] === 7777,
+    sprintf('cancel during a slow stream: run CANCELLED after %.1f s (stream needs ~10 s), usage ok 0 recorded', $c1['secs']) . $errOf($c1, 'CANCELLED'));
+// D1: nothing received at all (not even headers) -> idle abort, retried once (no bill), then DONE
+$d1r = $rankRun([$slowMsg + [2 => ['stall' => [0, 5]]], $jsonResp(['opportunities' => [$oppS('Stall retry idea')]])]);
+ok($d1r['status'] === 'DONE' && count($reqs()) === 2 && (int)$d1r['ai_calls'] === 1 && $left() === 0 && (int)q1("SELECT COUNT(*) FROM st_opps WHERE title = 'Stall retry idea'") === 1
+    && st_rank_notes_reuse($pdo, 0, ['Tools'], ['IN', 'US']) === null, 'no data at all: retried once, run DONE, only the answered call billed; reused notes used up' . $errOf($d1r));
+// R1: HTTP 529 -> retried; overloaded error event BEFORE any output -> retried; both calls DONE
+$r1 = $rankRun([[529, ['type' => 'error', 'error' => ['type' => 'overloaded_error', 'message' => 'Overloaded']]], $webResp(['https://example.com/r1'], 'R1 web notes'),
+    $slowMsg + [2 => ['error' => 2]], $jsonResp(['opportunities' => [$oppS('Retry idea')]])]);
+ok($r1['status'] === 'DONE' && count($reqs()) === 4 && $left() === 0 && array_map('intval', array_column($usageOf((int)$r1['id']), 'ok')) === [1, 0, 1]
+    && (int)q1("SELECT COUNT(*) FROM st_opps WHERE title = 'Retry idea'") === 1, 'HTTP 529 and an overloaded error event before output: each retried once, run DONE (failed attempt recorded ok 0)' . $errOf($r1));
+// K1: ranking stream cut (connection closed / timeout) after 4 complete ideas -> salvaged like max_tokens: 4 kept, run PARTIAL, not retried, cut call billed ok 0
+$kj = json_encode(['opportunities' => array_map(fn($i) => $oppS("Kept cut $i"), range(1, 5))]);
+$k1 = $rankRun([$webResp(['https://example.com/k1'], 'K1 web notes'), [200, ['model' => 'claude-opus-5-5', 'stop_reason' => 'end_turn', 'usage' => ['input_tokens' => 9100, 'output_tokens' => 40000],
+    'content' => [['type' => 'text', 'text' => $kj]]], ['cut' => 3 + intdiv((int)strpos($kj, '"Kept cut 5') + 7, 7)]]]);   // text deltas are 7 chars from event 3: cut inside idea 5's title
+$u = $usageOf((int)$k1['id']);
+ok($k1['status'] === 'PARTIAL' && str_contains($k1['error_text'], 'AI answer was cut off (Claude API answer stopped early (connection closed)); kept 4 ideas') && count($reqs()) === 2
+    && (int)q1("SELECT COUNT(*) FROM st_opps WHERE title LIKE 'Kept cut %'") === 4 && array_map('intval', array_column($u, 'ok')) === [1, 0] && (int)$u[1]['in_tokens'] === 9100 && (int)$u[1]['out_tokens'] > 100
+    && (json_decode((string)q1("SELECT content FROM st_artifacts WHERE run_id = ? AND kind = 'ranking'", [(int)$k1['id']]), true)['truncated'] ?? null) === true,
+    'ranking stream cut after 4 complete ideas: kept (PARTIAL, "cut off (... stopped early ...); kept 4 ideas"), ranking truncated, not retried, cut call billed ok 0' . $errOf($k1, 'PARTIAL'));
+// FB3: answer cut at max_tokens after a mid-stream fallback: the fallback model continued the partial JSON -> salvage on the whole text (4 complete ideas, not 0)
+$c5 = $cutResp('Fb idea', 4)[1]; $tx = $c5['content'][0]['text']; $sp = (int)strpos($tx, '"Fb idea 3') + 5;
+$c5['content'] = [['type' => 'text', 'text' => substr($tx, 0, $sp)], $fbB, ['type' => 'text', 'text' => substr($tx, $sp)]];
+$fb3 = $rankRun([$webResp(['https://example.com/fb3'], 'FB3 web notes'), [200, $c5]]);
+ok($fb3['status'] === 'PARTIAL' && str_contains($fb3['error_text'], 'AI answer was cut off (max_tokens 64000); kept 4 ideas') && (int)q1("SELECT COUNT(*) FROM st_opps WHERE title LIKE 'Fb idea %'") === 4,
+    'max_tokens after a mid-stream fallback (JSON continued across the marker): 4 complete ideas salvaged from partial + continuation' . $errOf($fb3, 'PARTIAL'));
+// HS: healthy but slow answer: bytes keep coming for longer than ST_STREAM_IDLE_SEC (2 s) and many ST_STREAM_CHECK_SEC (1 s), on a connection with a 2 s MySQL wait_timeout:
+// not aborted (idle timer reset by data), and the in-stream DB ping keeps the connection alive for the usage row written after the call
+$hp = new PDO('mysql:host=' . getenv('TEST_DB_HOST') . ';dbname=' . getenv('TEST_DB_NAME') . ';charset=utf8mb4', (string)getenv('TEST_DB_USER'), (string)getenv('TEST_DB_PASS'),
+    [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC, PDO::ATTR_EMULATE_PREPARES => true]);
+$hp->exec("SET time_zone = '+00:00'"); $hp->exec('SET SESSION wait_timeout = 2');
+@unlink("$Q.log"); $fake([$webResp(['https://example.com/hs'], 'HS web notes'), $jsonResp(['opportunities' => [$oppS('Healthy slow idea')]]) + [2 => ['delay' => 0.02]]]);
+$hid = st_run_new($pdo, 'rank', ['trigger' => 'manual', 'by' => 'test']);
+$t0 = microtime(true); $hsErr = '';
+try { st_run_exec($hp, $hid); } catch (Throwable $e) { $hsErr = ' · ' . $e->getMessage(); }
+$hsSecs = microtime(true) - $t0; $hp = null;
+$hs = $pdo->query("SELECT * FROM st_runs WHERE id = $hid")->fetch();
+ok($hs['status'] === 'DONE' && $hsSecs > 3.5 && count($reqs()) === 2 && array_map('intval', array_column($usageOf($hid), 'ok')) === [1, 1] && (int)q1("SELECT COUNT(*) FROM st_opps WHERE title = 'Healthy slow idea'") === 1,
+    sprintf('healthy slow stream (%.1f s, idle limit 2 s, check every 1 s, MySQL wait_timeout 2 s): not aborted, DONE, both calls billed ok 1', $hsSecs) . $hsErr . $errOf($hs));
+// BL: budget runs out after the first of 2 categories -> BLOCKED, the paid-for notes of the done category saved; after the limit is raised the next run researches only the missing one
+kv_set('st_categories', json_encode(['Tools', 'Utilities']));
+kv_set('st_ai_budget_usd', (string)(st_month_spend($pdo) + 0.001));
+$bl = $rankRun([$webResp(['https://example.com/bl-tools'], 'BL tools notes'), $webResp(['https://example.com/never'], 'never')]);
+$blN = (array)json_decode((string)q1("SELECT content FROM st_artifacts WHERE run_id = ? AND kind = 'rank_notes'", [(int)$bl['id']]), true);
+ok($bl['status'] === 'BLOCKED' && $left() === 1 && str_contains($blN['notes'] ?? '', "## Notes: Tools\nBL tools notes") && ($blN['done'] ?? null) === ['Tools'] && ($blN['categories'] ?? null) === ['Tools', 'Utilities'],
+    'budget reached between categories: run BLOCKED, notes of the researched category saved (done = Tools only)' . $errOf($bl, 'BLOCKED'));
+kv_set('st_ai_budget_usd', '40');
+$bl2 = $rankRun([$webResp(['https://example.com/bl-util'], 'BL utilities notes'), $jsonResp(['opportunities' => [$oppS('Budget resume idea')]])]);
+$rq = $reqs();
+$bl2N = (array)json_decode((string)q1("SELECT content FROM st_artifacts WHERE run_id = ? AND kind = 'rank_notes'", [(int)$bl2['id']]), true);
+$bl2R = (array)json_decode((string)q1("SELECT content FROM st_artifacts WHERE run_id = ? AND kind = 'ranking'", [(int)$bl2['id']]), true);
+$eBt = (int)q1('SELECT id FROM st_evidence WHERE url = ?', ['https://example.com/bl-tools']); $eBu = (int)q1('SELECT id FROM st_evidence WHERE url = ?', ['https://example.com/bl-util']);
+ok($bl2['status'] === 'DONE' && count($rq) === 2 && isset($rq[0]['tools']) && str_contains($rq[0]['messages'][0]['content'] ?? '', 'Research theme: Utilities')
+    && str_contains($rq[1]['messages'][0]['content'] ?? '', "## Notes: Tools\nBL tools notes") && str_contains($rq[1]['messages'][0]['content'], "## Notes: Utilities\nBL utilities notes")
+    && (int)$bl2['steps_done'] === 5 && (int)$bl2['steps_total'] === 5 && ($bl2N['done'] ?? null) === ['Tools', 'Utilities'] && ($bl2N['smap'] ?? null) === ['S1' => $eBt, 'S2' => $eBu]
+    && ($bl2N['runs'] ?? null) === [$bl2['run_uid'], $bl['run_uid']] && ($bl2R['reused_from']['runs'] ?? null) === [$bl['run_uid']]
+    && (int)q1('SELECT COUNT(*) FROM st_events WHERE run_id = ? AND msg LIKE ?', [(int)$bl2['id'], '%reusing research notes from ' . $bl['run_uid'] . ' (new research only for: Utilities)%']) === 1
+    && st_rank_notes_reuse($pdo, 0, ['Tools', 'Utilities'], ['IN', 'US']) === null,
+    'after the budget block: notes reused, only the missing category researched (1 web call), S numbers continue, 5/5 steps, notes chain used up' . $errOf($bl2));
+kv_set('st_categories', json_encode(['Tools']));
+// NS1: ST_NO_STREAM (or no curl) -> old non-streaming http_json path still works; network failure text
+putenv('ST_NO_STREAM=1');
+$ns = $rankRun([$webResp(['https://example.com/ns'], 'NS web notes'), $jsonResp(['opportunities' => [$oppS('No stream idea')]])]);
+$rq = $reqs();
+@unlink("$Q.log"); $fake([]);
+$nd = st_run_new($pdo, 'discover', ['trigger' => 'manual', 'by' => 'test']);
+st_work($pdo, 60);
+$ndr = $pdo->query("SELECT * FROM st_runs WHERE id = $nd")->fetch();
+putenv('ST_NO_STREAM');
+ok($ns['status'] === 'DONE' && count($rq) === 2 && !array_filter($rq, fn($b) => array_key_exists('stream', $b)) && (int)q1("SELECT COUNT(*) FROM st_opps WHERE title = 'No stream idea'") === 1
+    && $ndr['status'] === 'FAILED' && str_contains($ndr['error_text'], 'Claude API connection failed: network disabled in tests'),
+    'ST_NO_STREAM: non-streaming path (no "stream" in the request) still ranks; network error -> "connection failed"' . $errOf($ns));
+// NS2: streaming cannot connect on the owner's host (DNS / SSL / CA / refused, nothing received) -> same call through the owner's http_json; streaming off for 6 h
+st_stream_url('http://127.0.0.1:1/fake_claude.php');
+$ns2 = $rankRun([$webResp(['https://example.com/ns2'], 'NS2 web notes'), $jsonResp(['opportunities' => [$oppS('Connect fallback idea')]])]);
+$rq = $reqs();
+$until = (int)(kv_get('st_nostream_until') ?? 0);
+st_stream_url('');
+kv_set('st_nostream_until', '0');
+ok($ns2['status'] === 'DONE' && count($rq) === 2 && !array_filter($rq, fn($b) => array_key_exists('stream', $b)) && (int)q1("SELECT COUNT(*) FROM st_opps WHERE title = 'Connect fallback idea'") === 1
+    && $until > time() + 5 * 3600 && (int)q1("SELECT COUNT(*) FROM st_events WHERE run_id = ? AND msg LIKE 'Claude streaming could not connect%'", [(int)$ns2['id']]) === 1
+    && (int)q1('SELECT COUNT(*) FROM st_usage WHERE run_id = ? AND ok = 0', [(int)$ns2['id']]) === 0,
+    'streaming cannot connect (refused, nothing received): the same call goes through http_json, streaming off for 6 h (ranking call skips it), logged, no failed usage row' . $errOf($ns2));
+// FB1: mid-stream server-side fallback on a pause_turn web call (streaming: the fallback model continues the partial text) + on the structuring call (fallback model restarted the JSON: text after the marker parsed), echo follows the API rule
+$discRun = function (array $queue) use ($pdo, $fake, $Q) {
+    @unlink("$Q.log"); $fake($queue);
+    $id = st_run_new($pdo, 'discover', ['trigger' => 'manual', 'by' => 'test']); st_work($pdo, 60);
+    return [$pdo->query("SELECT * FROM st_runs WHERE id = $id")->fetch(), (array)json_decode((string)q1("SELECT content FROM st_artifacts WHERE run_id = ? AND kind = 'daily_notes'", [$id]), true)];
+};
+$wr = fn(string $id, string $url) => ['type' => 'web_search_tool_result', 'tool_use_id' => $id, 'content' => [['type' => 'web_search_result', 'url' => $url, 'title' => "T $url", 'page_age' => '1 day ago']]];
+$su = fn(string $id) => ['type' => 'server_tool_use', 'id' => $id, 'name' => 'web_search', 'input' => ['query' => "q $id"]];
+$msgOf = fn(string $stop, array $content) => [200, ['model' => 'claude-opus-5-5', 'stop_reason' => $stop, 'usage' => $usage, 'content' => $content]];
+$fbFind = $dF('NEW_APP', 'After fallback finding', 'd', 'SAID', ['S1'], 'Tools', ['IN']);
+[$fr1, $fc1] = $discRun([$msgOf('pause_turn', [['type' => 'thinking', 'thinking' => 'pre', 'signature' => 'sigPre'], $su('f1'), $wr('f1', 'https://fb.example/pre'), $su('f2'),
+    ['type' => 'text', 'text' => 'partial notes + '], $fbB, ['type' => 'thinking', 'thinking' => 'post', 'signature' => 'sigPost'], $su('f3'), $wr('f3', 'https://fb.example/post'),
+    ['type' => 'text', 'text' => 'notes after fallback']]), $msgOf('end_turn', [['type' => 'text', 'text' => ' + more notes']]),
+    $msgOf('end_turn', [['type' => 'text', 'text' => '{"findings":[{"type":"NEW_APP","title":"Dead'], $fbB, ['type' => 'text', 'text' => json_encode(['findings' => [$fbFind]])]])]);
+$rq = $reqs();
+$ec = (array)($rq[1]['messages'][1]['content'] ?? []);
+ok($fr1['status'] === 'DONE' && count($rq) === 3 && array_column($fc1['findings'] ?? [], 'title') === ['After fallback finding']
+    && str_contains($fc1['notes'] ?? '', "partial notes + notes after fallback + more notes") && count($fc1['sources'] ?? []) === 2
+    && array_column($ec, 'type') === ['server_tool_use', 'web_search_tool_result', 'text', 'fallback', 'thinking', 'server_tool_use', 'web_search_tool_result', 'text']
+    && ($ec[0]['input'] ?? null) === ['query' => 'q f1'] && ($ec[3] ?? null) === $fbB && ($ec[4]['signature'] ?? '') === 'sigPost' && ($ec[2]['text'] ?? '') === 'partial notes + ',
+    'mid-stream fallback (streaming): notes = declined partial + the fallback model\'s continuation; structured answer that restarted after the marker still parsed; '
+    . 'pause_turn echo drops pre-fallback thinking + unpaired search, keeps paired search + text + the fallback block in place' . $errOf($fr1));
+// FB2: fallback model continued the declined partial (JSON split across the marker) -> whole text parsed
+[$fr2, $fc2] = $discRun([$webResp(['https://fb.example/two'], 'fb2 notes'), $msgOf('end_turn', [['type' => 'text', 'text' => '{"findings":[{"type":"OTHER","title":"Contin'], $fbB,
+    ['type' => 'text', 'text' => 'ued finding","detail":"d","basis":"GUESS","sources":[],"category":"","countries":[]}]}']])]);
+ok($fr2['status'] === 'DONE' && array_column($fc2['findings'] ?? [], 'title') === ['Continued finding'], 'fallback continuation: JSON split across the fallback block still parsed' . $errOf($fr2));
+h_x($pdo, "DELETE FROM st_artifacts WHERE kind = 'daily_notes' AND run_id IN (?, ?)", [(int)$fr1['id'], (int)$fr2['id']]);   // discovery views below expect their own scans only
+// WT: st_work raises a short MySQL wait_timeout (shared hosting) for the long stream, never lowers a bigger one
+$pdo->exec('SET SESSION wait_timeout = 60'); st_work($pdo, 1); $wt1 = (int)q1('SELECT @@session.wait_timeout');
+$pdo->exec('SET SESSION wait_timeout = 30000'); st_work($pdo, 1); $wt2 = (int)q1('SELECT @@session.wait_timeout');
+ok($wt1 === 7200 && $wt2 === 30000, "st_work: session wait_timeout 60 -> $wt1, 30000 -> $wt2");
+@unlink("$Q.log"); $fake([]);
+ok((int)q1("SELECT COUNT(*) FROM st_runs WHERE status IN ('QUEUED','RUNNING','CANCELLING')") === 0, 'streaming tests leave no queued / running runs');
+
 // ---------------------------------------------------------------- HTTP: every view + actions
 $port = 18000 + getmypid() % 1000 + 7;
-$env = 'STUDIO_FAKE_Q=' . escapeshellarg($Q) . ' TEST_DB_HOST=' . escapeshellarg((string)getenv('TEST_DB_HOST')) . ' TEST_DB_NAME=' . escapeshellarg((string)getenv('TEST_DB_NAME'))
-    . ' TEST_DB_USER=' . escapeshellarg((string)getenv('TEST_DB_USER')) . ' TEST_DB_PASS=' . escapeshellarg((string)getenv('TEST_DB_PASS'));
 $srv = proc_open("$env exec php -S 127.0.0.1:$port -t " . escapeshellarg($M), [1 => ['file', "$T/server.log", 'a'], 2 => ['file', "$T/server.log", 'a']], $pipes);
 usleep(800000);
 $http = function (string $method, string $path, $body = null) use ($port) {
@@ -953,6 +1352,8 @@ ok($c === 200 && str_contains($raw, 'intent://studio/project/1'), 'email deep li
 proc_terminate($srv);
 $log = (string)@file_get_contents("$T/server.log");
 ok(!preg_match('/PHP (Warning|Fatal|Deprecated|Notice)/', $log), 'no PHP warnings / errors in server log' . (preg_match('/PHP (Warning|Fatal|Deprecated|Notice)[^\n]*/', $log, $mm) ? ': ' . $mm[0] : ''));
+$log = (string)@file_get_contents("$T/fake.log");
+ok(!preg_match('/PHP (Warning|Fatal|Deprecated|Notice)/', $log), 'no PHP warnings / errors in the fake Claude API log' . (preg_match('/PHP (Warning|Fatal|Deprecated|Notice)[^\n]*/', $log, $mm) ? ': ' . $mm[0] : ''));
 
 echo "\n$n checks, $fail failed\n";
 exit($fail > 0 ? 1 : 0);
