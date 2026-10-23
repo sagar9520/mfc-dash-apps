@@ -105,12 +105,20 @@ fun fmtDayRange(from: String?, to: String?): String {
     return (if (dayYm.format(a) == dayYm.format(b)) dayNum.format(a) else dayOut.format(a)) + " – " + end
 }
 
-/** "2026-10-22" ka ant: agle din 00:00 (phone ka time zone), ms me. Galat taareekh = null. */
+/** Server ke din (from / to, "aaj", "kal") IST ke hain, phone ka time zone kuch bhi ho. */
+private val IST = TimeZone.getTimeZone("Asia/Kolkata")
+private val dayIst = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply { timeZone = IST }
+
+/** "2026-10-22" ka ant: agle din 00:00 IST, ms me. Galat taareekh = null. */
 fun dayEndMs(d: String?): Long? {
     if (d.isNullOrBlank()) return null
-    val x = runCatching { dayIn.parse(d) }.getOrNull() ?: return null
-    return java.util.Calendar.getInstance().apply { time = x; add(java.util.Calendar.DAY_OF_MONTH, 1) }.timeInMillis
+    val x = runCatching { dayIst.parse(d) }.getOrNull() ?: return null
+    return java.util.Calendar.getInstance(IST).apply { time = x; add(java.util.Calendar.DAY_OF_MONTH, 1) }.timeInMillis
 }
+
+/** IST ki taareekh "2026-10-22": 0 = aaj, -1 = kal (server ke period isi din se). */
+fun istDay(addDays: Int = 0): String =
+    dayIst.format(java.util.Calendar.getInstance(IST).apply { add(java.util.Calendar.DAY_OF_MONTH, addDays) }.time)
 fun agoText(ms: Long): String {
     val s = (System.currentTimeMillis() - ms) / 1000
     return when {

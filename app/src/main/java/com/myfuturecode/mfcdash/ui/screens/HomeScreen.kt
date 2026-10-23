@@ -257,6 +257,8 @@ fun HomeScreen(vm: DashVm, st: UiState, nav: NavHostController, hvm: HealthVm, g
 
 private const val TICK_MS = 60_000L
 private const val LOAD_GAP_MS = 55_000L
+/** Live users (doosre tab par, [HomeToday]) isse purana = nahi dikhate. */
+private const val LIVE_OLD_MS = 2 * TICK_MS
 private val GADS_P = mapOf("range" to "7d")   // Google Ads "All Accounts" tab wali key (cache share)
 
 /** Aakhri load kab hua (process bhar): Home par baar-baar aane se server par extra call nahi. */
@@ -348,8 +350,9 @@ private fun rememberLive30(pkgs: List<String>): Map<String, Double?> {
 
 /**
  * Live users wala aadha hamesha abhi ka: Home par doosra period (kal / 7 din / 30 din / custom) chuna ho tab data.php aaj
- * alag se (6 min ginti + aaj ka ROAS; DashVm purane period ko 20 s me taaza nahi karta). Pehle disk wala (aaj ka hi), phir
- * network; 60 sec cache (process bhar). Fail = pichhla rahe (kabhi aaya hi nahi = failed).
+ * alag se (6 min ginti + aaj ka ROAS; DashVm purane period ko 20 s me taaza nahi karta). Aaj wala view dikhe tab DashVm ka
+ * taaza jawab yahin ([put]), to tab badalte hi wahi; warna disk wala (aaj ka hi), phir network; 60 sec cache (process bhar).
+ * Fail = pichhla rahe, par [LIVE_OLD_MS] se purana kabhi nahi (dhaancha); kabhi aaya hi nahi = failed.
  */
 private object HomeToday {
     var d by mutableStateOf<DashData?>(null)
@@ -357,6 +360,8 @@ private object HomeToday {
     var failed by mutableStateOf(false)
         private set
     private var at = 0L
+    /** [d] kab ka hai (network jawab / disk copy ka waqt). */
+    private var dAt = 0L
     private var who = ""
     /** Pull-down par badhta hai: cache chhod ke turant dobara. */
     var rev by mutableIntStateOf(0)
@@ -364,13 +369,22 @@ private object HomeToday {
 
     fun stale() { at = 0L; rev++ }
 
+    /** [d], par [LIVE_OLD_MS] se purana nahi: app peeche raha / call baar-baar fail = dhaancha, ghanton purani ginti nahi. */
+    val fresh: DashData? get() = d?.takeIf { System.currentTimeMillis() - dAt <= LIVE_OLD_MS }
+
+    /** Aaj wala view ka network jawab (DashVm, [t] = kab aaya): doosra tab chunte hi yahi, aur ek minute tak nayi call nahi. */
+    fun put(v: DashData, user: String, t: Long) { who = user; d = v; dAt = t; failed = false; at = t }
+
     suspend fun load(api: Api, user: String) {
         // doosra login = pichhle user ka data nahi
         if (user != who) { who = user; d = null; failed = false; at = 0L }
-        if (d == null) api.dataCached("all", "today")?.takeIf { cacheSameDay(it.at) }?.let { d = it.value }
+        if (d != null && System.currentTimeMillis() - dAt > LIVE_OLD_MS) { d = null; failed = false; at = 0L }   // at = 0: turant laao (warna dhaancha bina call ke ~55 s)
+        if (d == null) api.dataCached("all", "today")?.takeIf { cacheSameDay(it.at) && System.currentTimeMillis() - it.at <= LIVE_OLD_MS }
+            ?.let { d = it.value; dAt = it.at }
         if (System.currentTimeMillis() - at < LOAD_GAP_MS) return
         try {
             d = api.data("all", "today")
+            dAt = System.currentTimeMillis()
             failed = false
         } catch (e: CancellationException) {
             throw e
@@ -381,11 +395,19 @@ private object HomeToday {
     }
 }
 
-/** Live users ka data: Home par aaj wala view = wahi (DashVm, 20 s), warna [HomeToday] har minute (null = abhi aaya nahi). */
+/**
+ * Live users ka data: Home par aaj wala view = wahi (DashVm, 20 s; network wala [HomeToday] me bhi), warna [HomeToday] har
+ * minute (null = abhi aaya nahi / bahut purana).
+ */
 @Composable
 private fun rememberLiveData(st: UiState): DashData? {
-    if (homeToday(st)) return st.data
     val app = LocalContext.current.applicationContext as App
+    if (homeToday(st)) {
+        val d = st.data
+        // disk wala copy nahi (us ka waqt purana); lastOk = yeh jawab kab aaya
+        LaunchedEffect(d) { if (d != null && !d.cached) HomeToday.put(d, app.prefs.username, st.lastOk) }
+        return d
+    }
     val rev = HomeToday.rev
     val life = LocalLifecycleOwner.current.lifecycle
     LaunchedEffect(rev, life) {
@@ -396,7 +418,7 @@ private fun rememberLiveData(st: UiState): DashData? {
             }
         }
     }
-    return HomeToday.d
+    return HomeToday.fresh
 }
 
 /** Screen khuli rahe tab har minute [tick] (pehli baar turant). App peeche ho to ruk jata hai. */

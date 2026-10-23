@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -30,8 +31,8 @@ internal fun liveOn(status: String) = status.uppercase() in LIVE_ON
 
 /**
  * view=live ka haal. runs = chalu + pichhle 15 min me khatam (naye pehle). offset = server - phone (ms), taaki
- * heartbeat / "2 min pehle khatam" phone ki galat ghadi se na bigde. fin = job -> kitne runs chalte-chalte khatam hue
- * (pages isse apna data dobara laate hain). ok = kam se kam ek baar sahi jawab aaya (purana server = false, pages purana indicator dikhate).
+ * heartbeat / "2 min pehle khatam" phone ki galat ghadi se na bigde. fin = job -> kitne runs khatam hue (chalte dekhe, ya do poll ke
+ * beech shuru + khatam; pages isse apna data dobara laate hain). runs = [] jab aakhri sahi jawab purana ho (StudioVm.liveStale). ok = kam se kam ek baar sahi jawab aaya (purana server = false, pages purana indicator dikhate).
  * cron = server cron aakhri baar kab chala (server ki ghadi, ms; null = kabhi nahi).
  */
 data class SLive(
@@ -93,7 +94,8 @@ class StudioVm(app: App) : ViewModel() {
                 val j = api.sAction(action, fields)
                 ok?.let { say(it) }
                 then(j)
-                liveNow()   // run queue hua / cancel hua ho sakta hai: live card turant
+                // run queue hua / cancel hua ho sakta hai: live card turant. Run: naya run card me aane tak button band (do tap = do run nahi)
+                if (action == "run") livePollNow() else liveNow()
             } catch (e: Exception) {
                 say(e.message ?: "Failed".t())
             }
@@ -113,10 +115,18 @@ class StudioVm(app: App) : ViewModel() {
     private var liveLast = 0L
     /** Pichhle jawab ke chalu runs (id -> job): agle jawab me khatam / gayab = fin event. */
     private var liveBusy: Map<Long, String> = emptyMap()
+    /** Sahi jawabon me dekha sabse naya waqt (server_time / finished_at, server ki ghadi; sirf aage badhta). null = VM ka pehla poll baaki. */
+    private var liveMark: Long? = null
+    /** Kitne poll shuru hue / khatam hue (sahi ya galat): livePollNow agle poll ka intezaar isi se karta hai. */
+    private var livePolls = 0
+    private val liveDone = MutableStateFlow(0)
 
     fun liveStart() {
         liveUsers++
-        if (liveJob?.isActive != true) liveJob = viewModelScope.launch { liveLoop() }
+        if (liveJob?.isActive != true) {
+            liveStale()   // der baad lauti (app peeche thi): purane runs page ke taaze jawab ko na dhakein
+            liveJob = viewModelScope.launch { liveLoop() }
+        }
     }
 
     fun liveStop() {
@@ -129,6 +139,19 @@ class StudioVm(app: App) : ViewModel() {
 
     /** Abhi ek baar dekho (Run again / action ke baad). Poller band ho to agli shuruaat par. */
     fun liveNow() { liveWake.trySend(Unit) }
+
+    /** liveNow + us poll ke khatam hone tak ruko (max LIVE_WAIT). Request poller hi karta hai (ek ke upar ek nahi); poller band = turant wapas. */
+    suspend fun livePollNow() {
+        if (liveJob?.isActive != true) return
+        val want = livePolls + 1   // abhi chal raha poll action se pehle shuru hua ho sakta hai: uske baad wala
+        liveNow()
+        withTimeoutOrNull(LIVE_WAIT) { liveDone.first { it >= want } }
+    }
+
+    /** Aakhri sahi jawab bahut purana (app peeche thi / net nahi): runs hatao, pages apna data dikhayein (purane server jaisa). liveBusy rehta hai: lautne par fin. */
+    private fun liveStale() {
+        _live.update { if (it.runs.isNotEmpty() && System.currentTimeMillis() - it.at > LIVE_STALE) it.copy(runs = emptyList()) else it }
+    }
 
     private suspend fun liveLoop() {
         // screen badli (ek band, doosri khuli): abhi-abhi dekha tha to turant dobara nahi
@@ -143,6 +166,7 @@ class StudioVm(app: App) : ViewModel() {
     /** Ek poll; jawab = agla poll kitni der baad (ms). */
     private suspend fun livePoll(): Long {
         liveLast = System.currentTimeMillis()
+        livePolls++
         val wasBusy = liveBusy.isNotEmpty()
         return try {
             val j = api.sGet("live")
@@ -152,7 +176,15 @@ class StudioVm(app: App) : ViewModel() {
             val cron = tsMs(j.sn("cron_last"))
             val byId = runs.associateBy { it.l("id") }
             // pichhli baar chalu the, ab khatam (ya list se nikal gaye, jaise app der tak peeche rahi)
-            val ended = liveBusy.filter { (id, _) -> byId[id]?.let { !liveOn(it.s("status")) } ?: true }
+            val ended = liveBusy.filter { (id, _) -> byId[id]?.let { !liveOn(it.s("status")) } ?: true }.toMutableMap()
+            // chalte kabhi nahi dekha (do poll ke beech shuru + khatam, jaise cron ka chhota economics): pichhle jawab ke baad khatam = bhi fin.
+            // VM ka pehla poll nahi (app khulte hi reload nahi); mark sirf aage badhta hai, to har run ek hi baar
+            val mark = liveMark
+            if (mark != null) runs.forEach { r ->
+                val id = r.l("id")
+                if (id !in liveBusy && !liveOn(r.s("status")) && (tsMs(r.sn("finished_at")) ?: 0L) > mark) ended[id] = r.s("job")
+            }
+            if (st != null) liveMark = maxOf(mark ?: st, st, runs.maxOfOrNull { tsMs(it.sn("finished_at")) ?: st } ?: st)
             liveBusy = runs.filter { liveOn(it.s("status")) }.associate { it.l("id") to it.s("job") }
             _live.update { cur ->
                 val fin = if (ended.isEmpty()) cur.fin else cur.fin.toMutableMap().also { m -> ended.values.forEach { job -> m[job] = (m[job] ?: 0) + 1 } }
@@ -164,8 +196,11 @@ class StudioVm(app: App) : ViewModel() {
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            liveStale()   // net nahi / server ki galti: purana haal page ke taaze data par na chadhe
             // purana server (view=live nahi = 400): bahut kam poll; net ki galti: thodi der baad
             if ((e.message ?: "").contains("400")) LIVE_OLD else if (wasBusy) LIVE_ERR else LIVE_SLOW
+        } finally {
+            liveDone.value = livePolls
         }
     }
 
@@ -174,6 +209,10 @@ class StudioVm(app: App) : ViewModel() {
         private const val LIVE_SLOW = 30_000L
         private const val LIVE_ERR = 15_000L
         private const val LIVE_OLD = 300_000L
+        /** Live haal itna purana = stale (runs hatao). */
+        private const val LIVE_STALE = 2 * LIVE_SLOW
+        /** livePollNow (Run again ka spinner) zyada se zyada itna ruke: poll atka / fail to button phir bhi khul jaaye. */
+        private const val LIVE_WAIT = 10_000L
 
         fun factory(app: App) = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")

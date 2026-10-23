@@ -1073,6 +1073,47 @@ $rid = st_run_new($pdo, 'economics', ['trigger' => 'manual', 'by' => 'test']);
 h_x($pdo, "UPDATE st_runs SET status = 'RUNNING', attempts = 1, started_at = DATE_SUB(UTC_TIMESTAMP(), INTERVAL 40 MINUTE) WHERE id = ?", [$rid]);
 st_work($pdo, 60);
 ok(q1('SELECT status FROM st_runs WHERE id = ?', [$rid]) === 'DONE' && (int)q1('SELECT attempts FROM st_runs WHERE id = ?', [$rid]) === 2, 'interrupted run (server restart) requeued and completed');
+// failed idea evaluation / more research (final, after the retry) -> one notification each: the live card promises one when the run ends (before: only success notified)
+$eo = (int)q1('SELECT id FROM st_opps ORDER BY id LIMIT 1');
+$alertOf = fn(string $key) => q('SELECT level, title, body, metrics FROM app_alerts WHERE akey = ?', ['st|' . $key]);
+$eoSt = (string)q1('SELECT status FROM st_opps WHERE id = ?', [$eo]);
+h_x($pdo, "UPDATE st_opps SET status = 'EVALUATING' WHERE id = ?", [$eo]);   // as st_opp_decide MORE_RESEARCH / st_idea_add leave it
+$fake([]);   // empty queue: the fake API answers 404 to every attempt
+$fe1 = st_run_new($pdo, 'evaluate_idea', ['ref' => $eo, 'trigger' => 'manual', 'by' => 'test']);
+$fe2 = st_run_new($pdo, 'more_research', ['ref' => $eo, 'trigger' => 'manual', 'by' => 'test']);
+st_work($pdo, 60);
+$fr1 = $pdo->query("SELECT * FROM st_runs WHERE id = $fe1")->fetch();
+$fn1 = $alertOf("runfail|$fe1"); $fn2 = $alertOf("runfail|$fe2");
+ok($eo > 0 && $fr1['status'] === 'FAILED' && (int)$fr1['attempts'] === 2 && (string)$fr1['error_text'] !== '' && q1('SELECT status FROM st_runs WHERE id = ?', [$fe2]) === 'FAILED'
+    && count($fn1) === 1 && $fn1[0]['title'] === 'Idea evaluation stopped' && (int)$fn1[0]['level'] === 1 && (json_decode($fn1[0]['metrics'], true)['route'] ?? '') === "studio/opp/$eo"
+    && str_starts_with($fn1[0]['body'], rtrim(st_cut((string)$fr1['error_text'], 300), '. ') . ". Open the idea to try again.\nWhen: ")
+    && count($fn2) === 1 && $fn2[0]['title'] === 'More research stopped' && (json_decode($fn2[0]['metrics'], true)['route'] ?? '') === "studio/opp/$eo"
+    && (int)q1('SELECT COUNT(*) FROM st_notified WHERE nkey IN (?, ?)', ["eval|$eo|$fe1", "eval|$eo|$fe2"]) === 0,
+    'failed idea evaluation / more research (after the retry) -> one notification each: reason + "Open the idea to try again", route to the idea; no "evaluated" notification');
+ok(q1('SELECT status FROM st_opps WHERE id = ?', [$eo]) === 'NEW', 'failed evaluation puts the idea back from EVALUATING to NEW (More research / Approve / Reject show again, so "try again" works)');
+h_x($pdo, 'UPDATE st_opps SET status = ? WHERE id = ?', [$eoSt, $eo]);
+// crash recovery: the last attempt killed too (timeout / restart) -> one notification with st_run_exec's key (rankfail / runfail), never twice; earlier attempt killed -> requeued, no notification
+$ce = st_run_new($pdo, 'evaluate_idea', ['ref' => $eo, 'trigger' => 'manual', 'by' => 'test']);
+$cr = st_run_new($pdo, 'rank', ['trigger' => 'manual', 'by' => 'test']);
+$cq = st_run_new($pdo, 'more_research', ['ref' => $eo, 'trigger' => 'manual', 'by' => 'test']);
+foreach ([$ce => ST_MAX_ATTEMPTS, $cr => ST_MAX_ATTEMPTS, $cq => 1] as $cid => $cat)
+    h_x($pdo, "UPDATE st_runs SET status = 'RUNNING', attempts = ?, started_at = DATE_SUB(UTC_TIMESTAMP(), INTERVAL 40 MINUTE) WHERE id = ?", [$cat, $cid]);
+$fake([]);
+st_work($pdo, 60);
+st_work($pdo, 60);
+st_run_end_notify($pdo, $ce, 'evaluate_idea', $eo, 'FAILED', ['a later error']);   // same run ending again (st_run_exec path): deduped
+$cn = [$alertOf("runfail|$ce"), $alertOf("rankfail|$cr"), $alertOf("runfail|$cq")];
+$crow = fn(int $id) => $pdo->query("SELECT status, attempts, error_text FROM st_runs WHERE id = $id")->fetch();
+ok($crow($ce)['status'] === 'FAILED' && $crow($ce)['error_text'] === 'run interrupted (server timeout/restart)' && $crow($cr)['status'] === 'FAILED'
+    && count($cn[0]) === 1 && $cn[0][0]['title'] === 'Idea evaluation stopped' && str_starts_with($cn[0][0]['body'], "Run interrupted (server timeout/restart). Open the idea to try again.\nWhen: ")
+    && (json_decode($cn[0][0]['metrics'], true)['route'] ?? '') === "studio/opp/$eo"
+    && count($cn[1]) === 1 && $cn[1][0]['title'] === 'Weekly ranking stopped' && str_starts_with($cn[1][0]['body'], 'Run interrupted (server timeout/restart). ')
+    && (json_decode($cn[1][0]['metrics'], true)['route'] ?? '') === 'studio/ranking'
+    && (int)q1('SELECT COUNT(*) FROM st_notified WHERE nkey IN (?, ?)', ["runfail|$ce", "rankfail|$cr"]) === 2,
+    'crash recovery, last attempt killed: evaluate_idea / rank FAILED -> one "Run interrupted (server timeout/restart)" notification each, same key as a normal failure (never twice)');
+ok($crow($cq)['status'] === 'FAILED' && (int)$crow($cq)['attempts'] === 2 && count($cn[2]) === 1 && $cn[2][0]['title'] === 'More research stopped'
+    && !str_starts_with($cn[2][0]['body'], 'Run interrupted'),
+    'crash recovery, first attempt killed: requeued without a notification; its final failure (attempt 2) notifies once with the real reason');
 ok((int)q1("SELECT COUNT(*) FROM st_events WHERE kind = 'decision' AND actor = 'sagar'") >= 4, 'decisions in searchable activity history');
 
 // ---------------------------------------------------------------- streaming Claude calls: owner's weekly ranking failed at step 4/6 (HTTP 0 after 300 s, answer cut at 32000 tokens, cost not recorded)
@@ -1470,6 +1511,25 @@ try { st_ai($pdo, $W, ['system' => 's', 'user' => 'u', 'max_tokens' => 100]); } 
 putenv('ST_NO_STREAM');
 $wr = $pdo->query("SELECT detail, beat_at FROM st_runs WHERE id = {$W->id}")->fetch();
 ok($wr['detail'] === 'waiting for Claude' && $wr['beat_at'] !== null, 'non-streaming fallback: detail "waiting for Claude" + heartbeat written before the blocking call');
+final class StBeatLogPdo extends PDO   // every live write (beat_at) goes into the request log too, so its order against the http_json calls is visible
+{
+    public function prepare(string $query, array $options = []): PDOStatement|false
+    {
+        if (str_contains($query, 'beat_at')) @file_put_contents(getenv('STUDIO_FAKE_Q') . '.log', "BEAT\n", FILE_APPEND);
+        return parent::prepare($query, $options);
+    }
+}
+$bp = new StBeatLogPdo($dsn, (string)getenv('TEST_DB_USER'), (string)getenv('TEST_DB_PASS'), [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC, PDO::ATTR_EMULATE_PREPARES => true]);
+$bp->exec("SET time_zone = '+00:00'");
+$B = $mk(); $hand[] = $B->id;
+$B2 = new StRun($bp, $pdo->query("SELECT * FROM st_runs WHERE id = {$B->id}")->fetch());
+$B2->plan(['Test web search']);
+putenv('ST_NO_STREAM=1'); @unlink("$Q.log"); $fake([[529, ['type' => 'error', 'error' => ['type' => 'overloaded_error', 'message' => 'Overloaded']]], $slowMsg]);
+try { st_ai($bp, $B2, ['system' => 's', 'user' => 'u', 'max_tokens' => 100]); $bErr = ''; } catch (Throwable $e) { $bErr = $e->getMessage(); }
+putenv('ST_NO_STREAM');
+$seq = implode('', array_map(fn($l) => $l === 'BEAT' ? 'B' : 'C', array_filter(explode("\n", (string)@file_get_contents("$Q.log")))));
+ok($bErr === '' && $left() === 0 && preg_match('/^B+CB+C(B*)$/', $seq) === 1,
+    "non-streaming retry after HTTP 529: heartbeat written again before the second blocking call (B = live write, C = Claude call: $seq)" . ($bErr !== '' ? " · $bErr" : ''));
 foreach ($hand as $hid) { h_x($pdo, 'DELETE FROM st_usage WHERE run_id = ?', [$hid]); h_x($pdo, 'DELETE FROM st_runs WHERE id = ?', [$hid]); }
 @unlink("$Q.log"); $fake([]);
 ok((int)q1("SELECT COUNT(*) FROM st_runs WHERE status IN ('QUEUED','RUNNING','CANCELLING')") === 0, 'streaming tests leave no queued / running runs');

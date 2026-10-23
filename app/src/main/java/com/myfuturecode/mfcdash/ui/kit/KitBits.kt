@@ -455,14 +455,26 @@ fun KSegTabs(
         // text ke dono taraf ki padding (har tab)
         val pad = with(LocalDensity.current) { (SEG_PAD * 2).toPx() }
         val sum = tw.sum()
-        val (scale, weights) = when {
-            !constraints.hasBoundedWidth || tw.max() + pad <= w / n -> 1f to null
-            else -> {
-                // chhota karna pade to 2% aur (gol hone se 1px bada text "..." na bane)
-                val fitK = if (sum <= 0f) 1f else (w - n * pad) / sum
-                val k = if (fitK >= 1f) 1f else (fitK * .98f).coerceAtLeast(.6f)
-                val extra = ((w - n * pad - sum * k) / n).coerceAtLeast(0f)
-                k to tw.map { it * k + pad + extra }
+        val bounded = constraints.hasBoundedWidth
+        val (scale, weights) = remember(tm, tw, w, pad, bounded) {
+            when {
+                !bounded || tw.max() + pad <= w / n -> 1f to null
+                else -> {
+                    // chhota karna pade to 2% aur (gol hone se 1px bada text "..." na bane)
+                    val fitK = if (sum <= 0f) 1f else (w - n * pad) / sum
+                    var k = if (fitK >= 1f) 1f else (fitK * .98f).coerceAtLeast(.6f)
+                    var kw = tw
+                    // bada font (Android 14+, 180% / 200%) seedha nahi badhta: chhota sp k se zyada chauda. Isliye k wale size par
+                    // dobara naapo, phir bhi na aaye to k ek kadam aur chhota (2 baar tak)
+                    if (k < 1f) for (pass in 1..2) {
+                        kw = options.map { tm.measure(it, kStyle(14.sp * k, FontWeight.SemiBold), maxLines = 1, softWrap = false).size.width.toFloat() }
+                        val s = kw.sum()
+                        if (pass == 2 || s <= 0f || s + n * pad <= w || k <= .6f) break
+                        k = (k * (w - n * pad) / s * .98f).coerceAtLeast(.6f)
+                    }
+                    val extra = ((w - n * pad - kw.sum()) / n).coerceAtLeast(0f)
+                    k to kw.map { it + pad + extra }
+                }
             }
         }
         KSegRow(options, selected, onSelect, Modifier, badges, track, 14.sp * scale, weights)

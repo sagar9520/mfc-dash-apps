@@ -14,6 +14,7 @@ import com.myfuturecode.mfcdash.data.PageLoad
 import com.myfuturecode.mfcdash.data.Prefs
 import com.myfuturecode.mfcdash.notify.AlertsSync
 import com.myfuturecode.mfcdash.notify.MonitorService
+import com.myfuturecode.mfcdash.util.istDay
 import com.myfuturecode.mfcdash.util.t
 import com.myfuturecode.mfcdash.util.tf
 import com.myfuturecode.mfcdash.util.Lang
@@ -136,7 +137,7 @@ class DashVm(private val app: App) : ViewModel() {
             it.copy(range = r, from = from, to = to, data = null, cp = null, extra = null, extraMissing = false, cachedAt = 0L,
                 appData = emptyMap(), appCp = emptyMap(), appExtra = emptyMap(), appCached = emptySet(), appLoading = null)
         }
-        refresh()
+        refreshData(auto = false, wait = SWITCH_WAIT_MS)
     }
 
     fun setRoasTarget(v: Double) { prefs.roasTarget = v; _s.update { it.copy(roasTarget = v) } }
@@ -165,8 +166,10 @@ class DashVm(private val app: App) : ViewModel() {
      * Wahi period pehle se aa raha ho to dobara nahi bhejta; user ne maanga ho to line us load ke poore hone tak rehti hai.
      * Period badal gaya ho (setRange) to purana load rok kar naya: purane period ka jawab naye ke naam ke neeche nahi aata.
      * Screen par kuch na ho to pehle disk wala pichhla jawab (isi period ka), phir network. loading hamesha band hota hai.
+     * wait = network se pehle itna ruko (period badla: jaldi agla tab = yeh load request bheje bina hi ruk jaata; disk wala
+     * copy turant). Pull-down / poll = 0.
      */
-    private fun refreshData(auto: Boolean) {
+    private fun refreshData(auto: Boolean, wait: Long = 0L) {
         val st = _s.value
         val key = periodKey(st)
         val running = dataJob?.takeIf { it.isActive }
@@ -195,6 +198,8 @@ class DashVm(private val app: App) : ViewModel() {
             val peek = if (_s.value.data == null) launch { showCachedData(st, gen) } else null
             if (_s.value.alerts == null) launch { showCachedAlerts() }   // alerts network wale data ke baad aate hain: tab tak disk wale
             try {
+                // Api ki chal rahi request cancel se nahi rukti (server par chalti rehti): tab hop me bheji hi na jaaye
+                if (wait > 0) delay(wait)
                 val d = api.data("all", st.range, st.from, st.to)
                 peek?.cancel()
                 if (gen != dataGen) return@launch
@@ -396,7 +401,9 @@ class DashVm(private val app: App) : ViewModel() {
                 tick++
                 val st = _s.value
                 if (!st.loggedIn || !app.foreground.value) continue
-                if (st.data == null || st.data.today) refreshData(auto = true)
+                // kal wala tab IST raat 12 ke paar khula raha: data ab parson ka (naam "Kal" ka), naya kal lao
+                val dayOld = st.range == "yesterday" && st.data != null && st.data.to.isNotBlank() && st.data.to < istDay(-1)
+                if (st.data == null || st.data.today || dayOld) refreshData(auto = true)
                 else if (tick % 3 == 0) {   // purana period dekh rahe ho to bhi har minute alerts
                     if (PageLoad.route in DASH_ROUTES) PageLoad.startAuto()
                     refreshAlerts()
@@ -412,6 +419,9 @@ class DashVm(private val app: App) : ViewModel() {
         }
     }
 }
+
+/** Period badalne par network se pehle itna ruko (Home / Paisa ke tab jaldi-jaldi badle = beech wale bheje hi nahi). */
+private const val SWITCH_WAIT_MS = 350L
 
 /** In screens par DashVm ka data dikhta hai: inke khule rehte 20 s wala refresh upar ki line kholta hai (Root ka route). */
 private val DASH_ROUTES = setOf("home", "apps", "money", "users", "ads", "live", "promo", "alerts", "app/{pkg}", "campaign/{idx}")

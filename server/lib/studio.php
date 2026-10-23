@@ -405,16 +405,31 @@ function st_run_exec(PDO $pdo, int $id): void
         [$final, (int)$usage['n'], (int)$usage['s'], (float)$usage['c'], st_cut($run->summary, 1000), $id]);
     st_log($pdo, "{$run->uid} finished · $final · {$run->done}/" . max($run->total, $run->done) . " steps · {$run->errors} errors · AI calls {$usage['n']} · \$" . round((float)$usage['c'], 3)
         . ($run->summary !== '' ? ' · ' . $run->summary : ''), $final === 'DONE' ? 'info' : 'warn', ['run' => $id]);
-    // weekly ranking ruki (FAILED, retry nahi): app ka live card kehta hai "notification when it ends" — wajah + research saved ho to Run again
-    if ($run->job === 'rank' && $final === 'FAILED') {
+    st_run_end_notify($pdo, $id, $run->job, (int)($row['ref_id'] ?? 0), $final, $run->errText);
+}
+
+/**
+ * Run ka bura ant (retry nahi): app ka live card kehta hai "notification when it ends". st_run_exec aur st_work crash recovery dono yahi bulate hain:
+ * har job ki ek hi dedupe key (rankfail / runfail / blocked + run id), isliye ek run kabhi do baar notify nahi karti. $errs: run ki galtiyan, aakhri = wajah.
+ */
+function st_run_end_notify(PDO $pdo, int $id, string $job, int $ref, string $final, array $errs): void
+{
+    $why = rtrim(st_cut((string)($errs[count($errs) - 1] ?? 'unknown error'), 300), '. ');
+    // weekly ranking ruki (FAILED): wajah + research saved ho to Run again
+    if ($job === 'rank' && $final === 'FAILED') {
         try { $saved = (bool)(st_run_rows($pdo, [$pdo->query('SELECT * FROM st_runs WHERE id = ' . $id)->fetch()])[0]['can_reuse'] ?? false); } catch (Throwable $e) { $saved = false; }
-        $why = rtrim(st_cut((string)($run->errText[count($run->errText) - 1] ?? 'unknown error'), 300), '. ');
         st_notify($pdo, 1, 'studio_run', "rankfail|$id", 'Weekly ranking stopped', $why . ($saved ? '. Research is saved: Run again within 24 h, no new web search cost.' : '. Open Studio to run it again.'), 'studio/ranking', false);
     }
-    if (in_array($run->job, ['competitors', 'revise_features'], true) && $final !== 'DONE') {
-        $pid = (int)($row['ref_id'] ?? 0);
-        h_x($pdo, 'UPDATE st_projects SET blocker = ?, updated_at = UTC_TIMESTAMP() WHERE id = ?', [st_cut("{$run->job} $final: " . implode(' | ', $run->errText), 500), $pid]);
-        st_notify($pdo, 2, 'studio_blocked', "blocked|$id", 'Studio project blocked', "{$run->job} $final. " . implode(' | ', array_slice($run->errText, 0, 2)), 'studio/project/' . $pid, true);
+    // idea evaluation / more research ruki (FAILED): wajah + idea page (wahan se dobara)
+    if (in_array($job, ['evaluate_idea', 'more_research'], true) && $final === 'FAILED') {
+        // idea EVALUATING me atki na rahe: NEW par wapas = page par More research / Approve / Reject phir dikhte hain (koi aur eval chal raha ho to nahi)
+        h_x($pdo, "UPDATE st_opps SET status = 'NEW', updated_at = UTC_TIMESTAMP() WHERE id = ? AND status = 'EVALUATING'
+                   AND NOT EXISTS (SELECT 1 FROM st_runs WHERE job IN ('evaluate_idea','more_research') AND ref_id = ? AND status IN ('QUEUED','RUNNING') AND id <> ?)", [$ref, $ref, $id]);
+        st_notify($pdo, 1, 'studio_run', "runfail|$id", $job === 'more_research' ? 'More research stopped' : 'Idea evaluation stopped', $why . '. Open the idea to try again.', 'studio/opp/' . $ref, false);
+    }
+    if (in_array($job, ['competitors', 'revise_features'], true) && $final !== 'DONE') {
+        h_x($pdo, 'UPDATE st_projects SET blocker = ?, updated_at = UTC_TIMESTAMP() WHERE id = ?', [st_cut("$job $final: " . implode(' | ', $errs), 500), $ref]);
+        st_notify($pdo, 2, 'studio_blocked', "blocked|$id", 'Studio project blocked', "$job $final. " . implode(' | ', array_slice($errs, 0, 2)), 'studio/project/' . $ref, true);
     }
 }
 
@@ -428,12 +443,14 @@ function st_work(PDO $pdo, float $budgetSec): int
     $n = 0; $t0 = microtime(true);
     try {
         // crash recovery: 30 min se RUNNING = server timeout/restart
-        $stuck = h_q($pdo, "SELECT id, run_uid, attempts FROM st_runs WHERE status IN ('RUNNING','CANCELLING') AND started_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL 30 MINUTE)");
+        $stuck = h_q($pdo, "SELECT id, run_uid, job, ref_id, attempts FROM st_runs WHERE status IN ('RUNNING','CANCELLING') AND started_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL 30 MINUTE)");
         foreach ($stuck as $s) {
             $again = (int)$s['attempts'] < ST_MAX_ATTEMPTS;
             h_x($pdo, "UPDATE st_runs SET status = ?, stage = 'interrupted', error_text = 'run interrupted (server timeout/restart)', finished_at = IF(? = 'QUEUED', NULL, UTC_TIMESTAMP()) WHERE id = ?",
                 [$again ? 'QUEUED' : 'FAILED', $again ? 'QUEUED' : 'FAILED', (int)$s['id']]);
             st_log($pdo, "{$s['run_uid']} interrupted · " . ($again ? 'requeued' : 'failed'), 'warn', ['run' => (int)$s['id']]);
+            // aakhri attempt bhi mara (timeout / restart): live card ka vaada, st_run_exec wali hi key (do baar nahi)
+            if (!$again) st_run_end_notify($pdo, (int)$s['id'], (string)$s['job'], (int)($s['ref_id'] ?? 0), 'FAILED', ['Run interrupted (server timeout/restart)']);
         }
         while (microtime(true) - $t0 < $budgetSec) {
             $id = (int)($pdo->query("SELECT id FROM st_runs WHERE status = 'QUEUED' ORDER BY (trigger_type = 'manual') DESC, id LIMIT 1")->fetchColumn() ?: 0);
@@ -609,7 +626,11 @@ function st_ai(PDO $pdo, ?StRun $run, array $o): array
             $run?->progress($L['span'][0], 'waiting for Claude', null, true);   // blocking call: beech me heartbeat nahi ho sakta
             $t0 = microtime(true);
             [$code, $resp, $err] = http_json('POST', ST_API_URL, st_json($body), $headers, 600);
-            if ($code === 429 || $code === 529 || $code >= 500) { sleep(ST_RETRY_WAIT * (1 + 2 * $turn)); $t0 = microtime(true); [$code, $resp, $err] = http_json('POST', ST_API_URL, st_json($body), $headers, 600); }
+            if ($code === 429 || $code === 529 || $code >= 500) {
+                sleep(ST_RETRY_WAIT * (1 + 2 * $turn));
+                $run?->progress($L['span'][0], 'waiting for Claude', null, true);   // doosra blocking call: heartbeat phir se (warna app "No update for N min")
+                $t0 = microtime(true); [$code, $resp, $err] = http_json('POST', ST_API_URL, st_json($body), $headers, 600);
+            }
             $j = json_decode((string)$resp, true);
             if ($code !== 200 || !is_array($j)) {
                 st_usage_add($pdo, $run, $model, [], false);
