@@ -292,7 +292,8 @@ function st_work(PDO $pdo, float $budgetSec): int
 {
     if ((int)$pdo->query("SELECT GET_LOCK('mfc_studio_work', 0)")->fetchColumn() !== 1) return 0;
     // lamba AI stream (10+ min): shared hosting ka chhota wait_timeout connection (aur ye lock) na kaate; kabhi kam nahi karte, jahan allowed nahi wahan chup
-    try { $pdo->exec('SET SESSION wait_timeout = GREATEST(@@session.wait_timeout, 7200)'); } catch (Throwable $e) {}
+    // (GREATEST(@@var, 7200) MySQL 8 par DECIMAL deta hai -> 'Incorrect argument type'; isliye PHP me tulna)
+    try { if ((int)$pdo->query('SELECT @@session.wait_timeout')->fetchColumn() < 7200) $pdo->exec('SET SESSION wait_timeout = 7200'); } catch (Throwable $e) {}
     $n = 0; $t0 = microtime(true);
     try {
         // crash recovery: 30 min se RUNNING = server timeout/restart
