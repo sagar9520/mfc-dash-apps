@@ -7,6 +7,9 @@
  *   notifications + dedupe, every app view over HTTP.
  * Portfolio (your own apps, pure SQL): eCPM, earnings (ads + payments), Google Ads spend (INR + USD accounts), ROAS, exact (Ads geo report) vs estimated country spend,
  *   unknown-country bucket, deterministic insights, AI context P ids in the rank prompt, own_fit factor, view=mine, cron once a day, schema upgrade 1 -> 2.
+ * Owner's server failures: AI schemas without union types (API limit 16; -1 = no evidence, own_fit not asked), economics with cc '' / NULL / 'UNK' / 'in'
+ *   (no duplicate key), categories merged by the DB collation (Café/Cafe, Straße/Strase), atomic st_econ save, new temp-table cohort SQL = old SQL (edge days),
+ *   no row locks under dashboard writes (READ COMMITTED), fallback to the old SQL without CREATE TEMPORARY TABLES.
  * CI: .github/workflows/server-tests.yml. Local: TEST_DB_HOST=127.0.0.1 TEST_DB_NAME=mfc_test TEST_DB_USER=root TEST_DB_PASS=... php server/tests/studio_test.php
  */
 declare(strict_types=1);
@@ -22,7 +25,7 @@ function http_json(string $method, string $url, ?string $body = null, array $hea
 {
     $q = getenv('STUDIO_FAKE_Q') ?: (sys_get_temp_dir() . '/studio_fake_q.json');
     $list = is_file($q) ? (array)json_decode((string)file_get_contents($q), true) : [];
-    @file_put_contents($q . '.log', $url . ' ' . substr((string)$body, 0, 60000) . "\n", FILE_APPEND);
+    @file_put_contents($q . '.log', $url . ' ' . substr((string)$body, 0, 2000000) . "\n", FILE_APPEND);
     if (!str_contains($url, 'api.anthropic.com') || !$list) return [0, '', 'network disabled in tests'];
     $next = array_shift($list);
     file_put_contents($q, json_encode($list));
@@ -69,6 +72,26 @@ ok($cs['competitors'][0]['package'] === '' && $cs['competitors'][0]['play_url'] 
 ok($cs['competitors'][0]['complaints'][0]['class'] === 'SUSPECTED ISSUE', 'complaint without evidence downgraded to SUSPECTED ISSUE');
 ok($cs['features'][0]['priority'] === 'REJECT', 'feature Android cannot do -> REJECT');
 ok(json_encode(st_opp_schema()) !== false && json_encode(st_comp_schema()) !== false, 'JSON schemas encode');
+// Claude API: more than 16 union-typed params (type arrays / anyOf / oneOf) -> HTTP 400 (owner's weekly ranking failed with 17 after own_fit was added)
+$unions = function ($node) use (&$unions): int {
+    if (!is_array($node)) return 0;
+    $n = (isset($node['type']) && is_array($node['type']) && array_is_list($node['type'])) || isset($node['anyOf']) || isset($node['oneOf']) ? 1 : 0;
+    foreach ($node as $v) $n += $unions($v);
+    return $n;
+};
+$code = (string)file_get_contents("$src/lib/studio.php");
+preg_match_all("/'schema'\s*=>\s*([a-z_]+)\(\)/", $code, $mm);
+$schemaFns = array_values(array_unique($mm[1]));
+$uc = array_combine($schemaFns, array_map(fn($f) => $unions($f()), $schemaFns));
+ok(count($mm[1]) === preg_match_all("/'schema'\s*=>(?!\s*\\\$o\[)/", $code) && count($mm[1]) >= 4 && in_array('st_opp_schema', $schemaFns, true) && in_array('st_comp_schema', $schemaFns, true),
+    'every schema passed to st_ai comes from a schema function (' . implode(', ', $schemaFns) . ')');
+ok($uc['st_opp_schema'] === 0 && max($uc) <= 10, 'union types per schema: st_opp_schema 0, others <= 10 (' . json_encode($uc) . ')');
+$ofp = st_opp_schema()['properties']['opportunities']['items']['properties']['factors'];
+ok(array_keys($ofp['properties']) === st_ai_factors() && $ofp['required'] === st_ai_factors() && !isset($ofp['properties']['own_fit']) && count(st_ai_factors()) === count(ST_FACTORS) - 1
+    && $ofp['properties']['demand']['properties']['rating']['type'] === 'number', 'AI schema: rating is a plain number; server-computed own_fit is not asked from the AI');
+$cs2 = st_clean_spec(['features' => [['name' => 'A', 'priority' => 'MUST HAVE', 'feasible_on_android' => true, 'effort_days' => -1, 'evidence' => []],
+    ['name' => 'B', 'priority' => 'OPTIONAL', 'feasible_on_android' => true, 'effort_days' => 3, 'evidence' => []]]], []);
+ok($cs2['features'][0]['effort_days'] === null && $cs2['features'][1]['effort_days'] === 3, 'spec: effort_days -1 (unknown) -> null, 3 stays 3');
 ok(st_pctl([1, 2, 3, 4], 50) === 2.5 && st_pctl([], 50) === null, 'percentile helper');
 
 if (!getenv('TEST_DB_HOST')) { echo "\nTEST_DB_HOST not set: DB part skipped\n$n checks, $fail failed\n"; exit($fail > 0 ? 1 : 0); }
@@ -151,6 +174,174 @@ ok($pf['status'] === 'ok' && $pf['basis'] === 'category' && abs($pf['scenarios']
 ok($pf['scenarios']['base']['payback_installs'] === null, 'profit: dev cost not set -> payback unknown (no invented cost)');
 $pf2 = st_profit($pdo, 'Entertainment', ['US'], '');
 ok($pf2['basis'] === 'portfolio' && str_contains($pf2['why'], 'portfolio'), 'profit: no same-category apps -> portfolio average, clearly labelled');
+// AI factor cleaning: -1 = "no evidence" (schema has no nullable types) must become null/UNKNOWN, never 0
+$cf = st_clean_factors($pdo, ['demand' => ['rating' => -1, 'basis' => 'INFERENCE', 'evidence' => [], 'note' => 'none'], 'growth' => ['rating' => 7, 'basis' => 'INFERENCE', 'evidence' => [], 'note' => 'n'],
+    'competition' => ['rating' => 0, 'basis' => 'INFERENCE', 'evidence' => [], 'note' => 'n'], 'search' => ['rating' => -0.5, 'basis' => 'INFERENCE', 'evidence' => [], 'note' => 'n'],
+    'cost' => ['rating' => 14, 'basis' => 'INFERENCE', 'evidence' => [], 'note' => 'n'], 'own_fit' => ['rating' => 9, 'basis' => 'INFERENCE', 'evidence' => [], 'note' => 'ai should not rate this']], []);
+ok($cf['demand']['rating'] === null && $cf['demand']['basis'] === 'UNKNOWN' && $cf['search']['rating'] === null && $cf['growth']['rating'] === 7.0 && $cf['growth']['basis'] === 'INFERENCE'
+    && $cf['competition']['rating'] === 0.0 && $cf['cost']['rating'] === 10.0 && $cf['own_fit']['rating'] === null && $cf['own_fit']['basis'] === 'UNKNOWN' && array_keys($cf) === array_keys(ST_FACTORS),
+    'clean factors: rating -1 -> null/UNKNOWN (not 0), 7 stays 7, 0 stays 0, 14 capped 10, AI own_fit ignored, all factors returned');
+
+// ---------------------------------------------------------------- economics: owner's server failures (Duplicate entry '*--paid', 34-minute cohort SQL)
+// SIMULATED edge cohort, install day D = 12 days ago unless noted. cc NULL / 'UNK' / ' us' need a wider nullable column (some dashboards have one); restored below.
+$pdo->exec("ALTER TABLE day_install MODIFY cc VARCHAR(8) NULL DEFAULT ''");
+$pdo->exec("ALTER TABLE st_app_meta MODIFY category VARCHAR(100) NOT NULL DEFAULT ''");   // to feed 60+ char categories (cap check)
+$ek = 0;
+$seed = function (string $pkg, string $did, int $ago, ?string $cc, string $paid = '', array $active = [], array $rev = [], bool $device = true, ?string $userPkg = null) use ($pdo, &$ek): void {
+    $day = gmdate('Y-m-d', time() - $ago * 86400);
+    $at = fn(int $o) => gmdate('Y-m-d', strtotime(sprintf('%s %+d day', $day, $o)));
+    h_x($pdo, 'INSERT INTO day_install (day, pkg, did, lh, cc) VALUES (?,?,?,?,?)', [$day, $pkg, $did, "$day 10:00:00", $cc]);
+    if ($device) h_x($pdo, 'INSERT IGNORE INTO devices (pkg, did, first_seen, last_seen, cc, gclid, utm_campaign) VALUES (?,?,?,?,?,?,?)',
+        [strtolower($pkg), $did, "$day 10:00:00", "$day 10:00:00", '', $paid === 'gclid' ? 'g-1' : '', $paid === 'utm' ? 'camp-1' : '']);
+    foreach ($active as $o) h_x($pdo, 'INSERT IGNORE INTO day_user (day, pkg, did) VALUES (?,?,?)', [$at($o), $userPkg ?? $pkg, $did]);
+    foreach ($rev as [$o, $t, $v]) { $ek++; h_x($pdo, 'INSERT INTO imps (rid, pkg, did, ts, cc, rev_usd) VALUES (?,?,?,?,?,?)', ["edge-$ek", strtolower($pkg), $did, $at($o) . " $t", '', $v]); }
+};
+$EA = 'com.edge.app';
+$seed($EA, 'e01', 12, 'in', '', [0, 1, 7, 8], [[0, '00:00:00.000', '0.1000000001'], [6, '23:59:59.999', '0.2'], [7, '00:00:00.000', '5'], [-1, '23:59:59.999', '7']]);   // lowercase cc; rev at D+7 00:00 and before D excluded
+$seed($EA, 'e02', 12, 'IN', 'gclid', [1], [[3, '12:00:00', '0.3']]);
+$seed($EA, 'e03', 12, 'IN', 'utm', [8]);                                     // paid via utm only; active on day 8 is not D7
+$seed($EA, 'e04', 12, '', 'gclid', [7], [[2, '12:00:00', '0.05']]);          // blank cc
+$seed($EA, 'e05', 12, null, '', [1], [[0, '12:00:00', '0.01']]);             // NULL cc
+$seed($EA, 'e06', 12, 'UNK', 'utm', [1, 7], [[6, '12:00:00', '0.02']]);      // 3-letter junk cc
+$seed($EA, 'e07', 12, ' us', '', [7], [], false);                            // padded lowercase cc, no devices row (organic)
+$seed($EA, 'e08', 12, 'IN', '', [1], [[2, '12:00:00', '1'], [5, '12:00:00', '2']]);
+$seed($EA, 'e08', 9, 'IN', '', [1, 7]);                                      // same device installed again 3 days later: D+5 revenue counts for both installs
+$seed($EA, 'e09', 28, 'IN', '', [7], [[6, '12:00:00', '0.4']]);              // first day of the window
+$seed($EA, 'e10', 8, 'IN', 'gclid', [1, 7], [[6, '23:00:00', '0.6'], [7, '00:00:00.000', '9']]);   // last day of the window
+$seed($EA, 'e11', 29, 'IN', '', [1, 7], [[1, '12:00:00', '3']]);             // outside the window
+$seed($EA, 'e12', 7, 'IN', '', [1], [[1, '12:00:00', '3']]);                 // outside the window
+$seed('COM.EDGE.APP', 'e13', 12, 'IN', '', [1], [[0, '12:00:00', '0.07']], true, 'Com.Edge.App');   // pkg spelled in other cases
+h_x($pdo, "INSERT INTO imps (rid, pkg, did, ts, cc, rev_usd) VALUES ('edge-x', 'com.edge.app', 'not-in-cohort', ?, '', 50)", [gmdate('Y-m-d', time() - 12 * 86400) . ' 12:00:00']);
+$seed('com.edge.two', 'f01', 12, 'IN', '', [1]);
+$longA = 'Long' . str_repeat('y', 56) . ' one'; $longB = 'LONG' . str_repeat('Y', 56) . ' two';   // same first 60 chars apart from case
+$seed('com.edge.l1', 'g01', 12, 'IN'); $seed('com.edge.l2', 'g02', 12, 'IN');
+foreach (['com.edge.app' => 'Edge', 'com.edge.two' => 'edge', 'com.edge.l1' => $longA, 'com.edge.l2' => $longB] as $p => $c) h_x($pdo, "INSERT INTO st_app_meta (pkg, category, set_by, updated_at) VALUES (?, ?, 'test', UTC_TIMESTAMP())", [$p, $c]);
+// category names only the DB collation decides on (MariaDB general_ci: é = e, ß = s; MySQL 0900_ai_ci: é = e, ß = ss): one app each, 1 organic IN install. Not PHP's fold (with or without intl)
+$catPairs = [['Café', 'Cafe'], ['Straße', 'Strase'], ['खेल', 'खल'], ['Tab', "\u{3000}tab\u{00A0}"]];
+foreach ($catPairs as $i => $pair) foreach ($pair as $j => $c) {
+    $seed("com.edge.c$i$j", "c$i$j", 12, 'IN');
+    h_x($pdo, "INSERT INTO st_app_meta (pkg, category, set_by, updated_at) VALUES (?, ?, 'test', UTC_TIMESTAMP())", ["com.edge.c$i$j", $c]);
+}
+$seed('com.edge.star', 'cst', 12, 'IN');   // fullwidth asterisk: if the DB collation says it equals '*' it must not collide with the all-apps row
+h_x($pdo, "INSERT INTO st_app_meta (pkg, category, set_by, updated_at) VALUES ('com.edge.star', ?, 'test', UTC_TIMESTAMP())", ["\u{FF0A}"]);
+$eFrom = gmdate('Y-m-d', time() - 28 * 86400); $eTo = gmdate('Y-m-d', time() - 8 * 86400);
+// old SQL (correlated EXISTS + imps join) vs new temp-table SQL: identical per (pkg, cc, users type)
+$byKey = function (array $res): array {
+    $o = [];
+    foreach ($res[0] as $r) { $k = strtolower($r['pkg']) . '|' . ($r['cc'] === null ? 'NULL' : strtoupper($r['cc'])) . '|' . $r['ut']; $o[$k] = ['i' => (int)$r['installs'], 'r1' => (int)$r['r1'], 'r7' => (int)$r['r7'], 'rev' => 0.0]; }
+    foreach ($res[1] as $r) { $k = strtolower($r['pkg']) . '|' . ($r['cc'] === null ? 'NULL' : strtoupper($r['cc'])) . '|' . $r['ut']; $o[$k]['rev'] = ($o[$k]['rev'] ?? 0) + (float)$r['rev']; }
+    ksort($o);
+    return $o;
+};
+$old = st_econ_cohorts_legacy($pdo, $eFrom, $eTo);
+$new = st_econ_cohorts_fast($pdo, $eFrom, $eTo);
+$ko = $byKey($old); $kn = $byKey($new);
+$same = count($old[0]) === count($new[0]) && count($old[1]) === count($new[1]) && array_keys($ko) === array_keys($kn);
+foreach ($ko as $gk => $v) $same = $same && $v['i'] === $kn[$gk]['i'] && $v['r1'] === $kn[$gk]['r1'] && $v['r7'] === $kn[$gk]['r7'] && abs($v['rev'] - $kn[$gk]['rev']) < 1e-12;
+ok($same && count($ko) >= 10, 'cohort SQL: new temp-table query gives exactly the old results (' . count($ko) . ' pkg/cc/type groups incl. NULL, blank, UNK, lowercase, paid gclid/utm)');
+$x = $kn['com.edge.app|IN|organic'] ?? []; $y = $kn['com.edge.app|IN|paid'] ?? [];
+ok(($x['i'] ?? 0) === 5 && $x['r1'] === 4 && $x['r7'] === 3 && abs($x['rev'] - 5.7700000001) < 1e-12 && ($y['i'] ?? 0) === 3 && $y['r1'] === 2 && $y['r7'] === 1 && abs($y['rev'] - 0.9) < 1e-12
+    && ($kn['com.edge.app|UNK|paid']['r7'] ?? 0) === 1 && ($kn['com.edge.app|NULL|organic']['r1'] ?? 0) === 1 && ($kn['com.edge.app| US|organic']['r7'] ?? 0) === 1,
+    'cohort SQL: D1 = day+1 only, D7 = day+7 (not day+8), D7 revenue from install day 00:00 to day+7 00:00 (boundary excluded), window edges, re-install, pkg case');
+$tmpGone = true;
+foreach (['st_tmp_coh', 'st_tmp_ret', 'st_tmp_rev'] as $t) { try { $pdo->query("SELECT 1 FROM $t"); $tmpGone = false; } catch (PDOException $e) {} }
+ok($tmpGone, 'temp tables dropped after the cohort SQL');
+// fast path reads without locks (READ COMMITTED), like the old plain SELECTs: a dashboard transaction holding row locks in the window does not make it wait / time out / fall back
+$dsn = 'mysql:host=' . getenv('TEST_DB_HOST') . ';dbname=' . getenv('TEST_DB_NAME') . ';charset=utf8mb4';
+$lk = new PDO($dsn, (string)getenv('TEST_DB_USER'), (string)getenv('TEST_DB_PASS'), [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+$lk->beginTransaction();
+foreach (['day_install' => 'day BETWEEN ? AND ?', 'day_user' => 'day BETWEEN ? AND ? + INTERVAL 7 DAY', 'imps' => "pkg = 'com.edge.app' AND ts >= ? AND ts < ? + INTERVAL 7 DAY"] as $t => $w) {
+    $st = $lk->prepare("SELECT COUNT(*) FROM $t WHERE $w FOR UPDATE"); $st->execute([$eFrom, $eTo]); $st->fetchAll();
+}
+$isoBefore = st_iso_get($pdo);
+$pdo->exec('SET SESSION innodb_lock_wait_timeout = 1');
+$pdo->exec('CREATE TEMPORARY TABLE st_tmp_lockchk (did VARCHAR(36))');
+try { h_x($pdo, 'INSERT INTO st_tmp_lockchk SELECT did FROM day_user WHERE day BETWEEN ? AND ?', [$eFrom, $eTo]); $rrWaits = false; } catch (PDOException $e) { $rrWaits = str_contains($e->getMessage(), '1205'); }
+$pdo->exec('DROP TEMPORARY TABLE st_tmp_lockchk');
+try { $locked = $byKey(st_econ_cohorts_fast($pdo, $eFrom, $eTo)) === $kn; $lkErr = ''; } catch (PDOException $e) { $locked = false; $lkErr = $e->getMessage(); }
+$pdo->exec('SET SESSION innodb_lock_wait_timeout = DEFAULT');
+$lk->rollBack(); $lk = null;
+ok($isoBefore === 'REPEATABLE READ' && $locked && st_iso_get($pdo) === $isoBefore,
+    'fast cohort SQL under dashboard row locks: same result, no lock wait (READ COMMITTED), isolation level restored (control: same INSERT ... SELECT at REPEATABLE READ '
+    . ($rrWaits ? 'times out' : 'did not wait') . ')' . ($lkErr ? " · $lkErr" : ''));
+// log_bin + binlog_format=STATEMENT: RC would raise 1665 (-> slow fallback), so the level stays as it is and the fast path still runs
+final class StStmtBinlogPdo extends PDO
+{
+    public function query(string $query, ?int $fetchMode = null, mixed ...$args): PDOStatement|false
+    {
+        if (str_contains($query, '@@GLOBAL.log_bin')) $query = "SELECT 1, 'STATEMENT'";
+        return $fetchMode === null ? parent::query($query) : parent::query($query, $fetchMode, ...$args);
+    }
+}
+$sp = new StStmtBinlogPdo($dsn, (string)getenv('TEST_DB_USER'), (string)getenv('TEST_DB_PASS'), [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]);
+$sp->exec("SET time_zone = '+00:00'");
+$warnsBefore = (int)q1("SELECT COUNT(*) FROM st_events WHERE level = 'warn'");
+ok(st_iso_rc($sp) === null && st_iso_get($sp) === 'REPEATABLE READ' && $byKey(st_econ_cohorts($sp, $eFrom, $eTo)) === $kn && (int)q1("SELECT COUNT(*) FROM st_events WHERE level = 'warn'") === $warnsBefore,
+    'binlog_format=STATEMENT: isolation not switched (would be error 1665), fast path still used, no fallback warning');
+$sp = null;
+// no CREATE TEMPORARY TABLES privilege -> warn + old query, same result (job keeps working)
+final class StNoTmpPdo extends PDO
+{
+    private function deny(string $q): void { if (stripos($q, 'CREATE TEMPORARY') !== false) throw new PDOException("SQLSTATE[42000]: Syntax error or access violation: 1044 Access denied for user 'mfc'@'localhost' to database 'mfc'"); }
+    public function prepare(string $query, array $options = []): PDOStatement|false { $this->deny($query); return parent::prepare($query, $options); }
+    public function exec(string $statement): int|false { $this->deny($statement); return parent::exec($statement); }
+}
+$np = new StNoTmpPdo('mysql:host=' . getenv('TEST_DB_HOST') . ';dbname=' . getenv('TEST_DB_NAME') . ';charset=utf8mb4', (string)getenv('TEST_DB_USER'), (string)getenv('TEST_DB_PASS'),
+    [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC, PDO::ATTR_EMULATE_PREPARES => true]);
+$np->exec("SET time_zone = '+00:00'");
+ok(st_econ_cohorts($np, $eFrom, $eTo) === $old && (int)q1("SELECT COUNT(*) FROM st_events WHERE level = 'warn' AND msg LIKE '%fast cohort SQL failed%Access denied%'") === 1,
+    'no CREATE TEMPORARY TABLES privilege: warning logged, old query used, same result');
+$np = null;
+$rid = st_run_new($pdo, 'economics', ['trigger' => 'manual', 'by' => 'test']);
+st_work($pdo, 60);
+$er = $pdo->query("SELECT * FROM st_runs WHERE id = $rid")->fetch();
+$ec = []; foreach (q('SELECT * FROM st_econ') as $r) $ec[$r['category'] . '|' . $r['cc'] . '|' . $r['users_type']] = $r;
+ok($er['status'] === 'DONE' && (int)$er['steps_done'] === 4 && (int)$er['steps_total'] === 4, "economics with cohorts in cc '' / NULL / 'UNK' / 'in' + 'IN': run DONE, no duplicate key" . ($er['status'] !== 'DONE' ? ' · ' . $er['error_text'] : ''));
+$bad = array_filter(array_keys($ec), fn($k) => !preg_match('/^[^|]*\|([A-Z]{2})?\|(organic|paid)$/', $k));
+$blank = array_count_values(array_map(fn($r) => mb_strtolower($r['category']) . '|' . $r['users_type'], array_filter($ec, fn($r) => $r['cc'] === '')));
+ok(!$bad && max($blank) === 1 && count($blank) === count(array_unique(array_map(fn($r) => mb_strtolower($r['category']) . '|' . $r['users_type'], $ec))),
+    "st_econ: every cc is a 2-letter code or '' (all countries); exactly one '' row per category + users type");
+ok((int)($ec['Edge|IN|organic']['installs'] ?? 0) === 6 && (int)($ec['Edge|IN|paid']['installs'] ?? 0) === 3 && (int)($ec['Edge|US|organic']['installs'] ?? 0) === 1
+    && (int)($ec['Edge||paid']['installs'] ?? 0) === 5 && (int)($ec['Edge||organic']['installs'] ?? 0) === 8 && count(array_filter(array_keys($ec), fn($k) => str_starts_with($k, 'Edge|'))) === 5
+    && abs((float)$ec['Edge||paid']['d1'] - 0.6) < 1e-9 && (int)($ec['*||paid']['installs'] ?? 0) === 225 && (int)($ec['*||organic']['installs'] ?? 0) === 679,
+    "unknown-country installs count only in the all-countries row; 'in' + 'IN' merged; 'edge' + 'Edge' one category");
+$colCo = (string)q1("SELECT COLLATION_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'st_econ' AND COLUMN_NAME = 'category'");
+$dbEq = fn(string $a, string $b): bool => (int)q1("SELECT CONVERT(? USING utf8mb4) COLLATE $colCo = CONVERT(? USING utf8mb4)", [$a, $b]) === 1;
+$pairOk = true; $pairTxt = [];
+foreach ($catPairs as [$a, $b]) {
+    $b = preg_replace('/^[\s\p{Z}]+|[\s\p{Z}]+$/u', '', $b);   // stored trimmed (incl. Unicode spaces)
+    $na = (int)($ec["$a|IN|organic"]['installs'] ?? 0); $nb = (int)($ec["$b|IN|organic"]['installs'] ?? 0);
+    $same = $dbEq($a, $b);
+    $pairOk = $pairOk && ($same ? $na + $nb === 2 && min($na, $nb) === 0 : $na === 1 && $nb === 1);
+    $pairTxt[] = "$a/$b " . ($same ? 'merged' : 'apart');
+}
+$star = (int)($ec["\u{FF0A}|IN|organic"]['installs'] ?? 0);
+ok($pairOk && ($dbEq('*', "\u{FF0A}") ? $star === 0 : $star === 1) && !array_filter(array_keys($ec), fn($k) => preg_match('/^[\s\p{Z}]|[\s\p{Z}]\|/u', $k)),
+    "categories merged exactly where the DB collation ($colCo) says equal, no PHP fold (" . implode(', ', $pairTxt) . '); Unicode spaces trimmed; no clash with the all-apps row');
+$longRows = array_filter($ec, fn($r) => stripos($r['category'], 'longyyy') === 0);
+ok(count($longRows) === 2 && (int)($longRows[array_key_first($longRows)]['installs']) === 2 && mb_strlen((string)$longRows[array_key_first($longRows)]['category']) === 60,
+    'categories capped at 60 chars; two that become equal (case-insensitive) after the cap are merged, not a duplicate key');
+// a failure while saving must leave the previous st_econ (and its evidence) intact
+$before = q('SELECT * FROM st_econ ORDER BY category, cc, users_type');
+$evBefore = (int)q1('SELECT COUNT(*) FROM st_evidence'); $snBefore = q('SELECT * FROM st_snapshots ORDER BY id');
+$pdo->exec("CREATE TRIGGER st_econ_boom BEFORE INSERT ON st_econ FOR EACH ROW BEGIN SET @st_econ_n = COALESCE(@st_econ_n, 0) + 1; IF @st_econ_n >= 3 THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'forced failure on insert 3'; END IF; END");
+$pdo->exec('SET @st_econ_n = 0');
+$rid = st_run_new($pdo, 'economics', ['trigger' => 'manual', 'by' => 'test']);
+st_work($pdo, 60);
+$pdo->exec('DROP TRIGGER st_econ_boom');
+$er = $pdo->query("SELECT * FROM st_runs WHERE id = $rid")->fetch();
+ok($er['status'] === 'FAILED' && str_contains($er['error_text'], 'forced failure') && q('SELECT * FROM st_econ ORDER BY category, cc, users_type') === $before && count($before) > 3
+    && (int)q1('SELECT COUNT(*) FROM st_evidence') === $evBefore && q('SELECT * FROM st_snapshots ORDER BY id') === $snBefore,
+    'failure on the 3rd st_econ insert: run FAILED, previous st_econ rows, evidence and snapshots untouched (one transaction)');
+// edge data out again: economics back to the simulated Tools numbers used below
+foreach (["DELETE FROM day_install WHERE pkg LIKE 'com.edge.%'", "DELETE FROM day_user WHERE pkg LIKE 'com.edge.%'", "DELETE FROM imps WHERE rid LIKE 'edge-%'",
+    "DELETE FROM devices WHERE pkg LIKE 'com.edge.%'", "DELETE FROM st_app_meta WHERE pkg LIKE 'com.edge.%'"] as $sql) $pdo->exec($sql);
+$pdo->exec("ALTER TABLE day_install MODIFY cc CHAR(2) NOT NULL DEFAULT ''");
+$pdo->exec("ALTER TABLE st_app_meta MODIFY category VARCHAR(60) NOT NULL DEFAULT ''");
+$rid = st_run_new($pdo, 'economics', ['trigger' => 'manual', 'by' => 'test']);
+st_work($pdo, 60);
+$e = st_econ_get($pdo, 'Tools', 'IN', 'organic');
+ok(q1('SELECT status FROM st_runs WHERE id = ?', [$rid]) === 'DONE' && $e && (int)$e['installs'] === 660 && !q("SELECT 1 FROM st_econ WHERE category = 'Edge'"), 'edge data removed: economics back to the simulated Tools rows');
 
 // ---------------------------------------------------------------- rank job with canned Claude responses
 kv_set('ai_api_key', 'sk-test');
@@ -162,7 +353,8 @@ $webResp = fn(array $urls, string $text, string $stop = 'end_turn') => [200, ['m
     ['type' => 'web_search_tool_result', 'tool_use_id' => 'srv1', 'content' => array_map(fn($u) => ['type' => 'web_search_result', 'url' => $u, 'title' => "T $u", 'page_age' => '3 days ago'], $urls)],
     ['type' => 'text', 'text' => $text]]]];
 $jsonResp = fn(array $j) => [200, ['model' => 'claude-opus-5-5', 'stop_reason' => 'end_turn', 'usage' => ['input_tokens' => 5000, 'output_tokens' => 3000], 'content' => [['type' => 'text', 'text' => json_encode($j)]]]];
-$fx = function (array $r) { $o = []; foreach (ST_FACTORS as $k => $_) $o[$k] = $r[$k] ?? ['rating' => null, 'basis' => 'UNKNOWN', 'evidence' => [], 'note' => '']; return $o; };
+// canned AI factors follow the schema: only st_ai_factors() (no own_fit), -1 = no evidence
+$fx = function (array $r) { $o = []; foreach (st_ai_factors() as $k) $o[$k] = $r[$k] ?? ['rating' => -1, 'basis' => 'UNKNOWN', 'evidence' => [], 'note' => '']; return $o; };
 $I = fn($v, $ev = ['S1']) => ['rating' => $v, 'basis' => 'INFERENCE', 'evidence' => $ev, 'note' => 'n'];
 $card = ['what' => 'w', 'why' => 'y', 'evidence' => 'e', 'benefit' => 'b', 'cost' => 'c', 'risk' => 'r', 'alternatives' => 'a'];
 $oppA = ['title' => 'Lost Earbuds Finder', 'concept' => 'BT signal meter', 'category' => 'Tools', 'countries' => ['IN', 'us', 'XX1'], 'competitors' => [['name' => 'Finder X', 'package' => 'com.finder.x', 'evidence' => ['S2']]],
@@ -190,6 +382,13 @@ ok(str_contains($log, 'web_search_20260209') && str_contains($log, 'json_schema'
 ok(str_contains($log, "=== Owner's own apps, last 30 days (verified) ===\\nP1: all your apps") && preg_match('/\\\\nP\\d+: your apps in IN: 880 installs \\(220 paid\\)[^"]*\\(spend estimated from paid installs\\)/', $log)
     && str_contains($log, "paid ROAS is below 100%") && str_contains($log, 'cite those with basis ESTIMATE') && (bool)kv_get('st_port_meta'),
     "rank prompt: owner's-apps section with P ids (portfolio ran inline first), estimated spend marked, guidance in system prompt (estimated P lines = ESTIMATE)");
+// what really went to the API: every structured-output schema in the request log (one JSON body per line)
+$sent = [];
+foreach (explode("\n", $log) as $line) { $j = json_decode(substr($line, (int)strpos($line, ' ') + 1), true); if (is_array($j['output_config']['format']['schema'] ?? null)) $sent[] = $j; }
+$sf = $sent[0]['output_config']['format']['schema']['properties']['opportunities']['items']['properties']['factors']['properties'] ?? [];
+ok(count($sent) === 1 && $unions($sent[0]['output_config']['format']['schema']) === 0 && array_keys($sf) === st_ai_factors() && !str_contains(json_encode($sent[0]), 'own_fit')
+    && str_contains($sent[0]['system'], 'or -1 if there is no evidence') && str_contains($sent[0]['system'], 'UNKNOWN when rating is -1') && !str_contains($sent[0]['system'], 'null if'),
+    'rank request sent: schema has 0 union types, no own_fit anywhere (server computes it), prompt says -1 = no evidence');
 $A = $pdo->query("SELECT * FROM st_opps WHERE title = 'Lost Earbuds Finder'")->fetch();
 $B = $pdo->query("SELECT * FROM st_opps WHERE title = 'AI Prank Voice Call'")->fetch();
 $fa = json_decode($A['factors'], true);
@@ -206,6 +405,8 @@ ok($fa['own_fit']['basis'] === 'VERIFIED' && $fa['own_fit']['rating'] !== null &
     'own_fit applied from your own Tools apps (VERIFIED, P evidence) + fit stored in profit JSON');
 $fb = json_decode($B['factors'], true);
 ok($fb['own_fit']['rating'] === null && $fb['own_fit']['basis'] === 'UNKNOWN' && !isset(json_decode($B['profit'], true)['fit']), 'own_fit: no own apps in Prank apps, no matching countries -> nothing invented');
+ok(array_keys($fb) === array_keys(ST_FACTORS) && $fb['competition']['rating'] === null && $fb['competition']['basis'] === 'UNKNOWN' && (float)$fb['demand']['rating'] === 9.0,
+    'stored factor set complete (all ' . count(ST_FACTORS) . ' incl. own_fit); AI -1 stored as null/UNKNOWN, 9 stays 9');
 ok($A['countries'] === 'IN,US', 'countries normalised (invalid dropped)');
 ok($B['final_rec'] === 'REJECT' && $B['ai_rec'] === 'STRONGLY CONSIDER', 'AI said STRONGLY CONSIDER, policy rule says REJECT -> final REJECT');
 ok($A['organic_score'] !== null && $A['paid_score'] !== null && $A['final_rec'] !== 'STRONGLY CONSIDER', 'scores computed; single-source idea is not STRONGLY CONSIDER');
@@ -522,6 +723,10 @@ $fe = $E ? json_decode($E['factors'], true) : [];
 ok($er['status'] === 'DONE' && $left() === 0 && str_contains((string)@file_get_contents("$Q.log"), "=== Owner's own apps, last 30 days (verified) ===\\nP1: all your apps")
     && ($fe['monetization']['basis'] ?? '') === 'VERIFIED' && ($fe['monetization']['evidence'] ?? []) === [(int)json_decode((string)kv_get('st_port_meta'), true)['total_eid']] && ($fe['own_fit']['rating'] ?? null) !== null,
     "own idea evaluation: prompt has the owner's-apps section, P1 cited as VERIFIED is kept, own_fit applied" . ($er['status'] !== 'DONE' ? ' · ' . $er['error_text'] : ''));
+$sent = [];
+foreach (explode("\n", (string)@file_get_contents("$Q.log")) as $line) { $j = json_decode(substr($line, (int)strpos($line, ' ') + 1), true); if (is_array($j['output_config']['format']['schema'] ?? null)) $sent[] = $j; }
+ok(count($sent) === 1 && $unions($sent[0]['output_config']['format']['schema']) === 0 && !str_contains(json_encode($sent[0]), 'own_fit') && str_contains($sent[0]['system'], '-1 if no evidence (basis UNKNOWN)'),
+    'idea re-assess request sent: same schema, 0 union types, no own_fit, -1 = no evidence');
 $pdo->exec('DROP TABLE st_port');
 kv_set('st_schema_v', '1');
 [$c] = $http('GET', 'api/studio.php?view=mine');

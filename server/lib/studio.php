@@ -51,6 +51,9 @@ const ST_FACTORS = [
     'team_fit'      => ['Fit with existing team', 'both', 1, 4],
     'own_fit'       => ['Fit with your earning apps', 'both', 1, 8],   // aapke apps ka data (category profit/ROAS + countries), deterministic
 ];
+/** Ye factors server khud nikalta hai (own_fit = st_apply_portfolio): AI se rating nahi maangte, AI schema me bhi nahi (stored factor set phir bhi poora). */
+const ST_SERVER_FACTORS = ['own_fit'];
+function st_ai_factors(): array { return array_values(array_diff(array_keys(ST_FACTORS), ST_SERVER_FACTORS)); }
 
 const ST_DEFAULT_COUNTRIES = [
     ['US', 'United States', 1], ['GB', 'United Kingdom', 1], ['CA', 'Canada', 1], ['AU', 'Australia', 1], ['DE', 'Germany', 1], ['FR', 'France', 1],
@@ -560,25 +563,39 @@ function st_pctl(array $v, float $p): ?float
  * Har app x country x (organic|paid) cohort: installs (8-28 din pehle), D1/D7 retention, D7 ad revenue per install.
  * Paid = install device par gclid ya utm_campaign; baaki organic (methodology evidence me likhi hai).
  * Category level: apps ke rev7 ka p25/p50/p75 -> profit scenarios. CPI = Google Ads cost / conversions (30 din, per app; country-wise spend data nahi hai).
+ * cc portfolio jaisa: 2 letter A-Z (trim + upper), warna unknown. Unknown country sirf "all countries" row ('*', DB me cc '') me ginta hai, apni alag row nahi
+ * (pehle '' / NULL / 'UNK' wala cohort bhi cc '' ban kar '*' row se takrata tha: Duplicate entry '*--paid'). Jo rows normalise hokar ek key banein, jud jaati hain.
+ * Category: trim, 60 char (column), merge wahi jo DB ka collation barabar maane (WEIGHT_STRING, st_econ_catkeys). st_econ DELETE + INSERT + evidence + snapshot ek transaction me:
+ * fail ho to purani rows poori bachi rehti hain (rank sirf khaali st_econ par economics dobara chalata hai).
  */
 function st_job_economics(PDO $pdo, StRun $run): void
 {
     foreach (['day_install', 'day_user', 'imps', 'devices'] as $t) if (!$pdo->query("SHOW TABLES LIKE '$t'")->fetch()) throw new RuntimeException("dashboard table $t missing");
-    $cat = st_app_category($pdo);
+    $catOf = [];   // pkg (lowercase) -> category ('*' nahi: wo "sab apps" row ka naam hai)
+    foreach (st_app_category($pdo) as $p => $c) {
+        $c = st_econ_trim(st_cut(st_econ_trim((string)$c), 60));   // cut ke baad bhi trim: 'abc ' aur 'abc' DB me barabar
+        if ($c !== '') $catOf[strtolower(trim((string)$p))] = $c;
+    }
+    // category key = DB ki barabari (st_econ.category ka collation), PHP ka fold nahi; jo naam DB me '*' ke barabar ho wo bhi "sab apps" se na takraye
+    $wk = st_econ_catkeys($pdo, ['*', ...array_values($catOf)]);
+    $catOf = array_filter($catOf, fn($c) => $wk[$c] !== $wk['*']);
+    $run->plan(4);
     $run->stage('cohorts: installs 8-28 days ago, retention + D7 revenue');
     $from = gmdate('Y-m-d', time() - 28 * 86400); $to = gmdate('Y-m-d', time() - 8 * 86400);
-    $rows = h_q($pdo, "SELECT i.pkg, i.cc, IF(COALESCE(d.gclid,'') <> '' OR COALESCE(d.utm_campaign,'') <> '', 'paid', 'organic') ut, COUNT(*) installs,
-            SUM(EXISTS(SELECT 1 FROM day_user u WHERE u.pkg = i.pkg AND u.did = i.did AND u.day = DATE_ADD(i.day, INTERVAL 1 DAY))) r1,
-            SUM(EXISTS(SELECT 1 FROM day_user u WHERE u.pkg = i.pkg AND u.did = i.did AND u.day = DATE_ADD(i.day, INTERVAL 7 DAY))) r7
-        FROM day_install i LEFT JOIN devices d ON d.pkg = i.pkg AND d.did = i.did
-        WHERE i.day BETWEEN ? AND ? GROUP BY i.pkg, i.cc, ut", [$from, $to]);
-    $run->step();
-    $rev = [];
-    foreach (h_q($pdo, "SELECT i.pkg, i.cc, IF(COALESCE(d.gclid,'') <> '' OR COALESCE(d.utm_campaign,'') <> '', 'paid', 'organic') ut, SUM(m.rev_usd) rev
-        FROM day_install i LEFT JOIN devices d ON d.pkg = i.pkg AND d.did = i.did
-        JOIN imps m ON m.pkg = i.pkg AND m.did = i.did AND m.ts >= i.day AND m.ts < DATE_ADD(i.day, INTERVAL 7 DAY)
-        WHERE i.day BETWEEN ? AND ? GROUP BY i.pkg, i.cc, ut", [$from, $to]) as $r) $rev[$r['pkg'] . '|' . $r['cc'] . '|' . $r['ut']] = (float)$r['rev'];
-    $run->step();
+    [$rows, $revRows] = st_econ_cohorts($pdo, $from, $to, $run);
+    // SQL rows -> key (pkg lowercase | cc normalised | ut); '' / NULL / 'UNK', 'in' / 'IN', pkg ki alag spelling: ek key, numbers jud jaate hain
+    $C = [];
+    $put = function (array $r, array $add) use (&$C): void {
+        $cc = strtoupper(trim((string)$r['cc']));
+        if (!preg_match('/^[A-Z]{2}$/', $cc)) $cc = '';
+        $pkg = strtolower(trim((string)$r['pkg']));
+        $x = &$C["$pkg|$cc|{$r['ut']}"];
+        $x ??= ['pkg' => $pkg, 'cc' => $cc, 'ut' => (string)$r['ut'], 'installs' => 0, 'r1' => 0, 'r7' => 0, 'rev' => 0.0];
+        foreach ($add as $k => $v) $x[$k] += $v;
+    };
+    foreach ($rows as $r) $put($r, ['installs' => (int)$r['installs'], 'r1' => (int)$r['r1'], 'r7' => (int)$r['r7']]);
+    foreach ($revRows as $r) $put($r, ['rev' => (float)$r['rev']]);
+    $run->step(2);
     $run->stage('CPI from Google Ads (30 days, per app)');
     $cpi = [];
     if ($pdo->query("SHOW TABLES LIKE 'gads_campaign_day'")->fetch()) {
@@ -587,47 +604,186 @@ function st_job_economics(PDO $pdo, StRun $run): void
             [gmdate('Y-m-d', time() - 30 * 86400)]) as $r) {
             $usd = $r['currency'] === 'USD' ? (float)$r['cost'] : ($r['currency'] === 'INR' ? (float)$r['cost'] / $inr : null);
             if ($usd === null || (float)$r['conv'] < 20) continue;   // dusri currency / chhota sample: CPI nahi banate
-            $cpi[$r['pkg']] = ($cpi[$r['pkg']] ?? 0) + $usd / (float)$r['conv'];
+            $p = strtolower(trim((string)$r['pkg']));
+            $cpi[$p] = ($cpi[$p] ?? 0) + $usd / (float)$r['conv'];
         }
     }
     $run->step();
-    // per app per cc per type -> per category per cc per type (+ ALL countries row)
-    $agg = [];
+    // per app per cc per type -> per category per cc per type (+ ALL countries row '*'); category key = DB weight ('w' + hex, '*' se kabhi barabar nahi), naam pehli spelling
+    $agg = []; $names = [];
     $min = (int)st_set('st_min_cohort');
-    foreach ($rows as $r) {
-        $c = $cat[$r['pkg']] ?? '';
-        $k = $r['pkg'] . '|' . $r['cc'] . '|' . $r['ut'];
-        foreach ([$c, '*'] as $cg) foreach ([$r['cc'], '*'] as $cc) {
+    foreach ($C as $r) {
+        $c = $catOf[$r['pkg']] ?? '';
+        $ck = $c === '' ? '' : $wk[$c];
+        if ($ck !== '') $names[$ck] ??= $c;
+        foreach ([$ck, '*'] as $cg) foreach ($r['cc'] !== '' ? [$r['cc'], '*'] : ['*'] as $cc) {   // unknown country: sirf '*'
             if ($cg === '') continue;
             $a = &$agg[$cg][$cc][$r['ut']];
-            $a['installs'] = ($a['installs'] ?? 0) + (int)$r['installs'];
-            $a['r1'] = ($a['r1'] ?? 0) + (int)$r['r1']; $a['r7'] = ($a['r7'] ?? 0) + (int)$r['r7'];
-            $a['app'][$r['pkg']]['i'] = ($a['app'][$r['pkg']]['i'] ?? 0) + (int)$r['installs'];
-            $a['app'][$r['pkg']]['rev'] = ($a['app'][$r['pkg']]['rev'] ?? 0) + ($rev[$k] ?? 0);
+            $a['installs'] = ($a['installs'] ?? 0) + $r['installs'];
+            $a['r1'] = ($a['r1'] ?? 0) + $r['r1']; $a['r7'] = ($a['r7'] ?? 0) + $r['r7'];
+            $a['app'][$r['pkg']]['i'] = ($a['app'][$r['pkg']]['i'] ?? 0) + $r['installs'];
+            $a['app'][$r['pkg']]['rev'] = ($a['app'][$r['pkg']]['rev'] ?? 0) + $r['rev'];
             unset($a);
         }
     }
-    $pdo->exec('DELETE FROM st_econ');
+    $run->stage('save economics + evidence');
     $n = 0;
-    foreach ($agg as $cg => $byCc) foreach ($byCc as $cc => $byT) foreach ($byT as $ut => $a) {
-        $per = [];
-        foreach ($a['app'] as $pkg => $x) if ($x['i'] >= 30) $per[] = $x['rev'] / $x['i'];
-        $cp = array_values(array_filter(array_map(fn($p) => $cpi[$p] ?? null, array_keys($a['app'])), fn($v) => $v !== null));
-        $val = ['installs' => $a['installs'], 'apps' => count($a['app']), 'd1' => $a['installs'] ? $a['r1'] / $a['installs'] : null, 'd7' => $a['installs'] ? $a['r7'] / $a['installs'] : null,
-            'rev7' => [st_pctl($per, 25), st_pctl($per, 50), st_pctl($per, 75)], 'cpi_usd' => $cp ? array_sum($cp) / count($cp) : null, 'sufficient' => $a['installs'] >= $min && count($per) >= 1];
-        $eid = st_evidence($pdo, ['source' => 'internal', 'data_type' => 'unit_economics', 'label' => 'VERIFIED', 'cc' => $cc === '*' ? '' : $cc, 'category' => $cg, 'key' => $ut,
-            'title' => "Your $cg apps · " . ($cc === '*' ? 'all countries' : $cc) . " · $ut users", 'confidence' => $val['sufficient'] ? 'High' : 'Low', 'value' => $val, 'as_of' => $to . ' 00:00:00',
-            'method' => "Install cohort $from..$to (dashboard day_install), D1/D7 = returned on day 1/7 (day_user), D7 revenue = ad revenue in first 7 days per install (imps), "
-                . "$ut = " . ($ut === 'paid' ? 'device has gclid/utm_campaign' : 'no gclid/utm_campaign') . '; CPI = Google Ads cost/conversions per app, 30 days, not country-specific'], $run->id);
-        h_x($pdo, 'INSERT INTO st_econ (category, cc, users_type, apps, installs, d1, d7, rev7_p25, rev7_p50, rev7_p75, cpi_usd, cpi_apps, evidence_id, computed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,UTC_TIMESTAMP())',
-            [$cg, $cc === '*' ? '' : $cc, $ut, $val['apps'], $val['installs'], $val['d1'], $val['d7'], $val['rev7'][0], $val['rev7'][1], $val['rev7'][2], $val['cpi_usd'], count($cp), $eid]);
-        if ($cc === '*' && $cg !== '*') st_snapshot($pdo, "rev7_$ut", $cg, '', $val['rev7'][1], 'VERIFIED', 'internal', $eid);
-        $n++;
-    }
+    $pdo->beginTransaction();
+    try {
+        $pdo->exec('DELETE FROM st_econ');
+        foreach ($agg as $cg => $byCc) foreach ($byCc as $cc => $byT) foreach ($byT as $ut => $a) {
+            $cg = (string)$cg; $cc = (string)$cc;   // '2024' jaisi category PHP me int key ban jaati hai
+            $name = $cg === '*' ? '*' : $names[$cg];
+            $per = [];
+            foreach ($a['app'] as $pkg => $x) if ($x['i'] >= 30) $per[] = $x['rev'] / $x['i'];
+            $cp = array_values(array_filter(array_map(fn($p) => $cpi[(string)$p] ?? null, array_keys($a['app'])), fn($v) => $v !== null));
+            $val = ['installs' => $a['installs'], 'apps' => count($a['app']), 'd1' => $a['installs'] ? $a['r1'] / $a['installs'] : null, 'd7' => $a['installs'] ? $a['r7'] / $a['installs'] : null,
+                'rev7' => [st_pctl($per, 25), st_pctl($per, 50), st_pctl($per, 75)], 'cpi_usd' => $cp ? array_sum($cp) / count($cp) : null, 'sufficient' => $a['installs'] >= $min && count($per) >= 1];
+            $eid = st_evidence($pdo, ['source' => 'internal', 'data_type' => 'unit_economics', 'label' => 'VERIFIED', 'cc' => $cc === '*' ? '' : $cc, 'category' => $name, 'key' => $ut,
+                'title' => "Your $name apps · " . ($cc === '*' ? 'all countries' : $cc) . " · $ut users", 'confidence' => $val['sufficient'] ? 'High' : 'Low', 'value' => $val, 'as_of' => $to . ' 00:00:00',
+                'method' => "Install cohort $from..$to (dashboard day_install), D1/D7 = returned on day 1/7 (day_user), D7 revenue = ad revenue in first 7 days per install (imps), "
+                    . "$ut = " . ($ut === 'paid' ? 'device has gclid/utm_campaign' : 'no gclid/utm_campaign') . '; all countries includes installs with unknown country; CPI = Google Ads cost/conversions per app, 30 days, not country-specific'], $run->id);
+            h_x($pdo, 'INSERT INTO st_econ (category, cc, users_type, apps, installs, d1, d7, rev7_p25, rev7_p50, rev7_p75, cpi_usd, cpi_apps, evidence_id, computed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,UTC_TIMESTAMP())',
+                [$name, $cc === '*' ? '' : $cc, $ut, $val['apps'], $val['installs'], $val['d1'], $val['d7'], $val['rev7'][0], $val['rev7'][1], $val['rev7'][2], $val['cpi_usd'], count($cp), $eid]);
+            if ($cc === '*' && $cg !== '*') st_snapshot($pdo, "rev7_$ut", $name, '', $val['rev7'][1], 'VERIFIED', 'internal', $eid);
+            $n++;
+        }
+        $pdo->commit();
+    } catch (Throwable $e) { if ($pdo->inTransaction()) $pdo->rollBack(); throw $e; }
     $run->step();
     st_source_mark($pdo, 'internal', true, '', $n);
-    $unmapped = count(array_diff(array_unique(array_column($rows, 'pkg')), array_keys($cat)));
+    $unmapped = count(array_diff(array_unique(array_column($C, 'pkg')), array_keys($catOf)));
     $run->summary = "$n economics rows" . ($unmapped ? " · $unmapped apps have no category yet (Studio Settings > Your apps)" : '');
+}
+
+/** Dono taraf ka whitespace hatao, Unicode wala bhi (NBSP, U+3000): DB ki space padding me trailing space-jaise chars ka farq hi na bache. */
+function st_econ_trim(string $s): string
+{
+    $t = preg_replace('/^[\s\p{Z}]+|[\s\p{Z}]+$/u', '', $s);
+    return is_string($t) ? $t : trim($s);
+}
+
+/**
+ * Category merge key = DB ki nazar me barabari: st_econ.category ke apne collation ka WEIGHT_STRING (MariaDB general_ci: é = e, ß = s; MySQL 0900_ai_ci: ß = ss).
+ * PHP ka lower / accent fold DB se alag hota hai (intl ho ya na ho): DB me barabar par PHP me alag = duplicate key (1062), ulta = DB me alag naam jud jaate.
+ * AS CHAR(60) = column jaisa (60 char, PAD SPACE padding). Return: naam => 'w' + hex (prefix: '*' row key / int key se kabhi na takraye).
+ */
+function st_econ_catkeys(PDO $pdo, array $names): array
+{
+    $c = h_q($pdo, "SELECT CHARACTER_SET_NAME cs, COLLATION_NAME co FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'st_econ' AND COLUMN_NAME = 'category'")[0] ?? [];
+    $cs = (string)($c['cs'] ?? ''); $co = (string)($c['co'] ?? '');
+    if (!preg_match('/^\w+$/', $cs) || !preg_match('/^\w+$/', $co)) throw new RuntimeException('st_econ.category collation not found');
+    $st = $pdo->prepare("SELECT HEX(WEIGHT_STRING(CONVERT(? USING $cs) COLLATE $co AS CHAR(60)))");
+    $out = [];
+    foreach ($names as $n) {
+        $n = (string)$n;
+        if (isset($out[$n])) continue;
+        $st->execute([$n]);
+        $out[$n] = 'w' . $st->fetchColumn();
+    }
+    return $out;
+}
+
+const ST_ECON_UT = "IF(COALESCE(d.gclid,'') <> '' OR COALESCE(d.utm_campaign,'') <> '', 'paid', 'organic')";
+
+/** Cohort SQL: tez wala (temp tables); temp table na ban sake (privilege nahi) / fail ho to warn log + purana SQL, job phir bhi chalta hai. Return [rows, rev rows]. */
+function st_econ_cohorts(PDO $pdo, string $from, string $to, ?StRun $run = null): array
+{
+    try {
+        return st_econ_cohorts_fast($pdo, $from, $to);
+    } catch (PDOException $e) {
+        st_log($pdo, ($run ? "{$run->uid} · " : '') . 'fast cohort SQL failed (' . st_cut($e->getMessage(), 200) . '), using the old (slow) query', 'warn', $run ? ['run' => $run->id] : []);
+        return st_econ_cohorts_legacy($pdo, $from, $to);
+    }
+}
+
+/**
+ * Purana SQL (v1.7.4 tak): har install row par 2 correlated EXISTS (day_user) + imps join (imps par (pkg, did) index nahi -> har install par app ke 7 din ke saare imps).
+ * Owner ke server par 34 min. Ab sirf fallback + test reference (naya SQL isi jaisa result de).
+ */
+function st_econ_cohorts_legacy(PDO $pdo, string $from, string $to): array
+{
+    $UT = ST_ECON_UT;
+    $rows = h_q($pdo, "SELECT i.pkg, i.cc, $UT ut, COUNT(*) installs,
+            SUM(EXISTS(SELECT 1 FROM day_user u WHERE u.pkg = i.pkg AND u.did = i.did AND u.day = DATE_ADD(i.day, INTERVAL 1 DAY))) r1,
+            SUM(EXISTS(SELECT 1 FROM day_user u WHERE u.pkg = i.pkg AND u.did = i.did AND u.day = DATE_ADD(i.day, INTERVAL 7 DAY))) r7
+        FROM day_install i LEFT JOIN devices d ON d.pkg = i.pkg AND d.did = i.did
+        WHERE i.day BETWEEN ? AND ? GROUP BY i.pkg, i.cc, ut", [$from, $to]);
+    $rev = h_q($pdo, "SELECT i.pkg, i.cc, $UT ut, SUM(m.rev_usd) rev
+        FROM day_install i LEFT JOIN devices d ON d.pkg = i.pkg AND d.did = i.did
+        JOIN imps m ON m.pkg = i.pkg AND m.did = i.did AND m.ts >= i.day AND m.ts < DATE_ADD(i.day, INTERVAL 7 DAY)
+        WHERE i.day BETWEEN ? AND ? GROUP BY i.pkg, i.cc, ut", [$from, $to]);
+    return [$rows, $rev];
+}
+
+/**
+ * Wahi result, bina per-install correlated subquery / per-install imps scan ke. Teen TEMPORARY tables (PK wale), phir install rows se seedha join:
+ *  st_tmp_coh = cohort devices (pkg, did);
+ *  st_tmp_ret = (pkg, did, install day) par r1 / r7: day_user ek baar range scan, din 1 / 7 peeche shift (sirf cohort devices) -> install row se max 1 match, fan-out nahi;
+ *  st_tmp_rev = imps ka (pkg, did, din) total, sirf cohort devices + window [from, to+7). ts >= day AND ts < day+7  ==  DATE(ts) BETWEEN day AND day+6.
+ * Columns CREATE ... SELECT se: pkg/did ka type + collation source table jaisa, isliye join ki barabari purane SQL jaisi. Har statement me temp table ek hi baar (MySQL reopen limit).
+ * READ COMMITTED me (st_iso_rc): REPEATABLE READ par CREATE/INSERT ... SELECT source rows par shared next-key locks leta hai -> dashboard ke inserts rukte,
+ * ya dashboard ke locks par ye wait karke timeout -> chupchap 34 min wala fallback. RC = consistent read, koi lock nahi (purane plain SELECT jaisa). Level finally me wapas.
+ */
+function st_econ_cohorts_fast(PDO $pdo, string $from, string $to): array
+{
+    $drop = fn() => $pdo->exec('DROP TEMPORARY TABLE IF EXISTS st_tmp_coh, st_tmp_ret, st_tmp_rev');
+    $iso = st_iso_rc($pdo);
+    try {
+        $drop();
+        h_x($pdo, 'CREATE TEMPORARY TABLE st_tmp_coh (PRIMARY KEY (pkg, did)) SELECT DISTINCT pkg, did FROM day_install WHERE day BETWEEN ? AND ? AND pkg IS NOT NULL AND did IS NOT NULL', [$from, $to]);
+        $pdo->exec('CREATE TEMPORARY TABLE st_tmp_ret (day DATE NOT NULL, r1 TINYINT NOT NULL DEFAULT 0, r7 TINYINT NOT NULL DEFAULT 0, PRIMARY KEY (pkg, did, day)) SELECT pkg, did, day FROM day_user LIMIT 0');
+        foreach ([1 => 'r1', 7 => 'r7'] as $n => $col)
+            h_x($pdo, "INSERT INTO st_tmp_ret (pkg, did, day, $col) SELECT u.pkg, u.did, u.day - INTERVAL $n DAY, 1 FROM day_user u STRAIGHT_JOIN st_tmp_coh c ON c.pkg = u.pkg AND c.did = u.did
+                WHERE u.day BETWEEN DATE(?) + INTERVAL $n DAY AND DATE(?) + INTERVAL $n DAY ON DUPLICATE KEY UPDATE $col = 1", [$from, $to]);
+        // imps (pkg, ts) index use ho: cohort apps ki list (warna poori imps table scan)
+        $pk = array_column(h_q($pdo, 'SELECT DISTINCT pkg FROM st_tmp_coh'), 'pkg');
+        $in = $pk ? implode(',', array_map(fn($p) => $pdo->quote((string)$p), $pk)) : 'NULL';
+        h_x($pdo, "CREATE TEMPORARY TABLE st_tmp_rev (day DATE NOT NULL, PRIMARY KEY (pkg, did, day)) SELECT m.pkg, m.did, DATE(m.ts) day, SUM(m.rev_usd) rev
+            FROM imps m STRAIGHT_JOIN st_tmp_coh c ON c.pkg = m.pkg AND c.did = m.did
+            WHERE m.pkg IN ($in) AND m.ts >= DATE(?) AND m.ts < DATE(?) + INTERVAL 7 DAY GROUP BY m.pkg, m.did, DATE(m.ts)", [$from, $to]);
+        $UT = ST_ECON_UT;
+        $rows = h_q($pdo, "SELECT i.pkg, i.cc, $UT ut, COUNT(*) installs, COALESCE(SUM(t.r1), 0) r1, COALESCE(SUM(t.r7), 0) r7
+            FROM day_install i LEFT JOIN devices d ON d.pkg = i.pkg AND d.did = i.did LEFT JOIN st_tmp_ret t ON t.pkg = i.pkg AND t.did = i.did AND t.day = i.day
+            WHERE i.day BETWEEN ? AND ? GROUP BY i.pkg, i.cc, ut", [$from, $to]);
+        $rev = h_q($pdo, "SELECT i.pkg, i.cc, $UT ut, SUM(r.rev) rev
+            FROM day_install i LEFT JOIN devices d ON d.pkg = i.pkg AND d.did = i.did
+            JOIN st_tmp_rev r ON r.pkg = i.pkg AND r.did = i.did AND r.day BETWEEN i.day AND i.day + INTERVAL 6 DAY
+            WHERE i.day BETWEEN ? AND ? GROUP BY i.pkg, i.cc, ut", [$from, $to]);
+        return [$rows, $rev];
+    } finally {
+        try { $drop(); } finally { if ($iso !== null) st_iso_set($pdo, $iso); }
+    }
+}
+
+/** Session isolation: abhi wala level ('REPEATABLE READ' jaisa) ya null (pata nahi chala). MySQL 8 = transaction_isolation, MariaDB / 5.7 = tx_isolation. */
+function st_iso_get(PDO $pdo): ?string
+{
+    foreach (['transaction_isolation', 'tx_isolation'] as $v) {
+        try { $l = strtoupper(str_replace('-', ' ', (string)$pdo->query("SELECT @@SESSION.$v")->fetchColumn())); } catch (PDOException $e) { continue; }
+        return in_array($l, ['READ UNCOMMITTED', 'READ COMMITTED', 'REPEATABLE READ', 'SERIALIZABLE'], true) ? $l : null;
+    }
+    return null;
+}
+function st_iso_set(PDO $pdo, string $level): void
+{
+    try { $pdo->exec("SET SESSION TRANSACTION ISOLATION LEVEL $level"); } catch (PDOException $e) { error_log('mfc studio: isolation restore failed: ' . $e->getMessage()); }
+}
+
+/**
+ * Session ko READ COMMITTED par (sirf agar abhi REPEATABLE READ / SERIALIZABLE ho); return purana level (restore ke liye) ya null = kuch nahi badla.
+ * log_bin + binlog_format=STATEMENT par RC me InnoDB likhna mana (1665) -> wahan level nahi badalte (locks rahenge, par fast path chalega; MIXED / ROW theek).
+ */
+function st_iso_rc(PDO $pdo): ?string
+{
+    $cur = st_iso_get($pdo);
+    if ($cur !== 'REPEATABLE READ' && $cur !== 'SERIALIZABLE') return null;
+    try {
+        $b = $pdo->query('SELECT @@GLOBAL.log_bin, @@SESSION.binlog_format')->fetch(PDO::FETCH_NUM);
+        if ((int)$b[0] === 1 && strtoupper((string)$b[1]) === 'STATEMENT') return null;
+        $pdo->exec('SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED');
+    } catch (PDOException $e) { return null; }
+    return $cur;
 }
 
 function st_snapshot(PDO $pdo, string $metric, string $subject, string $cc, ?float $value, string $label, string $source, ?int $eid): void
@@ -1033,13 +1189,17 @@ function st_job_discover(PDO $pdo, StRun $run, string $mode): void
     $run->summary = count($map) . ' sources · notes artifact #' . $aid;
 }
 
-/** JSON schema: opportunities list (structured output). */
+/**
+ * JSON schema: opportunities list (structured output).
+ * Koi union / nullable type nahi: API 16 se zyada union-typed params par HTTP 400 deta hai (17 factors x ['number','null'] = fail).
+ * Isliye rating sirf number, -1 = "no evidence" (st_clean_factors -1 ko null/UNKNOWN banata hai). Server wale factors (ST_SERVER_FACTORS) schema me nahi.
+ */
 function st_opp_schema(): array
 {
-    $factor = ['type' => 'object', 'properties' => ['rating' => ['type' => ['number', 'null']], 'basis' => ['type' => 'string', 'enum' => ST_LABELS],
+    $factor = ['type' => 'object', 'properties' => ['rating' => ['type' => 'number', 'description' => '0-10, or -1 if there is no evidence'], 'basis' => ['type' => 'string', 'enum' => ST_LABELS],
         'evidence' => ['type' => 'array', 'items' => ['type' => 'string']], 'note' => ['type' => 'string']], 'required' => ['rating', 'basis', 'evidence', 'note'], 'additionalProperties' => false];
     $fprops = [];
-    foreach (array_keys(ST_FACTORS) as $k) $fprops[$k] = $factor;
+    foreach (st_ai_factors() as $k) $fprops[$k] = $factor;
     $comp = ['type' => 'object', 'properties' => ['name' => ['type' => 'string'], 'package' => ['type' => 'string'], 'evidence' => ['type' => 'array', 'items' => ['type' => 'string']]],
         'required' => ['name', 'package', 'evidence'], 'additionalProperties' => false];
     $card = ['type' => 'object', 'properties' => array_fill_keys(['what', 'why', 'evidence', 'benefit', 'cost', 'risk', 'alternatives'], ['type' => 'string']),
@@ -1050,7 +1210,7 @@ function st_opp_schema(): array
         'monetization' => ['type' => 'array', 'items' => ['type' => 'string']], 'risks' => ['type' => 'array', 'items' => ['type' => 'string']],
         'why_build' => ['type' => 'string'], 'why_avoid' => ['type' => 'string'], 'complexity' => ['type' => 'string', 'enum' => ['Low', 'Medium', 'High']],
         'recommendation' => ['type' => 'string', 'enum' => ST_RECS], 'decision_card' => $card,
-        'factors' => ['type' => 'object', 'properties' => $fprops, 'required' => array_keys(ST_FACTORS), 'additionalProperties' => false]],
+        'factors' => ['type' => 'object', 'properties' => $fprops, 'required' => array_keys($fprops), 'additionalProperties' => false]],
         'required' => ['title', 'concept', 'category', 'countries', 'competitors', 'monetization', 'risks', 'why_build', 'why_avoid', 'complexity', 'recommendation', 'decision_card', 'factors'],
         'additionalProperties' => false];
     return ['type' => 'object', 'properties' => ['opportunities' => ['type' => 'array', 'items' => $opp]], 'required' => ['opportunities'], 'additionalProperties' => false];
@@ -1117,9 +1277,8 @@ function st_portfolio_context(PDO $pdo): array
 /** AI prompts ke liye: owner ke apps ka data kaise use karna hai (rank + evaluate/deep me same). Estimated spend wali P lines ESTIMATE hain, VERIFIED nahi. */
 const ST_PORT_GUIDE = "Owner's own apps (P* ids, the owner's dashboard data, last 30 days): prefer countries where the owner's apps already show high eCPM and profit. "
     . "Where the owner's paid ROAS is below 100%, treat paid acquisition in that country as unproven: recommend organic only there and say so in why_avoid and risks. "
-    . "Give higher ratings (monetization, rev_per_user, own_fit) to categories where the owner's apps are profitable, lower where they lose money, and cite the P ids as evidence: "
-    . "basis VERIFIED, except P lines marked '(spend estimated from paid installs)', which are estimates: cite those with basis ESTIMATE. "
-    . "own_fit = how well the idea fits the owner's earning apps and countries.";
+    . "Give higher ratings (monetization, rev_per_user) to categories where the owner's apps are profitable, lower where they lose money, and cite the P ids as evidence: "
+    . "basis VERIFIED, except P lines marked '(spend estimated from paid installs)', which are estimates: cite those with basis ESTIMATE.";
 
 function st_job_rank(PDO $pdo, StRun $run): void
 {
@@ -1167,7 +1326,7 @@ function st_job_rank(PDO $pdo, StRun $run): void
     $own = st_user_ideas_context($pdo);
     $run->stage('AI ranking (structured)');
     $r = st_ai($pdo, $run, ['system' => ST_RESEARCH_SYS . "\nYou now turn research notes into 10-20 app opportunities. Each factor: rating 0-10 where 10 means MORE of that thing (more demand, more competition, more policy risk, more complexity), "
-        . "or null if there is no evidence. basis: VERIFIED only for E* or P* evidence (owner's own analytics), ESTIMATE only for licensed third-party estimates or P* lines marked as estimated, INFERENCE for anything from web notes or your judgement, UNKNOWN when rating is null. "
+        . "or -1 if there is no evidence. basis: VERIFIED only for E* or P* evidence (owner's own analytics), ESTIMATE only for licensed third-party estimates or P* lines marked as estimated, INFERENCE for anything from web notes or your judgement, UNKNOWN when rating is -1. "
         . "evidence: list of ids exactly as given (S1, E2, P3...); never invent ids. Use recommendation REJECT for ideas with high policy risk (deceptive pranks, impersonation, fake functionality, sensitive permissions without core need). "
         . "Critically assess the owner's own ideas too.\n" . ST_PORT_GUIDE, 'effort' => 'high', 'max_tokens' => 32000, 'schema' => st_opp_schema(),
         'user' => "Countries enabled: " . implode(', ', $ccs) . "\nCategories: " . implode(', ', $cats) . "\n\n=== Web research notes (untrusted) ===\n$allNotes\n=== Ads Transparency ===\n" . ($adsTxt ?: "(source not configured)\n")
@@ -1239,19 +1398,22 @@ function st_cautious(string $a, string $b): string
 
 /**
  * Factors validate: evidence ids sirf diye gaye map se (baaki drop). VERIFIED tabhi jab koi evidence sach me VERIFIED ho; warna INFERENCE.
- * rating hai par basis UNKNOWN -> rating null (bina basis ke number nahi).
+ * rating hai par basis UNKNOWN -> rating null (bina basis ke number nahi). rating -1 (schema ka "no evidence") / negative / non-number -> null, 0 nahi.
+ * Server wale factors (own_fit) AI se kabhi nahi: yahan null/UNKNOWN, baad me st_apply_portfolio set karta hai. Output me hamesha saare ST_FACTORS.
  */
 function st_clean_factors(PDO $pdo, array $raw, array $evMap): array
 {
     $labels = [];
     $out = [];
+    $raw = array_diff_key($raw, array_flip(ST_SERVER_FACTORS));
     foreach (array_keys(ST_FACTORS) as $k) {
         $f = is_array($raw[$k] ?? null) ? $raw[$k] : ['rating' => null, 'basis' => 'UNKNOWN', 'evidence' => [], 'note' => ''];
         $ev = [];
         foreach ((array)($f['evidence'] ?? []) as $ref) if (isset($evMap[(string)$ref])) $ev[] = (int)$evMap[(string)$ref];
         $ev = array_values(array_unique($ev));
         $basis = in_array($f['basis'] ?? '', ST_LABELS, true) ? $f['basis'] : 'UNKNOWN';
-        $rating = is_numeric($f['rating'] ?? null) ? max(0.0, min(10.0, (float)$f['rating'])) : null;
+        $rv = $f['rating'] ?? null;
+        $rating = is_numeric($rv) && (float)$rv >= 0 ? min(10.0, (float)$rv) : null;   // pehle -1 -> null, phir clamp (warna -1 = 0 ban jaata)
         if ($basis === 'UNKNOWN') $rating = null;
         if ($rating === null) $basis = 'UNKNOWN';
         if (in_array($basis, ['VERIFIED', 'ESTIMATE'], true)) {
@@ -1341,7 +1503,7 @@ function st_apply_internal(PDO $pdo, string $category, array $ccs, array $factor
  * (installs >= ST_PORT_MIN_INSTALLS), installs kam hon to kamai per 1000 impressions / average x5 (imps >= ST_PORT_MIN_IMPS). Bina paid data ke loss me max 4. Kam sample = category ka data nahi.
  * Countries: idea ke target countries focus list me +1 har ek, avoid_paid list me -1 har ek (dono max 2). Category data na ho to 5 se shuru.
  * basis: VERIFIED jab category ya koi exact-spend country use hua; sirf estimated-spend countries = ESTIMATE (st_clean_factors wala hi niyam).
- * Na category ka data na matching country: AI wala rating jaisa tha waisa (kabhi invent nahi), fit = null.
+ * Na category ka data na matching country: factor jaisa tha waisa (AI se own_fit nahi maangte, to null/UNKNOWN; kabhi invent nahi), fit = null.
  */
 function st_apply_portfolio(PDO $pdo, string $category, array $ccs, array $factors): array
 {
@@ -1487,7 +1649,7 @@ function st_reassess(PDO $pdo, StRun $run, int $oppId, string $why): void
     [$notes, $map] = st_web_notes($pdo, $run, (string)$o['title'], "$why\nIdea: {$o['title']} — {$o['concept']}\nFind the most relevant real competitors, their user complaints, demand signals and policy risks.", $ccs, 5);
     [$econ, $emap] = st_econ_context($pdo);
     [$port, $pmap] = st_portfolio_context($pdo);
-    $r = st_ai($pdo, $run, ['system' => ST_RESEARCH_SYS . "\nReturn exactly one opportunity (the idea below, same title). Factor rules: rating 0-10 (10 = more of that thing), null if no evidence; basis VERIFIED only for E* or P* ids (ESTIMATE for P* lines marked as estimated); INFERENCE for web/judgement; never invent evidence ids.\n" . ST_PORT_GUIDE,
+    $r = st_ai($pdo, $run, ['system' => ST_RESEARCH_SYS . "\nReturn exactly one opportunity (the idea below, same title). Factor rules: rating 0-10 (10 = more of that thing), -1 if no evidence (basis UNKNOWN); basis VERIFIED only for E* or P* ids (ESTIMATE for P* lines marked as estimated); INFERENCE for web/judgement; never invent evidence ids.\n" . ST_PORT_GUIDE,
         'effort' => 'high', 'max_tokens' => 16000, 'schema' => st_opp_schema(),
         'user' => "Idea title (keep exactly): {$o['title']}\nCategory: {$o['category']}\nConcept: {$o['concept']}\n\n=== Web notes (untrusted) ===\n$notes\n=== Owner's analytics ===\n$econ"
             . "\n=== Owner's own apps, last " . ST_PORT_DAYS . " days (verified) ===\n$port"]);
@@ -1633,7 +1795,7 @@ function st_comp_schema(): array
     $feat = ['type' => 'object', 'properties' => [
         'name' => $s(), 'priority' => ['type' => 'string', 'enum' => ['MUST HAVE', 'SHOULD HAVE', 'OPTIONAL', 'REJECT']], 'what' => $s(), 'problem' => $s(), 'why_add' => $s(), 'why_not' => $s(),
         'competitor_evidence' => $s(), 'user_benefit' => $s(), 'business_benefit' => $s(), 'difficulty' => ['type' => 'string', 'enum' => ['Low', 'Medium', 'High']], 'implementation' => $s(),
-        'android_apis' => $s(), 'permissions' => $arr($s()), 'privacy' => $s(), 'battery_performance' => $s(), 'monetization_impact' => $s(), 'effort_days' => ['type' => ['number', 'null']],
+        'android_apis' => $s(), 'permissions' => $arr($s()), 'privacy' => $s(), 'battery_performance' => $s(), 'monetization_impact' => $s(), 'effort_days' => ['type' => 'number', 'description' => 'developer days, or -1 if unknown'],   // union type nahi (-1 -> null st_clean_spec me)
         'risks_alternatives' => $s(), 'feasible_on_android' => ['type' => 'boolean'], 'evidence' => $arr($s())],
         'required' => ['name', 'priority', 'what', 'problem', 'why_add', 'why_not', 'competitor_evidence', 'user_benefit', 'business_benefit', 'difficulty', 'implementation', 'android_apis',
             'permissions', 'privacy', 'battery_performance', 'monetization_impact', 'effort_days', 'risks_alternatives', 'feasible_on_android', 'evidence'], 'additionalProperties' => false];
@@ -1653,7 +1815,7 @@ const ST_PRODUCT_SYS = "You are a senior Android product manager + architect. An
     . "Classify complaints as USER-REPORTED ISSUE (seen in reviews/sources) or SUSPECTED ISSUE (inferred); never call one a confirmed or reproduced bug (nothing was reproduced). "
     . "Features: only genuinely useful ones; verify each is possible with public Android APIs on current Android versions (set feasible_on_android=false and priority REJECT if not). "
     . "Respect Google Play policies (no deceptive features, minimal permissions, Play Billing for digital goods). Every evidence list uses ids exactly as given (S1...); never invent ids. "
-    . "Ads: never interstitial on every click, no deceptive placement, no forced rewarded ads.";
+    . "Ads: never interstitial on every click, no deceptive placement, no forced rewarded ads. effort_days: -1 if you cannot estimate it.";
 
 function st_job_competitors(PDO $pdo, StRun $run, int $projectId): void
 {
@@ -1700,6 +1862,8 @@ function st_clean_spec(array $s, array $map): array
     foreach ($s['features'] ?? [] as $i => $f) {
         $s['features'][$i]['evidence'] = $ev($f['evidence'] ?? []);
         if (empty($f['feasible_on_android'])) $s['features'][$i]['priority'] = 'REJECT';
+        $d = $f['effort_days'] ?? null;
+        $s['features'][$i]['effort_days'] = is_numeric($d) && (float)$d >= 0 ? $d + 0 : null;   // -1 = unknown -> null (app "n/a" dikhata hai)
     }
     $s['features'] = array_values((array)($s['features'] ?? []));
     $s['evidence_map'] = $map;
