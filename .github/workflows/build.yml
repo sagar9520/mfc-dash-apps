@@ -39,10 +39,11 @@ jobs:
           name: MFC-apk
           if-no-files-found: error
           path: app/build/outputs/apk/release/app-release.apk
-      # Isi commit ki server PHP files (api/ + lib/): zip ko Plesk me mfc_dash/ folder me upload karke Extract karo (config files isme nahi hain)
+      # Isi commit ki server files (api/ + lib/ PHP, setup/ read-only Ads Script): zip ko Plesk me mfc_dash/ folder me upload karke Extract karo (config files isme nahi hain)
       - uses: actions/upload-artifact@v4
         with:
           name: MFC-server-files
           path: |
             server/api/*.php
             server/lib/*.php
+            server/setup/*.js
