@@ -294,6 +294,7 @@ function gv_overview(PDO $pdo, array $f): array
 {
     $acc = [];
     $byCur = [];
+    $apb = [];   // app_budgets: (pkg, currency) ke hisaab se, currencies kabhi nahi judti
     foreach (gv_accts($pdo, $f) as $cid => $a) {
         $snap = ga_snapshot($pdo, $a);
         $p = gv_acct_pace($snap);
@@ -303,15 +304,24 @@ function gv_overview(PDO $pdo, array $f): array
         if ($f['status'] !== '' && !gv_status_match($f['status'], (string)$a['health'], (int)$c['c'], (int)$c['w'])) continue;
         $acc[] = gv_acct_out($a) + ['data_age_min' => $snap['age'], 'fresh' => $snap['fresh'], 'sources' => $snap['sources'], 'tz_used' => $snap['tz'],
             'critical' => (int)$c['c'], 'warning' => (int)$c['w'], 'info' => (int)$c['i']] + $p + gv_acct_budget($pdo, (string)$cid, (float)$p['spend_today']);
-        if ($a['currency'] !== '') { $byCur[$a['currency']]['spend_today'] = ($byCur[$a['currency']]['spend_today'] ?? 0) + $p['spend_today']; $byCur[$a['currency']]['accounts'] = ($byCur[$a['currency']]['accounts'] ?? 0) + 1; }
+        if ($a['currency'] === '') continue;
+        $byCur[$a['currency']]['spend_today'] = ($byCur[$a['currency']]['spend_today'] ?? 0) + $p['spend_today']; $byCur[$a['currency']]['accounts'] = ($byCur[$a['currency']]['accounts'] ?? 0) + 1;
+        foreach (ga_app_budgets_today($snap) as $pkg => $v) {
+            $k = $pkg . '|' . $a['currency'];
+            $apb[$k] ??= ['pkg' => (string)$pkg, 'currency' => $a['currency'], 'budget_today' => 0.0, 'spend_today' => 0.0, 'campaigns' => 0];
+            $apb[$k]['budget_today'] += $v['budget']; $apb[$k]['spend_today'] += $v['spend']; $apb[$k]['campaigns'] += $v['campaigns'];
+        }
     }
     $cur = [];
     foreach ($byCur as $k => $v) $cur[] = ['currency' => $k, 'spend_today' => round($v['spend_today'], 2), 'accounts' => $v['accounts']];
+    usort($apb, fn($x, $y) => [$x['pkg'], $x['currency']] <=> [$y['pkg'], $y['currency']]);
+    foreach ($apb as &$x) { $x['budget_today'] = round($x['budget_today'], 2); $x['spend_today'] = round($x['spend_today'], 2); }
+    unset($x);
     $reg = array_map('strval', array_keys(ga_accounts($pdo)));
     $disc = [];
     foreach (h_q($pdo, 'SELECT customer_id, name, currency, tz, updated_at FROM gads_account ORDER BY updated_at DESC') as $g) if (!in_array((string)$g['customer_id'], $reg, true)) $disc[] = $g + ['cid_fmt' => ga_fmt_cid((string)$g['customer_id'])];
     $last = $pdo->query("SELECT * FROM ga_runs WHERE type = 'scan' ORDER BY id DESC LIMIT 1")->fetch() ?: null;
-    return ['accounts' => $acc, 'currency_totals' => $cur, 'discovered' => $disc, 'last_run' => $last ? gv_run_out($last) : null, 'next_scan_at' => ga_next_scan(),
+    return ['accounts' => $acc, 'currency_totals' => $cur, 'app_budgets' => $apb, 'discovered' => $disc, 'last_run' => $last ? gv_run_out($last) : null, 'next_scan_at' => ga_next_scan(),
         'counts' => ['accounts' => count($acc), 'critical' => count(array_filter($acc, fn($x) => $x['critical'] > 0)), 'warning' => count(array_filter($acc, fn($x) => $x['warning'] > 0 && $x['critical'] === 0)),
             'stale' => count(array_filter($acc, fn($x) => !$x['fresh']))],
         'setup' => gv_setup()];

@@ -5,6 +5,7 @@ import com.myfuturecode.mfcdash.data.AlertCard
 import com.myfuturecode.mfcdash.data.ApiException
 import com.myfuturecode.mfcdash.data.DashData
 import com.myfuturecode.mfcdash.data.GAccount
+import com.myfuturecode.mfcdash.data.GAppBudget
 import com.myfuturecode.mfcdash.data.IssueApp
 import com.myfuturecode.mfcdash.data.TopAccount
 import com.myfuturecode.mfcdash.data.TopLiveApp
@@ -16,6 +17,7 @@ import com.myfuturecode.mfcdash.data.topAccountName
 import com.myfuturecode.mfcdash.data.topAccounts
 import com.myfuturecode.mfcdash.data.topLiveApps
 import com.myfuturecode.mfcdash.data.topSpendApps
+import com.myfuturecode.mfcdash.data.withBudgets
 import com.myfuturecode.mfcdash.data.withLive30
 import com.myfuturecode.mfcdash.ui.kit.KKind
 import com.myfuturecode.mfcdash.util.arr
@@ -63,9 +65,9 @@ internal class PaisaSnap(
 
 /**
  * Ads + Live widget: baayein "By account" = aaj ke top 3 Google Ads accounts (budget %), "By app" = aaj ka kul Google Ads
- * kharcha (total, ₹) + sabse zyada kharch wale 3 apps (spend: kharcha + ROAS); daayein top 3 live apps (30 min + ROAS).
- * set = false: Google Ads monitor server par set nahi. all = picker ke accounts.
- * by nahi (purana snap) = "account"; spend null = apps wala data nahi (purana / accounts wala snap).
+ * kharcha (total, ₹) + sabse zyada kharch wale 3 apps (spend: kharcha + ROAS + aaj ka budget ₹ / %); daayein top 3 live apps
+ * (30 min + ROAS). set = false: Google Ads monitor server par set nahi. all = picker ke accounts.
+ * by nahi (purana snap) = "account"; spend null = apps wala data nahi (purana / accounts wala snap); bud / bpct nahi = budget pata nahi.
  */
 internal class AdsSnap(
     val at: Long, val set: Boolean, val accs: List<TopAccount>, val apps: List<TopLiveApp>, val all: List<Pair<String, String>>,
@@ -85,7 +87,12 @@ internal class AdsSnap(
         val sp = spend
         if (sp != null) {
             val q = JSONArray()
-            sp.forEach { x -> q.put(JSONObject().put("pkg", x.pkg).put("name", x.name).putD("inr", x.spendInr).putD("roas", x.roas)) }
+            sp.forEach { x ->
+                q.put(
+                    JSONObject().put("pkg", x.pkg).put("name", x.name).putD("inr", x.spendInr).putD("roas", x.roas)
+                        .putD("bud", x.budgetInr).putD("bpct", x.budgetPct),
+                )
+            }
             j.put("spend", q)
         }
         return j
@@ -99,7 +106,9 @@ internal class AdsSnap(
             }
             val apps = j.arr("apps").mapObj { x -> TopLiveApp(x.s("pkg"), x.s("name"), x.d("l6"), x.fin("l30"), x.fin("roas")) }
             val spend = j.optJSONArray("spend")?.let { a ->
-                a.mapObj { x -> TopSpendApp(x.s("pkg"), x.s("name"), x.d("inr"), x.fin("roas")) }
+                a.mapObj { x ->
+                    TopSpendApp(x.s("pkg"), x.s("name"), x.d("inr"), x.fin("roas"), x.fin("bud")?.takeIf { it > 0 }, x.fin("bpct")?.takeIf { it >= 0 })
+                }
             }
             return AdsSnap(
                 j.optLong("at"), !j.has("set") || j.b("set"), accs, apps, unpairs(j.optJSONArray("all")),
@@ -173,11 +182,16 @@ private fun unpairs(a: JSONArray?): List<Pair<String, String>> =
     if (a == null) emptyList() else (0 until a.length()).mapNotNull { i -> a.optJSONArray(i)?.let { it.optString(0) to it.optString(1) } }
 
 /**
- * Ek sync ka chhota cache: data.php (sab apps, aaj) Paisa aur Ads + Live dono ko chahiye, ek hi baar laao.
- * Ek ke baad ek chalta hai (thread-safe nahi).
+ * Ek sync ka chhota cache: data.php (sab apps, aaj) Paisa aur Ads + Live dono ko chahiye, ek hi baar laao; Google Ads
+ * overview bhi (By account + By app dono widget ho to ek call). Ek widget ke baad doosra (thread-safe nahi; ek widget ke
+ * andar data() aur gads() saath chal sakte hain, dono alag cache).
  */
 internal class WFetch(private val app: App) {
     private val dash = HashMap<String, DashData>()
+    private var gads: JSONObject? = null
+
+    /** gads_health.php?view=overview; sirf sahi jawab yaad (galti har baar phir se). */
+    suspend fun gads(): JSONObject = gads ?: app.api.gGet("overview").also { gads = it }
 
     suspend fun data(range: String, from: String? = null, to: String? = null): DashData {
         val k = "$range|$from|$to"
@@ -260,14 +274,27 @@ internal object WidgetData {
     private suspend fun ads(app: App, o: WOpts, f: WFetch): AdsSnap {
         if (!o.byApp) return adsByAccount(app, o, f)
         // By app: baayan aadha bhi data.php (aaj) se: kul Google Ads kharcha (Paisa widget wala) + top 3 kharch wale apps.
-        // Google Ads monitor ki zaroorat nahi; net / login ki dikkat = exception (purana snap rahe)
-        val d = f.data("today")
+        // Google Ads monitor ki zaroorat nahi; net / login ki dikkat = exception (purana snap rahe).
+        // Apps ka budget overview se, saath me; woh fail (404 = monitor nahi, 500, parse) = bas budget pata nahi
+        val (d, bud) = coroutineScope {
+            val b = async { appBudgets(f) }
+            f.data("today") to b.await()
+        }
         val top = topLiveApps(d)
         val l30 = live30(app, top)
         return AdsSnap(
             System.currentTimeMillis(), true, emptyList(), withLive30(top, l30), emptyList(),
-            by = "app", total = d.kpi.gadsCostInr.takeIf { it.isFinite() }, spend = topSpendApps(d),
+            by = "app", total = d.kpi.gadsCostInr.takeIf { it.isFinite() }, spend = withBudgets(topSpendApps(d), bud, d.r),
         )
+    }
+
+    /** Overview ka app_budgets; koi bhi galti = khaali (widget na ruke), cancel aage jaye. */
+    private suspend fun appBudgets(f: WFetch): List<GAppBudget> = try {
+        GAppBudget.list(f.gads())
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        emptyList()
     }
 
     /** 30 min ke active: sirf in apps ka app.php, saath me; koi fail = "—". */
@@ -292,7 +319,7 @@ internal object WidgetData {
         var accs: List<GAccount> = emptyList()
         var old: AdsSnap? = null
         try {
-            accs = monitoredAccounts(app.api.gGet("overview").arr("accounts").mapObj(GAccount::of))
+            accs = monitoredAccounts(f.gads().arr("accounts").mapObj(GAccount::of))
         } catch (e: CancellationException) {
             throw e
         } catch (e: ApiException) {

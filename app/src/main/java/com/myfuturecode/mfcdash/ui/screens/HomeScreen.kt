@@ -64,6 +64,7 @@ import com.myfuturecode.mfcdash.data.AlertsData
 import com.myfuturecode.mfcdash.data.AlertsTop
 import com.myfuturecode.mfcdash.data.Api
 import com.myfuturecode.mfcdash.data.DashData
+import com.myfuturecode.mfcdash.data.GAppBudget
 import com.myfuturecode.mfcdash.data.HConsolesData
 import com.myfuturecode.mfcdash.data.HOverview
 import com.myfuturecode.mfcdash.data.IssueApp
@@ -73,11 +74,13 @@ import com.myfuturecode.mfcdash.data.TopLiveApp
 import com.myfuturecode.mfcdash.data.TopSpendApp
 import com.myfuturecode.mfcdash.data.TopZone
 import com.myfuturecode.mfcdash.data.alertsTop
+import com.myfuturecode.mfcdash.data.budgetZone
 import com.myfuturecode.mfcdash.data.healthTop
 import com.myfuturecode.mfcdash.data.issueReason
 import com.myfuturecode.mfcdash.data.roasZone
 import com.myfuturecode.mfcdash.data.topLiveApps
 import com.myfuturecode.mfcdash.data.topSpendApps
+import com.myfuturecode.mfcdash.data.withBudgets
 import com.myfuturecode.mfcdash.ui.DashVm
 import com.myfuturecode.mfcdash.ui.GState
 import com.myfuturecode.mfcdash.ui.GadsVm
@@ -138,6 +141,7 @@ import com.myfuturecode.mfcdash.util.d
 import com.myfuturecode.mfcdash.util.dn
 import com.myfuturecode.mfcdash.util.fmtDay
 import com.myfuturecode.mfcdash.util.inr
+import com.myfuturecode.mfcdash.util.inrK
 import com.myfuturecode.mfcdash.util.mapObj
 import com.myfuturecode.mfcdash.util.num
 import com.myfuturecode.mfcdash.util.obj
@@ -217,7 +221,7 @@ fun HomeScreen(vm: DashVm, st: UiState, nav: NavHostController, hvm: HealthVm, g
                 KTwoPane(
                     left = {
                         HomeHero(st, money, vm, open, tab)
-                        TopCard(st, open)
+                        TopCard(st, gOv, open)
                         TopApps(st, money, open, tab)
                         MoreLinks(open)
                     },
@@ -229,7 +233,7 @@ fun HomeScreen(vm: DashVm, st: UiState, nav: NavHostController, hvm: HealthVm, g
                     },
                 )
             } else {
-                TopCard(st, open)
+                TopCard(st, gOv, open)
                 KSection("Today's status".t(), trailing = { HaalPill(todo, known) })
                 HealthModule(h, hk, open)
                 AlertsModule(st, tab)
@@ -645,19 +649,21 @@ private const val TOP_LEFT = .47f
 
 /**
  * Hero ke neeche ek card, do hisse: baayein aaj ka kul Google Ads kharcha + sabse zyada kharch wale 3 apps (kharcha | naam |
- * ROAS, ROAS tak bhari patti), daayein abhi ke top 3 live apps (6 min | naam | 30 min + ROAS line).
+ * ROAS, neeche aaj ke budget ki patti), daayein abhi ke top 3 live apps (6 min | naam | 30 min + ROAS line).
  * Hisaab data/TopCards.kt se (Ads + Live widget ka "By app" bhi wahi). Ads kharcha hamesha data.php aaj se (Paisa par
- * doosra samay chuna ho tab bhi, [rememberTodayData]).
+ * doosra samay chuna ho tab bhi, [rememberTodayData]). Budget Google Ads overview (gOv, Home ka module wahi laata hai) ke
+ * app_budgets se; overview nahi / monitor set nahi = budget pata nahi ("—").
  */
 @Composable
-private fun TopCard(st: UiState, open: (String) -> Unit) {
+private fun TopCard(st: UiState, gOv: JSONObject?, open: (String) -> Unit) {
     val c = Mfc.c
     val dd = st.data
     val live = remember(dd) { dd?.let { topLiveApps(it) }.orEmpty() }
     val l30 = rememberLive30(live.map { it.pkg })
     val today = isTodayView(dd)
     val td = rememberTodayData(dd)
-    val spend = remember(td) { td?.let { topSpendApps(it) } }
+    val bud = remember(gOv) { GAppBudget.list(gOv) }
+    val spend = remember(td, bud) { td?.let { withBudgets(topSpendApps(it), bud, it.r) } }
     // aaj ka data na aaya: aaj wale view me DashVm ki galti, warna alag wale load ki
     val failed = if (today) !st.loading && st.error != null else HomeToday.failed
     val line = c.line
@@ -798,8 +804,8 @@ private fun TopNote(text: String, lines: Int = 1) {
 }
 
 /**
- * App: aaj ka Google Ads kharcha | naam (beech) | ROAS % (zone ke rang me); neeche ROAS tak bhari patti (100% par poori,
- * pill nahi). Tap = app detail.
+ * App: aaj ka Google Ads kharcha | naam (beech) | ROAS % (zone ke rang me); neeche aaj ke budget ki patti ([BudBar]).
+ * Tap = app detail.
  */
 @Composable
 private fun SpendRow(a: TopSpendApp, onClick: () -> Unit) {
@@ -808,7 +814,25 @@ private fun SpendRow(a: TopSpendApp, onClick: () -> Unit) {
     val z = roasZone(roas)
     TopRow(onClick) {
         SpendLine(inr(a.spendInr), a.name, roasPct(roas), zoneText(z, c))
-        TBar(roas?.let { it.coerceIn(0.0, 1.0).toFloat() }, null, z, zones = false)
+        BudBar(a.budgetPct?.takeIf { a.budgetInr != null && it.isFinite() }, a.budgetInr)
+    }
+}
+
+/**
+ * Aaj ke budget ki patti (widget jaisi): kharch tak budget zone ka rang (100% se upar bhi bas poori) + sire par % pill, ant me
+ * budget ("₹70K", 6dp door, patti se bahar). pct null = budget pata nahi: sirf track + "—", pill nahi.
+ */
+@Composable
+private fun BudBar(pct: Double?, budget: Double?) {
+    val c = Mfc.c
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Box(Modifier.weight(1f)) {
+            TBar(pct?.let { (it / 100.0).coerceIn(0.0, 1.0).toFloat() }, pct?.let { num(it, 0) + "%" }, budgetZone(pct), zones = false)
+        }
+        Text(
+            if (pct == null || budget == null) "—" else inrK(budget), color = c.ink3,
+            style = hs(11.sp, FontWeight.Bold, 14.sp), maxLines = 1, softWrap = false,
+        )
     }
 }
 

@@ -10,7 +10,9 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import okhttp3.Cookie
@@ -149,28 +151,40 @@ class Api(private val prefs: Prefs, private val cache: JsonCache? = null) {
         }
     }
 
+    /** Ek waqt par ek hi login: saath aayi do 401 dono login karein to ek ka jar.clear() doosre ki nayi cookie mita deta. */
+    private val loginLock = Mutex()
+    /** Har sahi login par +1 (sirf loginLock me). 401 wali request ke jaane ke baad login ho chuka = dobara login nahi, bas retry. */
+    @Volatile private var loginGen = 0L
+
     /** Login: 302 (Location: ./) = sahi; 200 = form wapas aaya = galat password. */
-    suspend fun login(user: String, pass: String): Unit = withContext(Dispatchers.IO) {
+    suspend fun login(user: String, pass: String): Unit = loginLock.withLock { doLogin(user, pass) }
+
+    private suspend fun doLogin(user: String, pass: String): Unit = withContext(Dispatchers.IO) {
         jar.clear()
         val body = FormBody.Builder()
             .add("username", user).add("password", pass).add("remember", "1").build()
         val req = Request.Builder().url(url("")).post(body).header("Accept", "text/html").build()
         val (code, html) = send(req, idempotent = true)   // login dobara bhejna safe hai
-        if (code in 300..399) return@withContext
+        if (code in 300..399) { loginGen++; return@withContext }
         if (code == 200) {
             if (html.contains("name=\"password\"")) throw ApiException("Username ya password galat hai", unauthorized = true)
+            loginGen++
             return@withContext
         }
         throw ApiException(if (code in 502..504) httpError(code) else "Server ne $code diya", network = code in 502..504)
     }
 
+    /** 401 ke baad (gen = request bhejte waqt ka loginGen): beech me kisi aur ne login kar liya to wahi cookie, warna ek hi login. */
+    private suspend fun relogin(gen: Long): Unit = loginLock.withLock { if (loginGen == gen) doLogin(prefs.username, prefs.password) }
+
     // PageLoad.track: page load (upar ki neeli line) ke dauraan shuru hui request ginti me
     private suspend fun getJson(path: String, retry: Boolean = true): JSONObject = PageLoad.track { withContext(Dispatchers.IO) {
         val gen = cache?.generation ?: 0
+        val lg = loginGen
         val (code, text) = fetch(url(path))
         if (code == 401 || (code in 300..399)) {
             if (retry && prefs.hasLogin) {
-                login(prefs.username, prefs.password)
+                relogin(lg)
                 return@withContext getJson(path, retry = false)
             }
             throw ApiException("Login expire ho gaya", unauthorized = true)
@@ -262,9 +276,10 @@ class Api(private val prefs: Prefs, private val cache: JsonCache? = null) {
         val fb = FormBody.Builder()
         fields.forEach { (k, v) -> fb.add(k, v) }
         val req = Request.Builder().url(url(path)).post(fb.build()).header("Accept", "application/json").build()
+        val lg = loginGen
         val (code, text) = send(req, idempotent = false, slow = slow)
         if (code == 401 || code in 300..399) {
-            if (retry && prefs.hasLogin) { login(prefs.username, prefs.password); return@withContext postForm(path, fields, retry = false, slow = slow) }
+            if (retry && prefs.hasLogin) { relogin(lg); return@withContext postForm(path, fields, retry = false, slow = slow) }
             throw ApiException("Login expire ho gaya", unauthorized = true)
         }
         val j = runCatching { JSONObject(text) }.getOrNull() ?: throw ApiException(httpError(code))

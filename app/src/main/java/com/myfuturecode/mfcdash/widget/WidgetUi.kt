@@ -427,9 +427,9 @@ private fun ColumnScope.WTopAds(tv: WTopV, plan: WTopPlan, p: WPal, scale: Float
 }
 
 /**
- * Ads kharcha "By app": kul kharcha (+ "aaj · ROAS"), phir top 3 kharch wale apps (kharcha | naam | ROAS %) + ROAS tak
- * bhari patti. pair = do column: lines Live wale aadhe jitni (liveRows, dono barabar). Line tap (line ka poora hissa) =
- * us app ki screen; baaki aadha = Google Ads (bahar wala Column).
+ * Ads kharcha "By app": kul kharcha (+ "aaj · ROAS"), phir top 3 kharch wale apps (kharcha | naam | ROAS %) + aaj ke budget
+ * ki patti (% pill + budget). pair = do column: lines Live wale aadhe jitni (liveRows, dono barabar). Line tap (line ka poora
+ * hissa) = us app ki screen; baaki aadha = Google Ads (bahar wala Column).
  */
 @Composable
 private fun ColumnScope.WTopSpend(tv: WTopV, room: Float, ih: Float, pair: Boolean, liveRows: Int, more: Boolean, p: WPal, scale: Float) {
@@ -472,18 +472,49 @@ private fun ColumnScope.WTopSpend(tv: WTopV, room: Float, ih: Float, pair: Boole
                 Text(roas, style = wts(p.zoneText(a.zone), plan.rowSp, FontWeight.Bold), maxLines = 1)
             }
         }
-        Spacer(GlanceModifier.height(3.dp))
-        WSpendBar(a, room, p)
+        if (plan.thin) {
+            Spacer(GlanceModifier.height(3.dp))
+            WSpendThin(a, room, p)
+        } else {
+            WSpendBud(a, plan, p, scale)
+        }
     }
 }
 
-/** ROAS tak bhari patli patti (4dp, zone ka rang) track ke upar; ROAS pata nahi / "—" line = sirf track. */
+/** Tang jagah (plan.thin): sirf 4dp patti, kharch tak budget zone ka rang; budget pata nahi / "—" line = sirf track. */
 @Composable
-private fun WSpendBar(a: WSpendV?, width: Float, p: WPal) {
+private fun WSpendThin(a: WSpendV?, width: Float, p: WPal) {
     Box(modifier = GlanceModifier.fillMaxWidth().height(W_SPEND_BAR.dp).wRound(p.track, W_SPEND_BAR / 2f)) {
         val f = a?.fill
         if (a != null && f != null && f > 0f) {
-            Spacer(GlanceModifier.width((width * f).dp).height(W_SPEND_BAR.dp).wRound(p.zone(a.zone), W_SPEND_BAR / 2f))
+            Spacer(GlanceModifier.width((width * f).dp).height(W_SPEND_BAR.dp).wRound(p.zone(a.bzone), W_SPEND_BAR / 2f))
+        }
+    }
+}
+
+/**
+ * Budget ki patti (4dp): kharch tak budget zone ka rang, sire par % pill, ant me budget ("₹70K"). Sab ek Row me (pill tukdon
+ * ke beech, overlay nahi; gehrai purani patti jitni): tukde trackW tak, bachi jagah budget ki likhai (daayein tiki).
+ * Budget pata nahi / "—" line = sirf track + "—".
+ */
+@Composable
+private fun WSpendBud(a: WSpendV?, plan: WSpendPlan, p: WPal, scale: Float) {
+    Row(modifier = GlanceModifier.fillMaxWidth().height(wSpendLineH(scale).dp), verticalAlignment = Alignment.CenterVertically) {
+        wSpendSegs(plan.trackW, a, p, scale).forEach { s ->
+            if (s.mark) {
+                if (a != null) WBarPill(a.bpct, a.bzone, p, s.w)
+            } else {
+                var m = GlanceModifier.width(s.w.dp).height(W_SPEND_BAR.dp)
+                val c = s.color
+                if (c != null) m = m.wRound(c, W_SPEND_BAR / 2f)
+                Spacer(m)
+            }
+        }
+        if (plan.budW > 0f) {
+            Text(
+                a?.bud ?: W_DASH, modifier = GlanceModifier.defaultWeight().padding(start = 6.dp),
+                style = wts(p.ink3, W_BUD_SP, FontWeight.Bold, TextAlign.End), maxLines = 1,
+            )
         }
     }
 }

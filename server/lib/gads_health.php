@@ -311,6 +311,30 @@ function ga_budget_today(PDO $pdo, string $cid): ?float
     return $b > 0 ? $b : null;
 }
 
+/**
+ * Har app (pkg) ka aaj ka budget, ek account me (extra query nahi, snapshot ka ga_camp meta): ga_budget_today wala hi rule, pkg ke hisaab se.
+ * spend = us pkg ke sab campaigns ka aaj ka kharcha (snapshot daily, account TZ) — account ki budget line jaisa. pkg: ga_camp ka, warna dashboard row ka; khali = skip.
+ * [pkg => ['budget' =>, 'spend' =>, 'campaigns' =>]], sirf budget > 0 wale.
+ */
+function ga_app_budgets_today(array $snap): array
+{
+    $pkgOf = fn(string $c): string => (string)($snap['meta'][$c]['pkg'] ?? '') ?: (string)($snap['daily'][$c]['pkg'] ?? '');
+    $out = [];
+    foreach ($snap['meta'] as $c => $m) {
+        $b = $m['budget'] === null ? 0.0 : (float)$m['budget'];
+        if (strtoupper((string)$m['status']) !== 'ENABLED' || $b <= 0 || !in_array(strtoupper(trim((string)$m['budget_period'])), ['', 'DAILY'], true)) continue;
+        $p = $pkgOf((string)$c);
+        if ($p === '') continue;
+        $out[$p] = ['budget' => ($out[$p]['budget'] ?? 0.0) + $b, 'spend' => 0.0, 'campaigns' => ($out[$p]['campaigns'] ?? 0) + 1];
+    }
+    if (!$out) return [];
+    foreach ($snap['daily'] as $c => $d) {
+        $p = $pkgOf((string)$c);
+        if ($p !== '' && isset($out[$p])) $out[$p]['spend'] += (float)($d['days'][$snap['today']]['cost'] ?? 0);
+    }
+    return $out;
+}
+
 // ================================================================ scan (rules -> alerts)
 /** Ek account: campaign state track karo, rules chalao. */
 function ga_eval_account(PDO $pdo, array $a, int $runId): array

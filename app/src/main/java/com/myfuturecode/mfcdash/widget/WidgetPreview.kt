@@ -380,7 +380,7 @@ private fun WpTop(v: WView, p: WPal, w: Float, h: Float, scale: Float) {
     }
 }
 
-/** "By app" wala baayan aadha (WidgetUi ka WTopSpend): kul kharcha + "aaj · ROAS", apps ki lines + ROAS tak bhari patti. */
+/** "By app" wala baayan aadha (WidgetUi ka WTopSpend): kul kharcha + "aaj · ROAS", apps ki lines + budget ki patti. */
 @Composable
 private fun ColumnScope.WpTopSpend(tv: WTopV, room: Float, ih: Float, pair: Boolean, liveRows: Int, more: Boolean, p: WPal, scale: Float) {
     val plan = wSpendPlan(tv, room, ih, scale, if (pair) liveRows else 3, pair)
@@ -410,15 +410,39 @@ private fun ColumnScope.WpTopSpend(tv: WTopV, room: Float, ih: Float, pair: Bool
                     WpT(roas, plan.rowSp, p.zoneText(a.zone), weight = FontWeight.Bold)
                 }
             }
-            Spacer(Modifier.height(3.dp))
-            Box(Modifier.fillMaxWidth().height(W_SPEND_BAR.dp).wpRound(p.track, W_SPEND_BAR / 2f)) {
-                val f = a?.fill
-                if (a != null && f != null && f > 0f) {
-                    Spacer(Modifier.width((room * f).dp).height(W_SPEND_BAR.dp).wpRound(p.zone(a.zone), W_SPEND_BAR / 2f))
+            if (plan.thin) {
+                Spacer(Modifier.height(3.dp))
+                Box(Modifier.fillMaxWidth().height(W_SPEND_BAR.dp).wpRound(p.track, W_SPEND_BAR / 2f)) {
+                    val f = a?.fill
+                    if (a != null && f != null && f > 0f) {
+                        Spacer(Modifier.width((room * f).dp).height(W_SPEND_BAR.dp).wpRound(p.zone(a.bzone), W_SPEND_BAR / 2f))
+                    }
                 }
+            } else {
+                WpSpendBud(a, plan, p, scale)
             }
         } else {
-            Spacer(Modifier.height(wSpendRowH(plan.rowSp, scale).dp))
+            Spacer(Modifier.height(wSpendRowH(plan.rowSp, scale, plan.thin).dp))
+        }
+    }
+}
+
+/** Budget ki patti (WidgetUi ka WSpendBud): tukde trackW tak, sire par % pill, bachi jagah budget (daayein). */
+@Composable
+private fun WpSpendBud(a: WSpendV?, plan: WSpendPlan, p: WPal, scale: Float) {
+    Row(Modifier.fillMaxWidth().height(wSpendLineH(scale).dp), verticalAlignment = Alignment.CenterVertically) {
+        wSpendSegs(plan.trackW, a, p, scale).forEach { s ->
+            if (s.mark) {
+                if (a != null) WpBarPill(a.bpct, a.bzone, p, s.w)
+            } else {
+                var m = Modifier.width(s.w.dp).height(W_SPEND_BAR.dp)
+                val c = s.color
+                if (c != null) m = m.wpRound(c, W_SPEND_BAR / 2f)
+                Spacer(m)
+            }
+        }
+        if (plan.budW > 0f) {
+            WpT(a?.bud ?: W_DASH, W_BUD_SP, p.ink3, Modifier.weight(1f).padding(start = 6.dp), FontWeight.Bold, TextAlign.End)
         }
     }
 }

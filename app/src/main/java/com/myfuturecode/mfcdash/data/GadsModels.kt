@@ -62,6 +62,23 @@ data class GEvent(val id: Long, val runId: Long?, val cid: String, val alertId: 
     }
 }
 
+/**
+ * Overview ka "app_budgets": ek app (pkg) ka aaj, ek account currency me: chalu campaigns ke daily budget ka jod aur jin
+ * accounts me us app ka budget hai unme app ke sab campaigns ka aaj ka kharcha (ruke / bina budget wale bhi; account wale
+ * spend_today / budget % jaisa hi hisaab, wahi source). Paisa usi currency me (kabhi do currency jodte nahi).
+ */
+data class GAppBudget(val pkg: String, val currency: String, val budget: Double, val spend: Double, val campaigns: Int) {
+    companion object {
+        fun of(j: JSONObject) = GAppBudget(
+            j.s("pkg").trim(), j.s("currency").trim().uppercase(), j.d("budget_today"), j.d("spend_today"), j.d("campaigns").toInt(),
+        )
+
+        /** Overview se sirf kaam ki lines (pkg ho, budget > 0); purana server / overview nahi = khaali. */
+        fun list(o: JSONObject?): List<GAppBudget> =
+            o?.optJSONArray("app_budgets")?.mapObj(::of)?.filter { it.pkg.isNotBlank() && it.budget > 0 && it.budget.isFinite() }.orEmpty()
+    }
+}
+
 /** [state, text] check (rule engine): OK / WARN / INSUFFICIENT ... */
 fun JSONObject.checks(): List<Triple<String, String, String>> = keys().asSequence().mapNotNull { k ->
     val a = optJSONArray(k) ?: return@mapNotNull null

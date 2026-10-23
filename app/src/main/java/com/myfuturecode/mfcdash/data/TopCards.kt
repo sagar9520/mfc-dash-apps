@@ -4,6 +4,8 @@ import com.myfuturecode.mfcdash.ui.kit.KKind
 import com.myfuturecode.mfcdash.ui.screens.alertKind
 import com.myfuturecode.mfcdash.util.Lang
 import com.myfuturecode.mfcdash.util.dn
+import java.math.BigDecimal
+import java.math.RoundingMode
 
 // "Top 3" cards ka hisaab (home-screen widgets; aage Home bhi yahi use kare). Sirf data, koi UI nahi:
 // sab functions pehle se parse kiye API models lete hain, isliye widget aur app dono ek jaisa dikhayenge.
@@ -19,12 +21,18 @@ fun roasZone(roas: Double?): TopZone = when {
     else -> TopZone.GREEN
 }
 
-/** Budget ka kitna % kharch hua; budget pata nahi (null) = NONE. 100% par server laal alert bhi banata hai. */
-fun budgetZone(pct: Double?): TopZone = when {
-    pct == null || !pct.isFinite() -> TopZone.NONE
-    pct > 90.0 -> TopZone.RED
-    pct > 80.0 -> TopZone.AMBER
-    else -> TopZone.GREEN
+/**
+ * Budget ka kitna % kharch hua; budget pata nahi (null) = NONE. 100% par server laal alert bhi banata hai. Zone pill wale
+ * gol % par (num(pct, 0) jaisa HALF_UP): "80%" likha = hamesha hara, "90%" = peela, "91%" = laal (likhai aur rang ek).
+ */
+fun budgetZone(pct: Double?): TopZone {
+    if (pct == null || !pct.isFinite()) return TopZone.NONE
+    val r = BigDecimal(pct).setScale(0, RoundingMode.HALF_UP).toDouble()
+    return when {
+        r > 90.0 -> TopZone.RED
+        r > 80.0 -> TopZone.AMBER
+        else -> TopZone.GREEN
+    }
 }
 
 // ---------------------------------------------------------------- Google Ads: aaj ke top accounts
@@ -64,8 +72,14 @@ fun topAccounts(accounts: List<GAccount>, rate: Double?, pick: Set<String> = emp
 
 // ---------------------------------------------------------------- Google Ads: aaj ke top kharch wale apps
 
-/** Ek app ka aaj ka Google Ads kharcha (₹) aur ROAS (ad revenue + payments / kharcha; pata nahi = null). */
-data class TopSpendApp(val pkg: String, val name: String, val spendInr: Double, val roas: Double?)
+/**
+ * Ek app ka aaj ka Google Ads kharcha (₹) aur ROAS (ad revenue + payments / kharcha; pata nahi = null).
+ * budgetInr = aaj ka daily budget (₹), budgetPct = usme se kitna % kharch hua; pata nahi = null ([withBudgets] se).
+ */
+data class TopSpendApp(
+    val pkg: String, val name: String, val spendInr: Double, val roas: Double?,
+    val budgetInr: Double? = null, val budgetPct: Double? = null,
+)
 
 /** App ka naam: data.php ki apps list, warna per_app ka, warna package ka aakhri hissa. */
 private fun topAppName(d: DashData, pkg: String, per: PerApp?): String =
@@ -76,6 +90,30 @@ fun topSpendApps(d: DashData, n: Int = 3): List<TopSpendApp> =
     d.perApp.filter { it.pkg.isNotBlank() && it.gadsCostInr.isFinite() && it.gadsCostInr > 0 }
         .sortedByDescending { it.gadsCostInr }.take(n)
         .map { a -> TopSpendApp(a.pkg, topAppName(d, a.pkg, a), a.gadsCostInr, a.roas(d.r)?.takeIf { it.isFinite() }) }
+
+/**
+ * Apps me aaj ka budget jodo (Google Ads overview ka app_budgets). Har app ki lines ₹ me: INR wahi, USD rate se; koi aur
+ * currency (ya rate nahi) ho to us app ka budget pata nahi (null), adha jod nahi. budget = Σ budget ₹, % = Σ kharcha ₹ / Σ budget ₹.
+ * Kharcha yahan server wala (jin accounts me app ka budget hai, unme app ke sab campaigns ka), taaki % account view jaisa hi bane.
+ */
+fun withBudgets(apps: List<TopSpendApp>, rows: List<GAppBudget>, rate: Double?): List<TopSpendApp> {
+    if (rows.isEmpty()) return apps.map { it.copy(budgetInr = null, budgetPct = null) }
+    val by = rows.groupBy { it.pkg }
+    return apps.map { a ->
+        val l = by[a.pkg].orEmpty()
+        var bud = 0.0
+        var sp = 0.0
+        var ok = l.isNotEmpty()
+        for (r in l) {
+            val b = topInr(r.budget, r.currency, rate)
+            val s = topInr(r.spend, r.currency, rate)
+            if (b == null || s == null || !b.isFinite() || !s.isFinite()) { ok = false; break }
+            bud += b
+            sp += s.coerceAtLeast(0.0)
+        }
+        if (!ok || bud <= 0) a.copy(budgetInr = null, budgetPct = null) else a.copy(budgetInr = bud, budgetPct = sp / bud * 100.0)
+    }
+}
 
 // ---------------------------------------------------------------- Live users: top apps
 

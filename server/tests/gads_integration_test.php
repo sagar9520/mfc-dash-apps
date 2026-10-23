@@ -215,6 +215,7 @@ foreach (['overview', 'filters', 'account&cid=1112223333', 'alerts&group=status'
     [$c, $j, $raw] = $http('GET', "api/gads_health.php?view=$v");
     ok($c === 200 && ($j['ok'] ?? false) === true, "view $v" . ($c !== 200 || !($j['ok'] ?? false) ? ' -> ' . substr($raw, 0, 300) : ''));
     if ($v === 'overview') ok(count($j['currency_totals']) === 3 && !isset($j['total_spend']), 'overview: totals per currency only (INR / USD / EUR separate)');
+    if ($v === 'overview') ok(str_contains($raw, '"app_budgets":[]'), 'overview: app_budgets = [] while no app has a daily budget (C budget has no pkg)');
     if ($v === 'overview&currency=USD') ok(count($j['accounts']) === 1 && $j['accounts'][0]['cid'] === $B, 'currency filter');
     if ($v === 'script&cid=7778889999') ok(str_contains($j['script'], "'777-888-9999'") && !str_contains($j['script'], $tok), 'script text filled with CID, token never sent back');
     if ($v === 'monitor&kind=spend') { $r103 = array_values(array_filter($j['rows'], fn($x) => $x['campaign_id'] === '103'))[0] ?? null; ok($r103 && $r103['pace_pct'] > 60, 'spend monitor shows pace vs usual for 103'); }
@@ -228,6 +229,66 @@ foreach ([['setting', ['key' => 'ga_dev_mode', 'value' => '1']], ['simulate', ['
 ok((int)q1('SELECT COUNT(*) FROM ga_alerts WHERE sim = 1') === 0 && (int)q1("SELECT COUNT(*) FROM ga_runs WHERE type = 'simulation' AND sim = 1") >= 1, 'simulated alerts labelled + cleared; simulation runs stay in the audit log');
 [$c] = $http('POST', 'api/gads_health.php?action=threshold', ['scope' => 'global', 'key' => 'drop_pct', 'value' => 'abc']);
 ok($c === 400, 'bad threshold value refused');
+
+// ---------------------------------------------------------------- overview app_budgets: (pkg, currency) ka aaj ka daily budget vs us pkg ka aaj ka kharcha
+$C = '7778889999'; $D = '2223334444';
+$pdo->prepare('INSERT INTO gads_account (customer_id, name, currency, tz, updated_at) VALUES (?,?,?,?,?)')->execute([$D, 'SIM Account D', 'INR', $tzA, $recv]);
+ga_account_save($pdo, ['cid' => '222-333-4444', 'company' => 'SIM Company D', 'authorize' => '1'], 'test-user');
+$tday = fn(string $cid) => (new DateTime('now', ga_acct_tz($pdo, ga_accounts($pdo)[$cid])))->format('Y-m-d');
+$todayB = $tday($B); $todayC = $tday($C);
+$gc = $pdo->prepare("INSERT INTO ga_camp (customer_id, campaign_id, name, status, budget, budget_period, pkg, updated_at) VALUES (?,?,?,?,?,?,?,UTC_TIMESTAMP())
+  ON DUPLICATE KEY UPDATE status = VALUES(status), budget = VALUES(budget), budget_period = VALUES(budget_period), pkg = VALUES(pkg)");
+foreach ([[$A, '101', 'com.sim.app', 'ENABLED', 1000, 'DAILY'], [$A, '102', 'com.sim.app', 'ENABLED', 500, ''], [$A, '103', 'com.sim.app', 'ENABLED', 2000, 'CUSTOM_PERIOD'],
+    [$A, '104', 'com.sim.app', 'PAUSED', 700, 'DAILY'], [$A, '105', 'com.sim.app', 'ENABLED', null, 'DAILY'], [$A, '106', 'com.sim.two', 'ENABLED', 300, 'daily'],
+    [$A, '107', 'com.sim.two', 'ENABLED', 0, 'DAILY'], [$A, '108', '', 'ENABLED', 400, 'DAILY'], [$A, '109', '', 'ENABLED', 250, 'DAILY'], [$D, '401', 'com.sim.app', 'ENABLED', 200, 'DAILY'],
+    [$B, '201', 'com.sim.b', 'ENABLED', 80, 'DAILY'], [$B, '202', 'com.sim.app', 'ENABLED', 40, 'DAILY'], [$B, '203', 'com.sim.b', 'ENABLED', 25, 'DAILY'], [$B, '204', 'com.sim.b', 'REMOVED', 90, 'DAILY'],
+    [$C, '301', 'com.sim.c', 'ENABLED', 1500, '']] as [$cid, $id, $pkg, $st, $bu, $per]) $gc->execute([$cid, $id, "SIM $id", $st, $bu, $per, $pkg]);
+// aaj ke dashboard rows (106 ka kal wala 999 nahi ginna; 109: ga_camp me pkg nahi, dashboard row se)
+foreach ([[$A, $today, '106', 'com.sim.two', 'INR', 120], [$A, $day(1), '106', 'com.sim.two', 'INR', 999], [$A, $today, '107', 'com.sim.two', 'INR', 15], [$A, $today, '108', '', 'INR', 90],
+    [$A, $today, '109', 'com.sim.two', 'INR', 60], [$D, $today, '401', 'com.sim.app', 'INR', 80], [$B, $todayB, '202', 'com.sim.app', 'USD', 30]] as [$cid, $dd, $id, $pkg, $cu, $cost])
+    $insD->execute([$cid, $dd, $id, "SIM $id", $pkg, 'ENABLED', $cu, $cost, 1000, 10, 1, 0, $recv]);
+$spA = (float)q1("SELECT SUM(cost) FROM gads_campaign_day WHERE customer_id = ? AND day = ? AND pkg = 'com.sim.app'", [$A, $today]);
+$spB = (float)q1("SELECT COALESCE(SUM(cost), 0) FROM gads_campaign_day WHERE customer_id = ? AND day = ? AND pkg = 'com.sim.b'", [$B, $todayB]);
+$spC = (float)q1('SELECT COALESCE(SUM(cost), 0) FROM ga_day WHERE customer_id = ? AND day = ?', [$C, $todayC]);
+$exp = [$A => [['com.sim.app', 'INR', 1500, $spA, 2], ['com.sim.two', 'INR', 550, 195, 2]], $D => [['com.sim.app', 'INR', 200, 80, 1]],
+    $B => [['com.sim.app', 'USD', 40, 30, 1], ['com.sim.b', 'USD', 105, $spB, 2]], $C => [['com.sim.c', 'EUR', 1500, $spC, 1]]];
+$want = function (array $cids) use ($exp): array {
+    $m = [];
+    foreach ($cids as $cid) foreach ($exp[$cid] ?? [] as [$p, $cu, $b, $s, $k]) { $m["$p|$cu"] ??= [$p, $cu, 0.0, 0.0, 0]; $m["$p|$cu"][2] += $b; $m["$p|$cu"][3] += $s; $m["$p|$cu"][4] += $k; }
+    ksort($m);
+    return array_values($m);
+};
+$same = function (array $j) use ($want): bool {
+    $g = $j['app_budgets'] ?? null; $w = $want(array_column($j['accounts'] ?? [], 'cid'));
+    if (!is_array($g) || count($g) !== count($w)) return false;
+    foreach ($w as $i => [$p, $cu, $b, $s, $k]) {
+        $r = $g[$i];
+        if ($r['pkg'] !== $p || $r['currency'] !== $cu || abs((float)$r['budget_today'] - $b) > 0.005 || abs((float)$r['spend_today'] - $s) > 0.005 || $r['campaigns'] !== $k) return false;
+    }
+    return true;
+};
+[$c, $j] = $http('GET', 'api/gads_health.php?view=overview');
+$row = fn(string $p, string $cu) => array_values(array_filter($j['app_budgets'] ?? [], fn($x) => $x['pkg'] === $p && $x['currency'] === $cu))[0] ?? [];
+ok($c === 200 && count($j['accounts']) === 4 && count($j['app_budgets']) === 5 && $same($j), 'app_budgets: 5 rows (pkg, currency), sorted, sums + spend per pkg match' . ($same($j) ? '' : ': ' . json_encode($j['app_budgets'] ?? null)));
+ok(($row('com.sim.app', 'INR')['budget_today'] ?? 0) == 1700 && ($row('com.sim.app', 'INR')['campaigns'] ?? 0) === 3 && ($row('com.sim.app', 'USD')['budget_today'] ?? 0) == 40,
+    'app_budgets: same pkg in 2 INR accounts adds up (A + D), its USD campaign stays a separate row');
+ok(($row('com.sim.app', 'INR')['budget_today'] ?? 0) == 1700 && ($row('com.sim.b', 'USD')['budget_today'] ?? 0) == 105, "app_budgets: PAUSED / REMOVED / non-daily / zero / null budgets left out, '' + lowercase 'daily' periods count");
+ok(abs(($row('com.sim.two', 'INR')['spend_today'] ?? 0) - 195) < 0.005 && ($row('com.sim.two', 'INR')['budget_today'] ?? 0) == 550,
+    'app_budgets: pkg spend = all its campaigns today (unbudgeted 107 counts, yesterday not); pkg from dashboard row when ga_camp has none (109)');
+ok(!array_filter($j['app_budgets'] ?? [], fn($x) => $x['pkg'] === ''), 'app_budgets: campaign without pkg (108) makes no row');
+ok(($row('com.sim.c', 'EUR')['budget_today'] ?? 0) == 1500 && abs(($row('com.sim.c', 'EUR')['spend_today'] ?? -1) - $spC) < 0.005, 'app_budgets: script-only campaign (pkg from ga_camp, spend from ga_day) -> EUR row of its own');
+$acA = array_values(array_filter($j['accounts'] ?? [], fn($x) => $x['cid'] === $A))[0] ?? [];
+ok(abs(($acA['budget_today'] ?? 0) - 2450) < 0.005, 'account A budget_today (ga_budget_today) = its app rows 2050 + no-pkg 108 (400): same budget rule');
+foreach (['currency=USD' => [$B], 'currency=INR' => [$A, $D], 'account=' . $A => [$A], 'company=' . rawurlencode('SIM Company D') => [$D]] as $qs => $only) {
+    [$c, $j] = $http('GET', "api/gads_health.php?view=overview&$qs");
+    $cids = array_column($j['accounts'] ?? [], 'cid'); sort($cids); sort($only);
+    ok($c === 200 && $cids === $only && $same($j) && count($j['app_budgets']) > 0, "app_budgets follow the overview filter $qs" . ($same($j) ? '' : ': ' . json_encode($j['app_budgets'] ?? null)));
+}
+[$c, $j] = $http('GET', 'api/gads_health.php?view=overview&status=critical');
+$cids = array_column($j['accounts'] ?? [], 'cid');
+ok($c === 200 && in_array($A, $cids, true) && !in_array($D, $cids, true) && $same($j), 'app_budgets: status filter -> only the listed accounts');
+[$c, $j, $raw] = $http('GET', 'api/gads_health.php?view=overview&currency=GBP');
+ok($c === 200 && str_contains($raw, '"app_budgets":[]'), 'app_budgets: [] when no listed account has budgets');
 proc_terminate($srv);
 $log = (string)@file_get_contents("$T/server.log");
 ok(!preg_match('/PHP (Warning|Fatal|Deprecated|Notice)/', $log), 'no PHP warnings / errors in server log' . (preg_match('/PHP (Warning|Fatal|Deprecated|Notice)[^\n]*/', $log, $mm) ? ': ' . $mm[0] : ''));

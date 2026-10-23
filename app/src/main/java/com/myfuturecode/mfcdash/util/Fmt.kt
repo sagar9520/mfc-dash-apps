@@ -40,6 +40,21 @@ fun short(v: Double?): String {
     }
 }
 
+/** Bahut chhota ₹ (patti ke sire par budget): ₹950 · ₹4.2K · ₹70K · ₹1.5L · ₹2.3Cr (".0" nahi). */
+fun inrK(v: Double?): String {
+    if (v == null || !v.isFinite()) return "–"
+    val a = abs(v)
+    fun one(x: Double) = num(x, 1).removeSuffix(".0")
+    val body = when {
+        a < 999.5 -> num(a, 0)
+        a < 9_950 -> one(a / 1000) + "K"
+        a < 99_500 -> num(a / 1000, 0) + "K"
+        a < 99_95_000 -> one(a / 1_00_000) + "L"
+        else -> one(a / 1_00_00_000) + "Cr"
+    }
+    return (if (v < 0) "-₹" else "₹") + body
+}
+
 fun minutes(sec: Double?): String = if (sec == null) "–" else num(sec / 60, 1) + " min"
 
 private val sqlTs = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }
