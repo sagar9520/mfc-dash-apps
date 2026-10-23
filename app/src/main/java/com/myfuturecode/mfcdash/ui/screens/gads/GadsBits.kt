@@ -1,5 +1,6 @@
 package com.myfuturecode.mfcdash.ui.screens.gads
 
+import android.content.ClipData
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
@@ -69,6 +70,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.FileProvider
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -127,6 +129,7 @@ import com.myfuturecode.mfcdash.util.tsMs
 import kotlinx.coroutines.delay
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import java.math.BigDecimal
 import java.math.RoundingMode
 import java.util.Calendar
@@ -267,6 +270,21 @@ fun shareText(ctx: Context, subject: String, text: String) {
         ctx.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_SUBJECT, subject).putExtra(Intent.EXTRA_TEXT, text), subject)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }
+}
+
+/** Lamba text .txt file bana ke share (chat apps text ko 4096 akshar par kaat dete hain, file poori jaati hai). */
+fun shareFile(ctx: Context, fileName: String, text: String, subject: String) {
+    runCatching {
+        // purani share files (unme token tha) hatao: sirf aakhri file rahe
+        val dir = File(ctx.cacheDir, "share").apply { mkdirs(); listFiles()?.forEach { it.delete() } }
+        val f = File(dir, fileName).apply { writeText(text, Charsets.UTF_8) }
+        val uri = FileProvider.getUriForFile(ctx, ctx.packageName + ".files", f)
+        // EXTRA_TEXT nahi: chat app use kata hua caption bana deta
+        val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_STREAM, uri).putExtra(Intent.EXTRA_SUBJECT, subject)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        send.clipData = ClipData.newRawUri(fileName, uri) // naye Android par read permission isi se milti hai
+        ctx.startActivity(Intent.createChooser(send, subject).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }.onFailure { shareText(ctx, subject, text) }   // file na bane to purana text share
 }
 
 /** "Updated 2 min pehle". Pehli baar (abhi kuch nahi aaya) khaali: neeche skeleton dikh raha hai. */
@@ -937,10 +955,18 @@ fun TokenDialog(cid: String, token: String, vm: GadsVm, g: GState, onClose: () -
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         KButton("Copy".t(), { clip.setText(AnnotatedString(token)) }, Modifier.weight(1f), kind = KBtn.OUTLINE, icon = KIcons.Copy)
                         KButton(
-                            "Share script".t(), { vm.script(cid) { text, ph -> shareText(ctx, "MFC Dash read-only Google Ads script · $cid", text.replace(ph, token)) } },
+                            // file ki tarah: script ~13k akshar, chat apps text 4096 par kaat dete the
+                            "Share script".t(), {
+                                vm.script(cid) { text, ph ->
+                                    if (text.isBlank()) return@script   // server se script nahi mili: khaali file mat bhejo
+                                    val name = "MFC_ads_script_" + cid.filter { it.isDigit() }.ifEmpty { "account" } + ".txt"
+                                    shareFile(ctx, name, text.replace(ph, token), "MFC Dash read-only Google Ads script · $cid")
+                                }
+                            },
                             Modifier.weight(1.3f), icon = KIcons.Send, busy = "script$cid" in g.busy,
                         )
                     }
+                    GTxt("Send it to your laptop by email, then copy all of it into Google Ads.".t(), 13.sp, c.ink3, Modifier.padding(top = 6.dp), lh = 18.sp)
                     Spacer(Modifier.height(10.dp))
                     // script lagane ke 4 kadam (chhote labels)
                     listOf(

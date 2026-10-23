@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- FileProvider: sirf cache/share/ ki files bahar share hoti hain -->
+<paths>
+    <cache-path name="share" path="share/" />
+</paths>

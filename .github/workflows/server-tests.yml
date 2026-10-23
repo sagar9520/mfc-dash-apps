@@ -27,6 +27,8 @@ jobs:
         run: for f in server/lib/*.php server/api/*.php server/tests/*.php; do php -l "$f"; done
       - name: Read-only guard
         run: php server/tests/gads_readonly_check.php
+      - name: Ads Script mock (node)
+        run: node server/tests/gads_script_mock_test.js
       - name: Rule engine
         run: php server/tests/gads_rules_test.php
       - name: Integration (MySQL, simulated data)

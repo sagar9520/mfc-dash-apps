@@ -1,5 +1,5 @@
 /**
- * MFC Dash · Google Ads AI Health Monitor — READ-ONLY Google Ads Script (v1.0)
+ * MFC Dash · Google Ads AI Health Monitor — READ-ONLY Google Ads Script (v1.1)
  *
  * Har Google Ads account me ALAG se lagao (MCC me nahi). Upar ki 3 lines MFC Dash app se milti hain:
  *   app > Google Ads Health > Settings > account > "Script" (token sirf ek baar dikhta hai).
@@ -17,7 +17,7 @@ var DASH_URL = 'https://YOUR-DOMAIN/mfc_dash/api/gads_ingest.php';   // <-- app 
 var CUSTOMER_ID = '000-000-0000';                                      // <-- is account ka Customer ID
 var TOKEN = 'PASTE-TOKEN-HERE';                                        // <-- app se (sirf isi account ke liye)
 
-var VERSION = '1.0';
+var VERSION = '1.1';
 
 function main() {
   var acc = AdsApp.currentAccount();
@@ -41,7 +41,7 @@ function main() {
 
   var body = {
     action: 'data', script_version: VERSION, account: info,
-    campaigns: section('campaigns', errors, function () { return campaigns(); }),
+    campaigns: section('campaigns', errors, function () { return campaigns(errors); }),
     days: section('daily', errors, function () { return campaignDays(from, today); }),
     hours: section('hourly', errors, function () { return campaignHours(hFrom, today); }),
     adgroups: section('ad_groups', errors, function () { return adGroups(day(Math.min(backfill, 14) - 1, tz), today); }),
@@ -85,26 +85,46 @@ function rows(q) {
   return out;
 }
 
+// API version badalne par field ka naam badalta hai: pehla variant chalao; agla sirf tab jab error isi variant ke field ko "Unrecognized" bole.
+// Koi aur error (dusra field, permission, quota...) seedha throw: section() use errors[] me daalta hai.
+function firstWorking(variants, fn) {
+  for (var i = 0; ; i++) {
+    try { return fn(variants[i]); } catch (e) {
+      var msg = String(e), f = variants[i] || '';
+      var same = f !== '' && new RegExp(f.replace(/\./g, '\\.') + '(?![\\w.])').test(msg);
+      if (i >= variants.length - 1 || !same || !/UNRECOGNIZED_FIELD|Unrecognized field/i.test(msg)) throw e;
+      Logger.log('MFC Dash: ' + f + ' nahi chala, ab ' + (variants[i + 1] || 'bina start date') + ' (' + msg.substring(0, 120) + ')');
+    }
+  }
+}
+
 function accountInfo() {
   var r = rows('SELECT customer.id, customer.descriptive_name, customer.currency_code, customer.time_zone, customer.status, customer.manager FROM customer')[0] || {};
   var c = r.customer || {};
   return { name: c.descriptiveName || '', currency: c.currencyCode || '', tz: c.timeZone || '', status: c.status || '', manager: !!c.manager };
 }
 
-function campaigns() {
-  var q = 'SELECT campaign.id, campaign.name, campaign.status, campaign.serving_status, campaign.primary_status, campaign.primary_status_reasons, ' +
-    'campaign.advertising_channel_type, campaign.bidding_strategy_type, campaign.target_cpa.target_cpa_micros, campaign.target_roas.target_roas, ' +
-    'campaign.maximize_conversions.target_cpa_micros, campaign.maximize_conversion_value.target_roas, campaign.start_date, ' +
-    'campaign.app_campaign_setting.app_id, campaign_budget.amount_micros, campaign_budget.period ' +
-    "FROM campaign WHERE campaign.status != 'REMOVED'";
-  return rows(q).map(function (r) {
+function campaigns(errors) {
+  // API v23+: campaign.start_date hata, campaign.start_date_time ("yyyy-MM-dd HH:mm:ss") aaya. Naya pehle, phir purana, phir bina date (budget fir bhi aaye).
+  var used = null;
+  var list = firstWorking(['campaign.start_date_time', 'campaign.start_date', ''], function (sd) {
+    used = sd;
+    return rows('SELECT campaign.id, campaign.name, campaign.status, campaign.serving_status, campaign.primary_status, campaign.primary_status_reasons, ' +
+      'campaign.advertising_channel_type, campaign.bidding_strategy_type, campaign.target_cpa.target_cpa_micros, campaign.target_roas.target_roas, ' +
+      'campaign.maximize_conversions.target_cpa_micros, campaign.maximize_conversion_value.target_roas, ' + (sd ? sd + ', ' : '') +
+      'campaign.app_campaign_setting.app_id, campaign_budget.amount_micros, campaign_budget.period ' +
+      "FROM campaign WHERE campaign.status != 'REMOVED'");
+  });
+  // bina date wala variant chala: campaigns fir bhi jaate hain, par app me dikhe ki start date nahi aayi
+  if (!used) errors.push({ section: 'campaign_start_date', error: 'campaign.start_date_time / start_date not recognized by Google Ads; start dates not sent' });
+  return list.map(function (r) {
     var c = r.campaign, b = r.campaignBudget || {};
     var tcpa = (c.targetCpa && c.targetCpa.targetCpaMicros) || (c.maximizeConversions && c.maximizeConversions.targetCpaMicros) || 0;
     var troas = (c.targetRoas && c.targetRoas.targetRoas) || (c.maximizeConversionValue && c.maximizeConversionValue.targetRoas) || 0;
     return {
       campaign_id: String(c.id), name: c.name, status: c.status, serving_status: c.servingStatus || '', primary_status: c.primaryStatus || '',
       primary_reasons: c.primaryStatusReasons || [], channel: c.advertisingChannelType || '', bidding: c.biddingStrategyType || '',
-      target_cpa: micros(tcpa), target_roas: n(troas), start_date: c.startDate || '', pkg: (c.appCampaignSetting && c.appCampaignSetting.appId) || '',
+      target_cpa: micros(tcpa), target_roas: n(troas), start_date: String(c.startDateTime || c.startDate || '').substring(0, 10), pkg: (c.appCampaignSetting && c.appCampaignSetting.appId) || '',
       budget: b.amountMicros ? micros(b.amountMicros) : null, budget_period: b.period || ''
     };
   });

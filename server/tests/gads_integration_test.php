@@ -178,7 +178,7 @@ $days = []; $hours = [];
 for ($b = 0; $b <= 10; $b++) $days[] = ['day' => $day($b), 'campaign_id' => '301', 'cost' => 1000, 'impressions' => 9000, 'clicks' => 100, 'conversions' => 40, 'conv_value' => 900];
 $payload = ['customer_id' => '777-888-9999', 'token' => $tok, 'action' => 'data', 'script_version' => '1.0',
     'account' => ['name' => 'SIM C', 'currency' => 'EUR', 'tz' => 'Europe/Berlin', 'status' => 'ENABLED', 'manager' => false],
-    'campaigns' => [['campaign_id' => '301', 'name' => 'SIM C camp', 'status' => 'ENABLED', 'primary_status' => 'ELIGIBLE', 'primary_reasons' => [], 'channel' => 'MULTI_CHANNEL', 'bidding' => 'TARGET_CPA', 'target_cpa' => 20, 'budget' => 1500]],
+    'campaigns' => [['campaign_id' => '301', 'name' => 'SIM C camp', 'status' => 'ENABLED', 'primary_status' => 'ELIGIBLE', 'primary_reasons' => [], 'channel' => 'MULTI_CHANNEL', 'bidding' => 'TARGET_CPA', 'target_cpa' => 20, 'budget' => 1500, 'start_date' => '2025-03-01']],
     'days' => $days, 'hours' => $hours,
     'adgroups' => [['day' => $day(1), 'campaign_id' => '301', 'ad_group_id' => '3011', 'name' => 'SIM AG', 'status' => 'ENABLED', 'cost' => 1000, 'impressions' => 9000, 'clicks' => 100, 'conversions' => 40, 'conv_value' => 900]],
     'geo' => [['day' => $day(1), 'campaign_id' => '301', 'country' => 'DE', 'cost' => 600, 'impressions' => 5000, 'clicks' => 60, 'conversions' => 20, 'conv_value' => 500]],
@@ -186,6 +186,9 @@ $payload = ['customer_id' => '777-888-9999', 'token' => $tok, 'action' => 'data'
     'errors' => [['section' => 'assets', 'error' => 'SIMULATED query error']]];
 [$c, $j] = $http('POST', 'api/gads_ingest.php', $payload);
 ok($c === 200 && ($j['n'] ?? 0) >= 13, 'read-only script data stored (' . ($j['n'] ?? 0) . ' rows)');
+ok(q1("SELECT start_date FROM ga_camp WHERE customer_id = '7778889999' AND campaign_id = '301'") === '2025-03-01', 'campaign start date stored');
+$p2 = $payload; $p2['campaigns'][0]['start_date'] = ''; $http('POST', 'api/gads_ingest.php', $p2);   // script v1.1 bina date wala fallback
+ok(q1("SELECT start_date FROM ga_camp WHERE customer_id = '7778889999' AND campaign_id = '301'") === '2025-03-01', 'run without a start date keeps the stored one (missing != cleared)');
 ok(q1("SELECT currency FROM ga_accounts WHERE customer_id = '7778889999'") === 'EUR' && q1("SELECT script_status FROM ga_accounts WHERE customer_id = '7778889999'") === 'ENABLED', 'account currency/status from Google stored per account');
 kv_set('ga_last_scan', '0');
 ga_scan($pdo, 'manual', 'test-user', '7778889999');

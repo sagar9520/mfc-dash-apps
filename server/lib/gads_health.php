@@ -22,7 +22,7 @@ const GA_MAIL_EVERY  = 300;      // 5 min
 const GA_DEEP_EVERY  = 21600;    // 6 ghante
 const GA_DAILY_HOUR  = 9;        // daily portfolio review (dashboard time)
 const GA_AI_CAP      = 40;       // Claude calls / din (kv ga_ai_cap se badlo)
-const GA_SCRIPT_VER  = '1.0';
+const GA_SCRIPT_VER  = '1.1';
 const GA_LEVELS = ['INFO' => 1, 'WARNING' => 2, 'CRITICAL' => 3];
 const GA_STATUS_RULES = ['suspended', 'payment_restricted', 'payment_notice', 'policy_restriction', 'account_closed', 'disapproved', 'limited', 'inactive'];
 const GA_SETTINGS = ['ga_push' => '1', 'ga_mail_critical' => '1', 'ga_mail_daily' => '1', 'ga_daily_hour' => '9', 'ga_dev_mode' => '0', 'ga_ai_cap' => '40', 'ga_ai_on' => '1'];

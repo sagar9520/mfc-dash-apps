@@ -63,7 +63,7 @@ try {
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON DUPLICATE KEY UPDATE name = VALUES(name), primary_status = VALUES(primary_status), primary_reasons = VALUES(primary_reasons), serving_status = VALUES(serving_status),
               channel = VALUES(channel), bidding = VALUES(bidding), target_cpa = VALUES(target_cpa), target_roas = VALUES(target_roas), budget = VALUES(budget),
-              budget_period = VALUES(budget_period), start_date = VALUES(start_date), pkg = IF(VALUES(pkg) <> '', VALUES(pkg), pkg), meta_at = VALUES(meta_at), updated_at = VALUES(updated_at)");
+              budget_period = VALUES(budget_period), start_date = COALESCE(VALUES(start_date), start_date), pkg = IF(VALUES(pkg) <> '', VALUES(pkg), pkg), meta_at = VALUES(meta_at), updated_at = VALUES(updated_at)");
         // status yahan nahi likhte: scan status badalna khud detect karta hai (prev_status ke saath). Naya row = status ke saath.
         foreach ($b['campaigns'] as $c) {
             if (!is_array($c) || empty($c['campaign_id'])) continue;

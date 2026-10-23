@@ -95,6 +95,7 @@ val HI_GADS: Map<String, String> = mapOf(
     "Add account" to "Account jodo", "Save" to "Save", "Saved" to "Save ho gaya", "Script token" to "Script token",
     "Shown only once. The server keeps only a hash. Put it in this account's read-only script." to "Sirf ek baar dikhega. Server par sirf hash rehta hai. Ise is account ki read-only script me daalo.",
     "Copy" to "Copy", "Share script" to "Script share karo",
+    "Send it to your laptop by email, then copy all of it into Google Ads." to "Email se laptop par bhejo, phir poori copy karke Google Ads me daalo.",
     "Google Ads > Tools > Bulk actions > Scripts > + New script: paste, Authorize, Preview, then schedule it Hourly. The script only reads (search) and sends numbers to your dashboard." to
         "Google Ads > Tools > Bulk actions > Scripts > + New script: paste karo, Authorize, Preview, phir Hourly schedule. Script sirf padhti hai (search) aur numbers aapke dashboard ko bhejti hai.",
     "Threshold" to "Limit", "Value" to "Value", "default" to "default", "Leave empty to use the default." to "Default ke liye khali chhodo.",
