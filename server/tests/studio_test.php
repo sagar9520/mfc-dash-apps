@@ -181,8 +181,13 @@ ok(count($mm[1]) === preg_match_all("/'schema'\s*=>(?!\s*\\\$o\[)/", $code) && c
     'every schema passed to st_ai comes from a schema function (' . implode(', ', $schemaFns) . ')');
 ok($uc['st_opp_schema'] === 0 && max($uc) <= 10, 'union types per schema: st_opp_schema 0, others <= 10 (' . json_encode($uc) . ')');
 $ofp = st_opp_schema()['properties']['opportunities']['items']['properties']['factors'];
-ok(array_keys($ofp['properties']) === st_ai_factors() && $ofp['required'] === st_ai_factors() && !isset($ofp['properties']['own_fit']) && count(st_ai_factors()) === count(ST_FACTORS) - 1
-    && $ofp['properties']['demand']['properties']['rating']['type'] === 'number', 'AI schema: rating is a plain number; server-computed own_fit is not asked from the AI');
+ok($ofp['type'] === 'array' && $ofp['items']['properties']['key']['enum'] === st_ai_factors() && !in_array('own_fit', $ofp['items']['properties']['key']['enum'], true)
+    && count(st_ai_factors()) === count(ST_FACTORS) - 1 && $ofp['items']['properties']['rating']['type'] === 'number' && $ofp['items']['required'] === ['key', 'rating', 'basis', 'evidence', 'note'],
+    'AI schema: factors is a list keyed by factor id (one factor object, not 16); rating is a plain number; server-computed own_fit is not asked from the AI');
+// Claude structured output: "The compiled grammar is too large" (HTTP 400, owner's weekly ranking 2026-10-24) with 16 factor objects x basis enum. Keep every schema small.
+$objs = function ($n) use (&$objs): int { if (!is_array($n)) return 0; $c = (($n['type'] ?? '') === 'object') ? 1 : 0; foreach ($n as $v) $c += $objs($v); return $c; };
+$sz = array_combine($schemaFns, array_map(fn($f) => [$objs($f()), substr_count(json_encode($f()), '"enum"')], $schemaFns));
+ok(max(array_column($sz, 0)) <= 8 && max(array_column($sz, 1)) <= 6, 'schema size: at most 8 object definitions and 6 enums per schema (' . json_encode($sz) . ')');
 $cs2 = st_clean_spec(['features' => [['name' => 'A', 'priority' => 'MUST HAVE', 'feasible_on_android' => true, 'effort_days' => -1, 'evidence' => []],
     ['name' => 'B', 'priority' => 'OPTIONAL', 'feasible_on_android' => true, 'effort_days' => 3, 'evidence' => []]]], []);
 ok($cs2['features'][0]['effort_days'] === null && $cs2['features'][1]['effort_days'] === 3, 'spec: effort_days -1 (unknown) -> null, 3 stays 3');
@@ -445,6 +450,10 @@ $cf = st_clean_factors($pdo, ['demand' => ['rating' => -1, 'basis' => 'INFERENCE
 ok($cf['demand']['rating'] === null && $cf['demand']['basis'] === 'UNKNOWN' && $cf['search']['rating'] === null && $cf['growth']['rating'] === 7.0 && $cf['growth']['basis'] === 'INFERENCE'
     && $cf['competition']['rating'] === 0.0 && $cf['cost']['rating'] === 10.0 && $cf['own_fit']['rating'] === null && $cf['own_fit']['basis'] === 'UNKNOWN' && array_keys($cf) === array_keys(ST_FACTORS),
     'clean factors: rating -1 -> null/UNKNOWN (not 0), 7 stays 7, 0 stays 0, 14 capped 10, AI own_fit ignored, all factors returned');
+$cl = st_clean_factors($pdo, [['key' => 'demand', 'rating' => 7, 'basis' => 'INFERENCE', 'evidence' => [], 'note' => 'first'], ['key' => 'demand', 'rating' => 2, 'basis' => 'INFERENCE', 'evidence' => [], 'note' => 'dup'],
+    ['key' => 'own_fit', 'rating' => 9, 'basis' => 'INFERENCE', 'evidence' => [], 'note' => 'server only'], ['key' => 'nope', 'rating' => 5, 'basis' => 'INFERENCE', 'evidence' => [], 'note' => ''], ['rating' => 5], 'junk'], []);
+ok($cl['demand']['rating'] === 7.0 && $cl['demand']['note'] === 'first' && $cl['own_fit']['rating'] === null && $cl['growth']['basis'] === 'UNKNOWN' && count($cl) === count(ST_FACTORS) && !isset($cl['nope']),
+    'clean factors (list form): keyed by id, duplicate id keeps the first, own_fit/unknown/junk items dropped, missing factors UNKNOWN');
 
 // ---------------------------------------------------------------- economics: owner's server failures (Duplicate entry '*--paid', 34-minute cohort SQL)
 // SIMULATED edge cohort, install day D = 12 days ago unless noted. cc NULL / 'UNK' / ' us' need a wider nullable column (some dashboards have one); restored below.
@@ -626,7 +635,7 @@ $webResp = fn(array $urls, string $text, string $stop = 'end_turn') => [200, ['m
     ['type' => 'text', 'text' => $text]]]];
 $jsonResp = fn(array $j) => [200, ['model' => 'claude-opus-5-5', 'stop_reason' => 'end_turn', 'usage' => ['input_tokens' => 5000, 'output_tokens' => 3000], 'content' => [['type' => 'text', 'text' => json_encode($j)]]]];
 // canned AI factors follow the schema: only st_ai_factors() (no own_fit), -1 = no evidence
-$fx = function (array $r) { $o = []; foreach (st_ai_factors() as $k) $o[$k] = $r[$k] ?? ['rating' => -1, 'basis' => 'UNKNOWN', 'evidence' => [], 'note' => '']; return $o; };
+$fx = function (array $r) { $o = []; foreach (st_ai_factors() as $k) $o[] = ['key' => $k] + ($r[$k] ?? ['rating' => -1, 'basis' => 'UNKNOWN', 'evidence' => [], 'note' => '']); return $o; };   // schema ka list roop
 $I = fn($v, $ev = ['S1']) => ['rating' => $v, 'basis' => 'INFERENCE', 'evidence' => $ev, 'note' => 'n'];
 $card = ['what' => 'w', 'why' => 'y', 'evidence' => 'e', 'benefit' => 'b', 'cost' => 'c', 'risk' => 'r', 'alternatives' => 'a'];
 $oppA = ['title' => 'Lost Earbuds Finder', 'concept' => 'BT signal meter', 'category' => 'Tools', 'countries' => ['IN', 'us', 'XX1'], 'competitors' => [['name' => 'Finder X', 'package' => 'com.finder.x', 'evidence' => ['S2']]],
@@ -658,10 +667,11 @@ ok(str_contains($log, "=== Owner's own apps, last 30 days (verified) ===\\nP1: a
 // what really went to the API: every structured-output schema in the request log (one JSON body per line)
 $sent = [];
 foreach (explode("\n", $log) as $line) { $j = json_decode(substr($line, (int)strpos($line, ' ') + 1), true); if (is_array($j['output_config']['format']['schema'] ?? null)) $sent[] = $j; }
-$sf = $sent[0]['output_config']['format']['schema']['properties']['opportunities']['items']['properties']['factors']['properties'] ?? [];
-ok(count($sent) === 1 && $unions($sent[0]['output_config']['format']['schema']) === 0 && array_keys($sf) === st_ai_factors() && !str_contains(json_encode($sent[0]), 'own_fit')
+$sf = $sent[0]['output_config']['format']['schema']['properties']['opportunities']['items']['properties']['factors'] ?? [];
+ok(count($sent) === 1 && $unions($sent[0]['output_config']['format']['schema']) === 0 && ($sf['type'] ?? '') === 'array' && ($sf['items']['properties']['key']['enum'] ?? null) === st_ai_factors()
+    && !str_contains(json_encode($sent[0]), 'own_fit') && str_contains($sent[0]['system'], 'one item per factor id, in this order: ' . implode(', ', st_ai_factors()))
     && str_contains($sent[0]['system'], 'or -1 if there is no evidence') && str_contains($sent[0]['system'], 'UNKNOWN when rating is -1') && !str_contains($sent[0]['system'], 'null if'),
-    'rank request sent: schema has 0 union types, no own_fit anywhere (server computes it), prompt says -1 = no evidence');
+    'rank request sent: schema has 0 union types and factors as a list, no own_fit anywhere (server computes it), prompt lists the factor ids and says -1 = no evidence');
 $A = $pdo->query("SELECT * FROM st_opps WHERE title = 'Lost Earbuds Finder'")->fetch();
 $B = $pdo->query("SELECT * FROM st_opps WHERE title = 'AI Prank Voice Call'")->fetch();
 $fa = json_decode($A['factors'], true);
@@ -934,7 +944,7 @@ ok(str_starts_with($ptxt, 'P1: all your apps') && preg_match('/P\d+: your apps i
     && preg_match('/P\d+: your app com\.sim\.vpn \(com\.sim\.vpn, Tools\): Google Ads off in the last 7 days/', $ptxt) && preg_match('/- apps losing money on Google Ads: com\.sim\.vpn \(P\d+\)/', $ptxt)
     && preg_match('/unproven[^\n]*: IN \(P\d+\)/', $ptxt),
     'AI context: P ids -> portfolio evidence (totals, 3 countries >= 50 installs, 3 categories, app with ads on + app named in app_loss), estimated spend marked, rules cite P ids');
-$base = $fx([]);
+$base = []; foreach (st_ai_factors() as $k) $base[$k] = ['rating' => null, 'basis' => 'UNKNOWN', 'evidence' => [], 'note' => ''];   // stored (map) form, as st_clean_factors returns
 $base['own_fit'] = ['rating' => 7, 'basis' => 'INFERENCE', 'evidence' => [], 'note' => 'ai'];
 $pf = st_apply_portfolio($pdo, 'utilities', ['us', 'IN', 'BR'], $base);
 $of = $pf['factors']['own_fit'];

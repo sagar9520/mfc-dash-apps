@@ -1951,13 +1951,14 @@ function st_disc_brief(PDO $pdo): ?array
  * JSON schema: opportunities list (structured output).
  * Koi union / nullable type nahi: API 16 se zyada union-typed params par HTTP 400 deta hai (17 factors x ['number','null'] = fail).
  * Isliye rating sirf number, -1 = "no evidence" (st_clean_factors -1 ko null/UNKNOWN banata hai). Server wale factors (ST_SERVER_FACTORS) schema me nahi.
+ * factors = LIST ({key, rating, basis, evidence, note}), object-per-factor nahi: 16 alag factor objects (har ek me basis enum) se API ki compiled grammar
+ * "too large" ho gayi (HTTP 400, 2026-10-24). List me factor object ek baar define hota hai; key enum = st_ai_factors(). Missing key = UNKNOWN (st_clean_factors).
  */
 function st_opp_schema(): array
 {
-    $factor = ['type' => 'object', 'properties' => ['rating' => ['type' => 'number', 'description' => '0-10, or -1 if there is no evidence'], 'basis' => ['type' => 'string', 'enum' => ST_LABELS],
-        'evidence' => ['type' => 'array', 'items' => ['type' => 'string']], 'note' => ['type' => 'string']], 'required' => ['rating', 'basis', 'evidence', 'note'], 'additionalProperties' => false];
-    $fprops = [];
-    foreach (st_ai_factors() as $k) $fprops[$k] = $factor;
+    $factor = ['type' => 'object', 'properties' => ['key' => ['type' => 'string', 'enum' => st_ai_factors(), 'description' => 'factor id; give every id exactly once'],
+        'rating' => ['type' => 'number', 'description' => '0-10, or -1 if there is no evidence'], 'basis' => ['type' => 'string', 'enum' => ST_LABELS],
+        'evidence' => ['type' => 'array', 'items' => ['type' => 'string']], 'note' => ['type' => 'string']], 'required' => ['key', 'rating', 'basis', 'evidence', 'note'], 'additionalProperties' => false];
     $comp = ['type' => 'object', 'properties' => ['name' => ['type' => 'string'], 'package' => ['type' => 'string'], 'evidence' => ['type' => 'array', 'items' => ['type' => 'string']]],
         'required' => ['name', 'package', 'evidence'], 'additionalProperties' => false];
     $card = ['type' => 'object', 'properties' => array_fill_keys(['what', 'why', 'evidence', 'benefit', 'cost', 'risk', 'alternatives'], ['type' => 'string']),
@@ -1968,7 +1969,7 @@ function st_opp_schema(): array
         'monetization' => ['type' => 'array', 'items' => ['type' => 'string']], 'risks' => ['type' => 'array', 'items' => ['type' => 'string']],
         'why_build' => ['type' => 'string'], 'why_avoid' => ['type' => 'string'], 'complexity' => ['type' => 'string', 'enum' => ['Low', 'Medium', 'High']],
         'recommendation' => ['type' => 'string', 'enum' => ST_RECS], 'decision_card' => $card,
-        'factors' => ['type' => 'object', 'properties' => $fprops, 'required' => array_keys($fprops), 'additionalProperties' => false]],
+        'factors' => ['type' => 'array', 'items' => $factor, 'description' => 'one item per factor id, each id exactly once']],
         'required' => ['title', 'concept', 'category', 'countries', 'competitors', 'monetization', 'risks', 'why_build', 'why_avoid', 'complexity', 'recommendation', 'decision_card', 'factors'],
         'additionalProperties' => false];
     return ['type' => 'object', 'properties' => ['opportunities' => ['type' => 'array', 'items' => $opp]], 'required' => ['opportunities'], 'additionalProperties' => false];
@@ -2136,7 +2137,7 @@ function st_job_rank(PDO $pdo, StRun $run): void
     $r = st_ai($pdo, $run, ['system' => ST_RESEARCH_SYS . "\nYou now turn research notes into 8-12 app opportunities. Each factor: rating 0-10 where 10 means MORE of that thing (more demand, more competition, more policy risk, more complexity), "
         . "or -1 if there is no evidence. basis: VERIFIED only for E* or P* evidence (owner's own analytics), ESTIMATE only for licensed third-party estimates or P* lines marked as estimated, INFERENCE for anything from web notes or your judgement, UNKNOWN when rating is -1. "
         . "evidence: list of ids exactly as given (S1, E2, P3...); never invent ids. Use recommendation REJECT for ideas with high policy risk (deceptive pranks, impersonation, fake functionality, sensitive permissions without core need). "
-        . "Critically assess the owner's own ideas too.\nBe brief: concept at most 30 words; each factor note at most 15 words; each decision_card field at most 25 words; why_build and why_avoid at most 30 words each; "
+        . "Critically assess the owner's own ideas too. factors: a list with exactly one item per factor id, in this order: " . implode(', ', st_ai_factors()) . ".\nBe brief: concept at most 30 words; each factor note at most 15 words; each decision_card field at most 25 words; why_build and why_avoid at most 30 words each; "
         . "at most 3 competitors, 4 risks and 4 monetization items per opportunity.\n" . ST_PORT_GUIDE, 'effort' => 'high', 'max_tokens' => $maxTok, 'schema' => st_opp_schema(), 'salvage' => 'opportunities', 'expect' => 10,
         'user' => "Countries enabled: " . implode(', ', $ccs) . "\nCategories: " . implode(', ', $cats) . "\n\n=== Web research notes (untrusted) ===\n$allNotes\n=== Ads Transparency ===\n" . ($adsTxt ?: "(source not configured)\n")
             . "\n=== Owner's own analytics (verified) ===\n$econ\n=== Owner's own apps, last " . ST_PORT_DAYS . " days (verified) ===\n$port\n=== Owner's own ideas to evaluate ===\n" . ($own ?: "(none)\n")]);
@@ -2253,6 +2254,11 @@ function st_clean_factors(PDO $pdo, array $raw, array $evMap): array
 {
     $labels = [];
     $out = [];
+    if (array_is_list($raw)) {   // schema ka list roop [{key, rating, ...}]: map banao; same key do baar = pehla rakho, bina key / anjaan key = drop
+        $m = [];
+        foreach ($raw as $f) { if (is_array($f) && is_string($f['key'] ?? null) && isset(ST_FACTORS[$f['key']]) && !isset($m[$f['key']])) $m[$f['key']] = $f; }
+        $raw = $m;
+    }
     $raw = array_diff_key($raw, array_flip(ST_SERVER_FACTORS));
     foreach (array_keys(ST_FACTORS) as $k) {
         $f = is_array($raw[$k] ?? null) ? $raw[$k] : ['rating' => null, 'basis' => 'UNKNOWN', 'evidence' => [], 'note' => ''];
