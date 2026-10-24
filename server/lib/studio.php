@@ -2506,7 +2506,7 @@ function st_reassess(PDO $pdo, StRun $run, int $oppId, string $why): void
     $run->note(st_n(count($map), 'source'));
     [$econ, $emap] = st_econ_context($pdo);
     [$port, $pmap] = st_portfolio_context($pdo);
-    $r = st_ai($pdo, $run, ['system' => ST_RESEARCH_SYS . "\nReturn exactly one opportunity (the idea below, same title). Factor rules: rating 0-10 (10 = more of that thing), -1 if no evidence (basis UNKNOWN); basis VERIFIED only for E* or P* ids (ESTIMATE for P* lines marked as estimated); INFERENCE for web/judgement; never invent evidence ids.\n" . ST_PORT_GUIDE,
+    $r = st_ai($pdo, $run, ['system' => ST_RESEARCH_SYS . "\nReturn exactly one opportunity (the idea below, same title). Factor rules: rating 0-10 (10 = more of that thing), -1 if no evidence (basis UNKNOWN); basis VERIFIED only for E* or P* ids (ESTIMATE for P* lines marked as estimated); INFERENCE for web/judgement; never invent evidence ids. factors: a list with exactly one item per factor id, in this order: " . implode(', ', st_ai_factors()) . ".\n" . ST_PORT_GUIDE,
         'effort' => 'high', 'max_tokens' => 24000, 'schema' => st_opp_schema(), 'span' => [0.45, 1.0],
         'user' => "Idea title (keep exactly): {$o['title']}\nCategory: {$o['category']}\nConcept: {$o['concept']}\n\n=== Web notes (untrusted) ===\n$notes\n=== Owner's analytics ===\n$econ"
             . "\n=== Owner's own apps, last " . ST_PORT_DAYS . " days (verified) ===\n$port"]);
